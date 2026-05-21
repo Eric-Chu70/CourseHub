@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#5A9FE8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3A7FC8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="bookGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#E8F0FF;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  
+  <rect width="48" height="48" rx="8.64" fill="url(#bgGradient)"/>
+  
+  <g transform="translate(7.199999999999999, 5.76)">
+    <path d="M16.799999999999997 3.84 
+             L31.200000000000003 3.84 
+             Q34.56 3.84 34.56 7.199999999999999
+             L34.56 32.64
+             Q34.56 36 31.200000000000003 36
+             L16.799999999999997 36
+             Q13.440000000000001 36 13.440000000000001 32.64
+             L13.440000000000001 7.199999999999999
+             Q13.440000000000001 3.84 16.799999999999997 3.84Z"
+          fill="url(#bookGradient)" filter="url(#shadow)"/>
+    
+    <path d="M13.440000000000001 7.199999999999999
+             L7.199999999999999 10.56
+             Q3.84 12.48 3.84 16.799999999999997
+             L3.84 34.56
+             Q3.84 37.44 6.720000000000001 37.44
+             L13.440000000000001 34.56Z"
+          fill="#D0E0FF" opacity="0.9" filter="url(#shadow)"/>
+    
+    <rect x="15.36" y="8.64" width="17.28" height="1.92" rx="0.48" fill="#4A90E2" opacity="0.9"/>
+    <rect x="15.36" y="12.48" width="13.440000000000001" height="1.44" rx="0.48" fill="#4A90E2" opacity="0.6"/>
+    <rect x="15.36" y="15.36" width="15.36" height="1.44" rx="0.48" fill="#4A90E2" opacity="0.6"/>
+    <rect x="15.36" y="18.240000000000002" width="11.52" height="1.44" rx="0.48" fill="#4A90E2" opacity="0.6"/>
+    
+    <circle cx="29.759999999999998" cy="27.839999999999996" r="5.76" fill="#FFD700" filter="url(#shadow)"/>
+    <path d="M26.400000000000002 27.839999999999996 L28.799999999999997 30.240000000000002 L33.599999999999994 24.96" 
+          stroke="#FFFFFF" stroke-width="1.2000000000000002" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
