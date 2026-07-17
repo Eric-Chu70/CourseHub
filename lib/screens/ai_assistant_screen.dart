@@ -17,6 +17,7 @@ import '../utils/storage.dart';
 import '../models/course.dart';
 import '../models/task.dart';
 import '../dialogs/course_dialog.dart';
+import '../widgets/glass_dialog.dart';
 import 'settings_screen.dart';
 
 class AIAssistantScreen extends StatefulWidget {
@@ -37,7 +38,12 @@ class AIAssistantScreen extends StatefulWidget {
   State<AIAssistantScreen> createState() => AIAssistantScreenState();
 }
 
-class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+class AIAssistantScreenState extends State<AIAssistantScreen>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+  // 保活：在 PageView 中切走再切回时不再销毁重建整个聊天，避免重复解析 Markdown/重载图片造成卡顿
+  @override
+  bool get wantKeepAlive => true;
+
   static List<_ChatMessage> _persistentMessages = [];
   static String? _persistentSelectedModel;
   static bool _hasAnalyzed = false;
@@ -70,6 +76,10 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
   double _lastKeyboardHeight = 0;
   double _layoutKeyboardHeight = 0;
   double _keyboardDismissBounceOffset = 0;
+  /// 键盘驱动的布局参数用 ValueNotifier 承载，键盘高度变化时只重建输入区/内边距，
+  /// 不再触发主 build()（消息列表不重建），消除键盘弹出/收起时的卡顿。
+  final ValueNotifier<({double layoutHeight, double bounceOffset, double rawHeight})> _keyboardLayoutNotifier =
+      ValueNotifier((layoutHeight: 0, bounceOffset: 0, rawHeight: 0));
   double _inputAreaExtraHeight = 0;
   double _textLinesExtraHeight = 0;
   static const double _kTextLineHeight = 21.0;
@@ -229,12 +239,11 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
       final animation = _keyboardDismissAnimation;
       final bounceAnimation = _keyboardDismissBounceAnimation;
       if ((animation == null && bounceAnimation == null) || !mounted) return;
-      setState(() {
-        if (animation != null) {
-          _layoutKeyboardHeight = animation.value;
-        }
-        _keyboardDismissBounceOffset = bounceAnimation?.value ?? 0;
-      });
+      if (animation != null) {
+        _layoutKeyboardHeight = animation.value;
+      }
+      _keyboardDismissBounceOffset = bounceAnimation?.value ?? 0;
+      _publishKeyboardLayout();
     });
     
     // 恢复滚动位置
@@ -396,13 +405,21 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
     return models[random.nextInt(models.length)];
   }
 
+  /// 将当前键盘布局参数同步到 ValueNotifier，驱动输入区/内边距局部重建，避免 setState 触发主 build。
+  void _publishKeyboardLayout() {
+    _keyboardLayoutNotifier.value = (
+      layoutHeight: _layoutKeyboardHeight,
+      bounceOffset: _keyboardDismissBounceOffset,
+      rawHeight: _lastKeyboardHeight,
+    );
+  }
+
   void _startKeyboardDismissAnimation() {
     if (_layoutKeyboardHeight <= 0.5) {
       if (_layoutKeyboardHeight != 0 || _keyboardDismissBounceOffset != 0) {
-        setState(() {
-          _layoutKeyboardHeight = 0;
-          _keyboardDismissBounceOffset = 0;
-        });
+        _layoutKeyboardHeight = 0;
+        _keyboardDismissBounceOffset = 0;
+        _publishKeyboardLayout();
       }
       return;
     }
@@ -443,9 +460,7 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
     final isKeyboardRising = keyboardHeight > previousKeyboardHeight + 0.5;
     final isKeyboardFalling = keyboardHeight < previousKeyboardHeight - 0.5;
     final shouldStickToBottom = _isNearBottom();
-    
-    debugPrint('didChangeMetrics: keyboardHeight=$keyboardHeight, wasVisible=$wasVisible, isKeyboardVisible=$isKeyboardVisible');
-    
+
     _lastKeyboardHeight = keyboardHeight;
 
     if (isKeyboardRising || (isKeyboardVisible && !isKeyboardFalling)) {
@@ -455,22 +470,20 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
       final shouldUpdateHeight = (_layoutKeyboardHeight - keyboardHeight).abs() > 0.5;
       final shouldResetBounce = _keyboardDismissBounceOffset != 0;
       if (shouldUpdateHeight || shouldResetBounce) {
-        setState(() {
-          if (shouldUpdateHeight) {
-            _layoutKeyboardHeight = keyboardHeight;
-          }
-          if (shouldResetBounce) {
-            _keyboardDismissBounceOffset = 0;
-          }
-        });
+        if (shouldUpdateHeight) {
+          _layoutKeyboardHeight = keyboardHeight;
+        }
+        if (shouldResetBounce) {
+          _keyboardDismissBounceOffset = 0;
+        }
+        _publishKeyboardLayout();
       }
     } else if (isKeyboardFalling && !_keyboardDismissAnimController.isAnimating) {
       _startKeyboardDismissAnimation();
     } else if (!isKeyboardVisible && !_keyboardDismissAnimController.isAnimating && (_layoutKeyboardHeight != 0 || _keyboardDismissBounceOffset != 0)) {
-      setState(() {
-        _layoutKeyboardHeight = 0;
-        _keyboardDismissBounceOffset = 0;
-      });
+      _layoutKeyboardHeight = 0;
+      _keyboardDismissBounceOffset = 0;
+      _publishKeyboardLayout();
     }
     
     if (isKeyboardVisible != wasVisible) {
@@ -818,6 +831,11 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
     final upcomingTasks = _getUpcomingTasks(tasks);
     final currentStatus = _getCurrentCourseStatus(todayCourses);
 
+    // 假期状态判断：学期开始前或学期结束后均为假期
+    final currentWeekNum = StorageService.getCurrentWeek();
+    final semesterWeeks = StorageService.getSemesterWeeks();
+    final isHoliday = StorageService.isHoliday();
+
     final coursesInfo = courses.map((c) {
       final startTime = c.time + 1;
       final endTime = startTime + c.duration - 1;
@@ -842,8 +860,37 @@ class AIAssistantScreenState extends State<AIAssistantScreen> with WidgetsBindin
     final now = DateTime.now();
     final timeSlots = StorageService.getTimeSlots();
     final currentPeriodFromStatus = currentStatus['currentPeriod'] as int?;
-    
-    if (currentStatus['status'] == 'finished') {
+
+    if (isHoliday) {
+      // 假期专属提示词：区分学期开始前和学期结束后
+      final isBeforeStart = StorageService.isBeforeSemesterStart();
+      final coursesSummary = coursesInfo.isEmpty
+          ? '暂无课程'
+          : coursesInfo.map((c) => '• ${c['day']} ${c['time']} ${c['name']} (${c['teacher']}) @ ${c['location']}${c['weeks'] != '全周' ? ' [${c['weeks']}周]' : ''}').join('\n');
+
+      final holidayStatus = isBeforeStart
+          ? '当前处于开学前假期（新学期尚未开始）'
+          : '当前处于假期状态（已超出学期${semesterWeeks}周）';
+
+      final studyAdvice = isBeforeStart
+          ? '''3. 给出开学前学习建议（如预习新学期课程、调整作息迎接开学、准备开学物品等），不要建议复盘上学期课程'''
+          : '''3. 给出假期学习建议（如复盘上学期、预习下学期、阅读、作息调整等）''';
+
+      prompt = '''📚 当前所有课程（共${courses.length}门，学期共${semesterWeeks}周，当前为第${currentWeekNum}周）：
+$coursesSummary
+
+🎉 $holidayStatus
+
+📝 近期待办任务（7天内，共${upcomingTasks.length}个）：
+${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t['priority']}] ${t['name']} (${t['type']}) 截止: ${t['dueDate']}').join('\n')}
+
+当前处于假期，请用简洁友好的方式，适当使用emoji：
+1. 告知用户当前处于假期状态，鼓励适当休息放松
+2. 提醒近期重要的任务/DDL截止时间（如果有）
+$studyAdvice
+
+直接开始回答，不要有开场白。''';
+    } else if (currentStatus['status'] == 'finished') {
       final tomorrowInfo = tomorrowCourses.isEmpty 
         ? '明天没有课程 🎉' 
         : tomorrowCourses.map((c) {
@@ -1810,7 +1857,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 4. 回答学习相关问题
 $imageWarning
 当前时间：${DateFormat('yyyy-MM-dd HH:mm').format(now)}
-当前周次：第${StorageService.getCurrentWeek()}周
+当前周次：第${StorageService.getCurrentWeek()}周${StorageService.isHoliday() ? '\n当前状态：假期（${StorageService.isBeforeSemesterStart() ? '新学期尚未开始，建议侧重预习新学期课程、调整作息迎接开学' : '学期已结束，建议侧重复盘上学期、预习下学期'}），用户处于假期中，不必再讨论今日课程安排。' : ''}
 
 $dataSection${includeData ? '' : '（课程和任务数据已在之前的对话中提供）\n\n'}当用户要求添加课程时，请用以下JSON格式回复：
 {"action": "add_course", "name": "课程名称", "day": "周一/周二/.../周日", "time": 开始节次(数字), "duration": 持续节数(可选,默认2), "location": "地点(可选)", "teacher": "教师(可选)", "weeks": "周次(可选)"}
@@ -1852,7 +1899,7 @@ $dataSection${includeData ? '' : '（课程和任务数据已在之前的对话�
 
     return '''【背景信息】
 当前时间：${DateFormat('yyyy-MM-dd HH:mm').format(now)}
-当前周次：第${StorageService.getCurrentWeek()}周
+当前周次：第${StorageService.getCurrentWeek()}周${StorageService.isHoliday() ? '\n当前状态：假期（${StorageService.isBeforeSemesterStart() ? '新学期尚未开始，建议侧重预习新学期课程、调整作息迎接开学' : '学期已结束，建议侧重复盘上学期、预习下学期'}），用户处于假期中，不必再讨论今日课程安排。' : ''}
 
 📚 课程数据：
 ${coursesInfo.isEmpty ? '暂无课程' : coursesInfo}
@@ -2237,17 +2284,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       final position = notification.metrics;
       final distanceToBottom = max(0.0, position.maxScrollExtent - position.pixels);
 
-      // User drag away from bottom pauses auto-follow; drag back to bottom resumes it.
+      // 拖动期间一律暂停自动跟随，避免 jumpTo 与手指拖动争抢滚动位置造成滚动条跳变；
+      // 仅在拖动结束时，若处于底部附近才恢复自动跟随。
       if (isUserDragStart) {
         _pauseAutoScrollDuringOutput = true;
       }
 
       if (isUserDragUpdate) {
-        if (distanceToBottom <= 24) {
-          _pauseAutoScrollDuringOutput = false;
-        } else {
-          _pauseAutoScrollDuringOutput = true;
-        }
+        _pauseAutoScrollDuringOutput = true;
       }
 
       if (isUserDragEnd && distanceToBottom <= 24) {
@@ -2340,7 +2384,31 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _persistentSelectedModel = null;
   }
 
+  /// 打开对话框/页面前的统一处理：清除当前焦点并隐藏键盘。
+  void _unfocusBeforeDialog() {
+    _focusNode.unfocus(disposition: UnfocusDisposition.scope);
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
+  /// 对话框/页面关闭后调用：清除可能被路由焦点恢复机制重新激活的焦点。
+  void _unfocusAfterDialog() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.unfocus(disposition: UnfocusDisposition.scope);
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+    });
+  }
+
+  /// 离开对话页时调用：强制清除输入框焦点并隐藏键盘，防止切回时键盘自动弹出。
+  void clearInputFocus() {
+    if (!mounted) return;
+    _focusNode.unfocus(disposition: UnfocusDisposition.scope);
+    FocusManager.instance.primaryFocus?.unfocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
   void _navigateToSettings() {
+    _unfocusBeforeDialog();
     if (widget.onNavigateToSettings != null) {
       widget.onNavigateToSettings!();
     } else {
@@ -2349,16 +2417,18 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         MaterialPageRoute(builder: (context) => const SettingsScreen()),
       ).then((_) {
         _loadFastModeSetting();
+        _unfocusAfterDialog();
       });
     }
   }
 
   void _showModelSelector() {
+    _unfocusBeforeDialog();
     if (_currentProvider == 'hunyuan' || _currentProvider == 'glm' || _currentProvider == 'custom') {
       return;
     }
     final models = _fastModeEnabled ? _fastModels : _normalModels;
-    
+
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -2379,69 +2449,70 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        constraints: const BoxConstraints(
-                          maxWidth: 400,
-                          maxHeight: 500,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(20),
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                ),
-                                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: 400,
+                            maxHeight: 500,
+                          ),
+                          child: GlassDialogShell(
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
                               ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
+                            ],
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                                      ),
+                                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                                     ),
-                                    child: const Icon(Icons.psychology, color: Colors.white, size: 24),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                    child: Row(
                                       children: [
-                                        const Text(
-                                          '选择模型',
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.white,
+                                        Container(
+                                          padding: const EdgeInsets.all(10),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(alpha: 0.2),
+                                            borderRadius: BorderRadius.circular(12),
                                           ),
+                                          child: const Icon(Icons.psychology, color: Colors.white, size: 24),
                                         ),
-                                        Text(
-                                          _fastModeEnabled ? '切换到普通模式启用图片上传功能' : '普通模式 · ${models.length}个模型可选',
-                                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              const Text(
+                                                '选择模型',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              Text(
+                                                _fastModeEnabled ? '切换到普通模式启用图片上传功能' : '普通模式 · ${models.length}个模型可选',
+                                                style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
+                                ),
                             Flexible(
                               child: SingleChildScrollView(
                                 physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
@@ -2473,14 +2544,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         margin: const EdgeInsets.only(bottom: 12),
                                         padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
-                                          color: isSelected 
+                                          color: isSelected
                                               ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-                                              : Colors.grey.shade50,
+                                              : Colors.white.withValues(alpha: 0.4),
                                           borderRadius: BorderRadius.circular(12),
                                           border: Border.all(
-                                            color: isSelected 
+                                            color: isSelected
                                                 ? const Color(0xFF4A90E2)
-                                                : Colors.grey.shade200,
+                                                : Colors.white.withValues(alpha: 0.4),
                                             width: isSelected ? 2 : 1,
                                           ),
                                         ),
@@ -2537,7 +2608,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                   ),
                                   child: const Text('关闭'),
@@ -2545,8 +2616,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               ),
                             ),
                           ],
-                        ),
-                      );
+                            ),
+                          ),
+                          ),
+                        );
                     },
                   ),
                 ),
@@ -2555,10 +2628,11 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           ),
         );
       },
-    );
+    ).then((_) => _unfocusAfterDialog());
   }
 
   void _showCustomAIConfig() async {
+    _unfocusBeforeDialog();
     final prefs = await SharedPreferences.getInstance();
     final urlController = TextEditingController(text: prefs.getString('custom_api_url') ?? '');
     final keyController = TextEditingController(text: prefs.getString('custom_api_key') ?? '');
@@ -2631,28 +2705,28 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                 CurvedAnimation(parent: animation, curve: Curves.easeOut),
               ),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                margin: EdgeInsets.only(
-                  left: 24,
-                  right: 24,
-                  top: keyboardHeight > 0 ? topInset + 8 : 0,
-                  bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                ),
-                padding: const EdgeInsets.all(24),
-                constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    margin: EdgeInsets.only(
+                      left: 24,
+                      right: 24,
+                      top: keyboardHeight > 0 ? topInset + 8 : 0,
+                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                     ),
-                  ],
-                ),
-                child: StatefulBuilder(
+                    padding: const EdgeInsets.all(24),
+                    constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: StatefulBuilder(
                   builder: (builderCtx, setDialogState) {
                     return SingleChildScrollView(
                       child: Column(
@@ -2675,7 +2749,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: 'API 地址',
                               hintText: 'https://api.example.com/v1/chat/completions',
                               filled: true,
-                              fillColor: Colors.grey.shade50,
+                              fillColor: Colors.white.withValues(alpha: 0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
@@ -2686,7 +2760,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: 'API Key',
                               hintText: '请输入API密钥',
                               filled: true,
-                              fillColor: Colors.grey.shade50,
+                              fillColor: Colors.white.withValues(alpha: 0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
@@ -2697,7 +2771,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: '模型名称',
                               hintText: 'gpt-4o-mini',
                               filled: true,
-                              fillColor: Colors.grey.shade50,
+                              fillColor: Colors.white.withValues(alpha: 0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
@@ -2762,7 +2836,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                   ),
                                   child: const Text('取消'),
@@ -3047,9 +3121,11 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         ),
       ),
     );
+    _unfocusAfterDialog();
   }
 
   void _showImagePreview(String imagePath, {bool useHero = true, int? messageIndex, double? imageAspectRatio}) {
+    _unfocusBeforeDialog();
     final heroTag = messageIndex != null
         ? 'image_preview_${messageIndex}_$imagePath'
         : 'image_preview_$imagePath';
@@ -3071,7 +3147,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           );
         },
       ),
-    );
+    ).then((_) => _unfocusAfterDialog());
   }
 
   @override
@@ -3089,170 +3165,198 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _thinkingScrollController.dispose();
     _focusNode.dispose();
     _keyboardDismissAnimController.dispose();
+    _keyboardLayoutNotifier.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final topPadding = MediaQuery.of(context).padding.top;
-    final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
-    final rawKeyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-    final maxKeyboardHeight = MediaQuery.of(context).size.height * 0.8;
-    
-    final double kb = _layoutKeyboardHeight.clamp(0.0, maxKeyboardHeight);
-    final bool isActive = rawKeyboardHeight > 1 || kb > 1;
-    final double pageBottomInset = kb;
+    super.build(context);
+    // 使用粒度化的 MediaQuery 访问器：仅依赖 padding/viewPadding，不依赖 viewInsets，
+    // 键盘弹出/收起时 viewInsets 变化不会触发主 build（消息列表不重建）。
+    final topPadding = MediaQuery.paddingOf(context).top;
+    final bottomPadding = MediaQuery.viewPaddingOf(context).bottom;
 
-    // Restore linear input movement for keyboard show/hide.
-    final double inputBottomPosition = max(8.0, 100.0 - kb);
-    final double inputBounceOffset = _keyboardDismissBounceOffset * 2.2;
-    final double inputBottomWithBounce = max(0.0, inputBottomPosition - inputBounceOffset);
-    const double inputBaseHeight = 60;
-    final double listBottomPadding = inputBottomPosition + inputBaseHeight + _inputAreaExtraHeight + _textLinesExtraHeight + 8;
-    
-    debugPrint('Build: kb=$kb, rawKb=$rawKeyboardHeight, isActive=$isActive, pageInset=$pageBottomInset, inputPos=$inputBottomPosition, inputBounce=$inputBounceOffset');
+    // 尾部附加项（加载/流式/慢响应提示），每次主 build 构建一次
+    final messageListTrailing = _buildMessageListTrailing();
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
-        systemNavigationBarColor: Colors.transparent,
-        systemNavigationBarIconBrightness: Brightness.dark,
-      ),
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF8F9FC),
-        resizeToAvoidBottomInset: false,
-        extendBody: true,
-        body: Stack(
-          children: [
-            MediaQuery(
-              data: MediaQuery.of(context).copyWith(viewInsets: EdgeInsets.zero),
-              child: Padding(
-                padding: EdgeInsets.only(bottom: pageBottomInset),
-                child: GestureDetector(
-                  onTap: _closeAddMenu,
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: NotificationListener<ScrollNotification>(
-                          onNotification: _handleMessageListScrollNotification,
-                          child: CustomScrollView(
-                            controller: _scrollController,
-                            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                            slivers: [
-                              SliverPadding(
-                                padding: EdgeInsets.only(top: topPadding + 70),
-                              ),
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(16, 0, 16, listBottomPadding),
-                                sliver: SliverList(
-                                  delegate: SliverChildListDelegate([
-                                    if (_messages.isEmpty && _streamingContent.isEmpty && !_isFirstChunkReceived && !_isAnalyzing)
-                                      _buildWelcomeCard()
-                                    else ...[
-                                      ..._messages.asMap().entries.map((e) => _buildMessageBubble(e.value, e.key)),
-                                      if (_isSearching)
-                                        _buildLoadingIndicator()
-                                      else if (_streamingContent.isNotEmpty || _thinkingContent.isNotEmpty)
-                                        _buildStreamingBubble()
-                                      else if (_isLoading || _isAnalyzing) ...[
-                                        _buildLoadingIndicator(),
-                                      ],
-                                      if (_showSlowResponseTip && _shouldShowFastModeSlowTip)
-                                        _buildSlowResponseTip(),
-                                    ],
-                                  ]),
+    return ValueListenableBuilder<({double layoutHeight, double bounceOffset, double rawHeight})>(
+      valueListenable: _keyboardLayoutNotifier,
+      builder: (context, kl, child) {
+        // 键盘驱动的布局参数——仅在此 builder 内计算，不影响主 build
+        final mq = MediaQuery.of(context);
+        final maxKeyboardHeight = mq.size.height * 0.8;
+        final kb = kl.layoutHeight.clamp(0.0, maxKeyboardHeight);
+        final double pageBottomInset = kb;
+        final double inputBottomPosition = max(8.0, 100.0 - kb);
+        final double inputBounceOffset = kl.bounceOffset * 2.2;
+        final double inputBottomWithBounce = max(0.0, inputBottomPosition - inputBounceOffset);
+        const double inputBaseHeight = 60;
+        final double listBottomPadding = inputBottomPosition + inputBaseHeight + _inputAreaExtraHeight + _textLinesExtraHeight + 8;
+
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.dark,
+            statusBarBrightness: Brightness.light,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarIconBrightness: Brightness.dark,
+          ),
+          child: Scaffold(
+            backgroundColor: const Color(0xFFF8F9FC),
+            resizeToAvoidBottomInset: false,
+            extendBody: true,
+            body: Stack(
+              children: [
+                MediaQuery(
+                  data: mq.copyWith(viewInsets: EdgeInsets.zero),
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: pageBottomInset),
+                    child: GestureDetector(
+                      onTap: _closeAddMenu,
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: Scrollbar(
+                              controller: _scrollController,
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: _handleMessageListScrollNotification,
+                                child: CustomScrollView(
+                                  controller: _scrollController,
+                                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                                  slivers: [
+                                    SliverPadding(
+                                      padding: EdgeInsets.only(top: topPadding + 70),
+                                    ),
+                                    SliverPadding(
+                                      padding: EdgeInsets.fromLTRB(16, 0, 16, listBottomPadding),
+                                      sliver: child!,
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ),
-                      _buildPinnedHeader(topPadding),
-                      _buildInputArea(inputBottomWithBounce),
-                      if (_supportsImageUpload)
-                        Positioned(
-                          left: 16,
-                          bottom: inputBottomWithBounce + 58,
-                          child: AnimatedOpacity(
-                            opacity: _showAddMenu ? 1.0 : 0.0,
-                            duration: const Duration(milliseconds: 200),
-                            child: IgnorePointer(
-                              ignoring: !_showAddMenu,
-                              child: Material(
-                                color: Colors.transparent,
-                                child: Container(
-                                  width: 120,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(16),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(alpha: 0.15),
-                                        blurRadius: 12,
-                                        offset: const Offset(0, 4),
+                          _buildPinnedHeader(topPadding),
+                          _buildInputArea(inputBottomWithBounce),
+                          if (_supportsImageUpload)
+                            Positioned(
+                              left: 16,
+                              bottom: inputBottomWithBounce + 58,
+                              child: AnimatedOpacity(
+                                opacity: _showAddMenu ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 200),
+                                child: IgnorePointer(
+                                  ignoring: !_showAddMenu,
+                                  child: Material(
+                                    color: Colors.transparent,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(16),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(alpha: 0.15),
+                                            blurRadius: 12,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        SizedBox(
-                                          width: double.infinity,
-                                          child: _buildMenuItem(
-                                            icon: Icons.camera_alt,
-                                            label: '拍照',
-                                            onTap: () => _handleMenuSelection('camera'),
-                                            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: BackdropFilter(
+                                          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                                          child: Container(
+                                            width: 120,
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withValues(alpha: 0.7),
+                                              borderRadius: BorderRadius.circular(16),
+                                              border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.5),
+                                            ),
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                SizedBox(
+                                                  width: double.infinity,
+                                                  child: _buildMenuItem(
+                                                    icon: Icons.camera_alt,
+                                                    label: '拍照',
+                                                    onTap: () => _handleMenuSelection('camera'),
+                                                    borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                                  ),
+                                                ),
+                                                Divider(height: 1, color: Colors.grey.shade200),
+                                                SizedBox(
+                                                  width: double.infinity,
+                                                  child: _buildMenuItem(
+                                                    icon: Icons.photo_library,
+                                                    label: '相册',
+                                                    onTap: () => _handleMenuSelection('gallery'),
+                                                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ),
-                                        Divider(height: 1, color: Colors.grey.shade200),
-                                        SizedBox(
-                                          width: double.infinity,
-                                          child: _buildMenuItem(
-                                            icon: Icons.photo_library,
-                                            label: '相册',
-                                            onTap: () => _handleMenuSelection('gallery'),
-                                            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: bottomPadding + 2,
-              child: IgnorePointer(
-                child: Center(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 180),
-                    opacity: rawKeyboardHeight > 1 ? 0.0 : 1.0,
-                    child: Text(
-                      '内容由AI生成',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: Colors.grey.shade400,
+                        ],
                       ),
                     ),
                   ),
                 ),
-              ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: bottomPadding + 2,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 180),
+                        opacity: kl.rawHeight > 1 ? 0.0 : 1.0,
+                        child: Text(
+                          '内容由AI生成',
+                          style: TextStyle(
+                            fontSize: 9,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
+        );
+      },
+      child: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            // 空状态：欢迎卡
+            if (_messages.isEmpty && _streamingContent.isEmpty && !_isFirstChunkReceived && !_isAnalyzing) {
+              return index == 0 ? _buildWelcomeCard() : null;
+            }
+            // 历史消息：按下标懒加载，每条用 RepaintBoundary 隔离重绘
+            final msgCount = _messages.length;
+            if (index < msgCount) {
+              return RepaintBoundary(
+                child: _buildMessageBubble(_messages[index], index),
+              );
+            }
+            // 尾部附加项：加载指示/流式气泡/慢响应提示
+            final tIndex = index - msgCount;
+            return tIndex < messageListTrailing.length
+                ? messageListTrailing[tIndex]
+                : null;
+          },
+          childCount: (_messages.isEmpty && _streamingContent.isEmpty && !_isFirstChunkReceived && !_isAnalyzing)
+              ? 1
+              : _messages.length + messageListTrailing.length,
         ),
       ),
     );
@@ -3605,6 +3709,23 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     );
   }
 
+  /// 对话消息列表尾部的附加项：加载指示/流式气泡/慢响应提示
+  List<Widget> _buildMessageListTrailing() {
+    final trailing = <Widget>[];
+    if (_isSearching) {
+      trailing.add(_buildLoadingIndicator());
+    } else if (_streamingContent.isNotEmpty || _thinkingContent.isNotEmpty) {
+      // 流式气泡高频重绘，用 RepaintBoundary 隔离，避免牵连历史消息重绘
+      trailing.add(RepaintBoundary(child: _buildStreamingBubble()));
+    } else if (_isLoading || _isAnalyzing) {
+      trailing.add(_buildLoadingIndicator());
+    }
+    if (_showSlowResponseTip && _shouldShowFastModeSlowTip) {
+      trailing.add(_buildSlowResponseTip());
+    }
+    return trailing;
+  }
+
   Widget _buildMessageBubble(_ChatMessage message, int messageIndex) {
     final isUser = message.role == 'user';
     final hasCourses = message.courses != null && message.courses!.isNotEmpty;
@@ -3823,11 +3944,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     ],
                   ),
                 ),
-                PopupMenuButton<String>(
+                BlurredPopupMenuButton<String>(
                   icon: Icon(Icons.more_vert, size: 18, color: Colors.grey.shade600),
-                  onOpened: () {
-                    HapticFeedback.selectionClick();
-                  },
+                  items: [
+                    BlurredPopupMenuItem(value: 'edit', icon: Icons.edit_outlined, label: '编辑', iconColor: Color(0xFF4A90E2)),
+                    BlurredPopupMenuItem(value: 'delete', icon: Icons.delete_outline, label: '删除', iconColor: Colors.red, textColor: Colors.red),
+                  ],
                   onSelected: (value) {
                     if (value == 'edit') {
                       _editCourse(course, messageIndex);
@@ -3835,28 +3957,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       _deleteCourseFromMessage(course, messageIndex);
                     }
                   },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          Icon(Icons.edit_outlined, size: 18),
-                          SizedBox(width: 8),
-                          Text('编辑'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                          SizedBox(width: 8),
-                          Text('删除', style: TextStyle(color: Colors.red)),
-                        ],
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
@@ -4325,12 +4425,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
   }
 
   void _editCourse(Course course, int messageIndex) {
+    _unfocusBeforeDialog();
     CourseDialog.show(
       context: context,
       course: course,
       selectedDay: course.day,
       selectedPeriod: course.time,
     ).then((updatedCourse) {
+      _unfocusAfterDialog();
       if (updatedCourse != null) {
         StorageService.updateCourse(updatedCourse);
         
@@ -4357,42 +4459,84 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
   }
 
   void _deleteCourseFromMessage(Course course, int messageIndex) {
-    showDialog(
+    _unfocusBeforeDialog();
+    showGeneralDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('确认删除'),
-        content: const Text('确定要删除这门课程吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+      barrierDismissible: true,
+      barrierLabel: '确认删除',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return Center(
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            ),
+            child: FadeTransition(
+              opacity: animation,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 400),
+                  child: GlassDialogShell(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '确认删除',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '确定要删除这门课程吗？',
+                          style: TextStyle(fontSize: 15),
+                        ),
+                        const SizedBox(height: 24),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('取消'),
+                            ),
+                            const SizedBox(width: 8),
+                            TextButton(
+                              onPressed: () {
+                                StorageService.deleteCourse(course.id);
+                                Navigator.pop(context);
+
+                                setState(() {
+                                  final oldMessage = _messages[messageIndex];
+                                  if (oldMessage.courses != null) {
+                                    final updatedCourses = oldMessage.courses!.where((c) => c.id != course.id).toList();
+                                    _messages[messageIndex] = _ChatMessage(
+                                      role: oldMessage.role,
+                                      content: oldMessage.content,
+                                      isError: oldMessage.isError,
+                                      isInterrupted: oldMessage.isInterrupted,
+                                      isWelcome: oldMessage.isWelcome,
+                                      courses: updatedCourses.isEmpty ? null : updatedCourses,
+                                    );
+                                  }
+                                });
+                                _persistentMessages = List.from(_messages);
+                              },
+                              child: const Text('删除', style: TextStyle(color: Colors.red)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-          TextButton(
-            onPressed: () {
-              StorageService.deleteCourse(course.id);
-              Navigator.pop(context);
-              
-              setState(() {
-                final oldMessage = _messages[messageIndex];
-                if (oldMessage.courses != null) {
-                  final updatedCourses = oldMessage.courses!.where((c) => c.id != course.id).toList();
-                  _messages[messageIndex] = _ChatMessage(
-                    role: oldMessage.role,
-                    content: oldMessage.content,
-                    isError: oldMessage.isError,
-                    isInterrupted: oldMessage.isInterrupted,
-                    isWelcome: oldMessage.isWelcome,
-                    courses: updatedCourses.isEmpty ? null : updatedCourses,
-                  );
-                }
-              });
-              _persistentMessages = List.from(_messages);
-            },
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
+        );
+      },
+    ).then((_) => _unfocusAfterDialog());
   }
 }
 
@@ -5114,9 +5258,9 @@ class _DragSegmentedState extends State<_DragSegmented> {
           child: Container(
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
+              color: Colors.white.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300, width: 1),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(9),

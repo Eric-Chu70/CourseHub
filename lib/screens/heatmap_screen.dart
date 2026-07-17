@@ -8,6 +8,8 @@ import '../models/course.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
+import '../widgets/ddl_ai_insight_card.dart';
+import '../widgets/glass_dialog.dart';
 
 class HeatmapScreen extends StatefulWidget {
   const HeatmapScreen({super.key});
@@ -16,33 +18,37 @@ class HeatmapScreen extends StatefulWidget {
   State<HeatmapScreen> createState() => HeatmapScreenState();
 }
 
-class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMixin {
+class HeatmapScreenState extends State<HeatmapScreen>
+    with TickerProviderStateMixin {
   List<Task> _tasks = [];
   final Set<String> _retainedCompletedTaskIds = <String>{};
   DateTime _selectedMonth = DateTime.now();
   DateTime? _selectedDate;
-  
+
   late PageController _pageController;
   static const int _initialPage = 1200;
-  
+
   late PageController _calendarPageController;
   static const int _calendarInitialPage = 1200;
-  
+
   // 日历高度动画
   late AnimationController _calendarHeightController;
   late Animation<double> _calendarHeightAnimation;
   double _currentCalendarHeight = 0;
   double _targetCalendarHeight = 0;
 
+  // AI 建议框页高度（根据内容动态变化）
+  double _ddlInsightHeight = 200.0;
+
   @override
   void initState() {
     super.initState();
     _loadData();
-    
+
     _pageController = PageController(initialPage: _initialPage);
-    
+
     _calendarPageController = PageController(initialPage: _calendarInitialPage);
-    
+
     // 初始化日历高度动画
     _calendarHeightController = AnimationController(
       duration: const Duration(milliseconds: 300),
@@ -56,7 +62,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
     _currentCalendarHeight = _calculateMonthGridHeight(_selectedMonth);
     _targetCalendarHeight = _currentCalendarHeight;
   }
-  
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -67,8 +73,8 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
 
   void _loadData() {
     final allTasks = StorageService.getTasks();
-    _tasks = allTasks.where((t){
-      if(!t.completed)  return true;
+    _tasks = allTasks.where((t) {
+      if (!t.completed) return true;
       return _retainedCompletedTaskIds.contains(t.id);
     }).toList();
     _sortTasks();
@@ -154,9 +160,10 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
   Widget build(BuildContext context) {
     final today = DateTime.now();
     final activeTasks = _tasks.where((t) => !t.completed).toList();
-    
+
     final totalTasks = activeTasks.length;
-    final overdueTasks = activeTasks.where((t) => t.dueDate.isBefore(today)).length;
+    final overdueTasks =
+        activeTasks.where((t) => t.dueDate.isBefore(today)).length;
     final upcomingTasks = activeTasks.where((t) {
       final diff = t.dueDate.difference(today).inDays;
       return diff >= 0 && diff <= 3;
@@ -167,10 +174,12 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
       body: Stack(
         children: [
           CustomScrollView(
-            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+            physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics()),
             slivers: [
               SliverPadding(
-                padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 56),
+                padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + 72),
               ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 140),
@@ -179,25 +188,46 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // 三个统计方块（独立卡片，固定高度）
                         Row(
                           children: [
                             _buildStatCard('总任务', '$totalTasks', Colors.blue),
                             const SizedBox(width: 12),
-                            _buildStatCard('即将到期', '$upcomingTasks', Colors.orange),
+                            _buildStatCard(
+                                '即将到期', '$upcomingTasks', Colors.orange),
                             const SizedBox(width: 12),
                             _buildStatCard('已逾期', '$overdueTasks', Colors.red),
                           ],
                         ),
+                        // 中间间距
+                        const SizedBox(height: 16),
+                        // AI 任务建议框（独立卡片，高度根据内容自适应，用 AnimatedSize 平滑延展）
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutCubic,
+                          alignment: Alignment.topCenter,
+                          child: DDLAIInsightCard(
+                            tasks: _tasks,
+                            onHeightChanged: (h) {
+                              final newHeight = h + 4;
+                              if ((newHeight - _ddlInsightHeight).abs() > 1) {
+                                setState(() {
+                                  _ddlInsightHeight = newHeight;
+                                });
+                              }
+                            },
+                          ),
+                        ),
                         const SizedBox(height: 24),
-                        
+
                         _buildCalendarHeatmap(),
                         const SizedBox(height: 24),
-                        
+
                         if (_selectedDate != null) ...[
                           _buildSelectedDateTasks(),
                           const SizedBox(height: 24),
                         ],
-                        
+
                         const Text(
                           '任务列表',
                           style: TextStyle(
@@ -206,13 +236,14 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                           ),
                         ),
                         const SizedBox(height: 5),
-                        
+
                         _tasks.isEmpty
                             ? _buildEmptyState()
                             : ListView.builder(
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
-                                padding: const EdgeInsets.only(top: 5, bottom: 48),
+                                padding:
+                                    const EdgeInsets.only(top: 5, bottom: 48),
                                 itemCount: _tasks.length,
                                 itemBuilder: (context, index) {
                                   final task = _tasks[index];
@@ -330,7 +361,8 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                                 color: Colors.grey.shade100,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                              child: Icon(Icons.close,
+                                  size: 18, color: Colors.grey.shade600),
                             ),
                           ),
                         ],
@@ -347,8 +379,10 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                               color: const Color(0xFF4A90E2),
                               onTap: () {
                                 Navigator.pop(context);
-                                WidgetsBinding.instance.addPostFrameCallback((_) {
-                                  toastNotification.show(context, '请前往课表页添加课程', type: ToastType.error);
+                                WidgetsBinding.instance
+                                    .addPostFrameCallback((_) {
+                                  toastNotification.show(context, '请前往课表页添加课程',
+                                      type: ToastType.error);
                                 });
                               },
                             ),
@@ -430,7 +464,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
       grouped.putIfAbsent(c.name, () => []).add(c);
     }
     final courseGroups = grouped.entries.toList();
-    
+
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -452,12 +486,8 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                   child: Container(
                     margin: const EdgeInsets.symmetric(horizontal: 24),
                     constraints: BoxConstraints(
-                      maxWidth: 360, 
-                      maxHeight: screenHeight * 0.6
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
+                        maxWidth: 360, maxHeight: screenHeight * 0.6),
+                    child: GlassDialogShell(
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.2),
@@ -465,127 +495,155 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                           offset: const Offset(0, 10),
                         ),
                       ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [const Color(0xFF4A90E2), const Color(0xFF5BA0F2)],
-                            ),
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Opacity(
+                            opacity: 0.82,
+                            child: Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    const Color(0xFF4A90E2),
+                                    const Color(0xFF5BA0F2)
+                                  ],
                                 ),
-                                child: const Icon(Icons.book, color: Colors.white, size: 22),
+                                borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(24)),
                               ),
-                              const SizedBox(width: 14),
-                              const Expanded(
-                                child: Text(
-                                  '选择课程',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                              GestureDetector(
-                                onTap: () => Navigator.pop(context),
-                                child: Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Icon(Icons.close, color: Colors.white, size: 18),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (allCourses.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.all(40),
-                            child: Column(
-                              children: [
-                                Icon(Icons.book_outlined, size: 48, color: Colors.grey.shade400),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '暂无课程',
-                                  style: TextStyle(color: Colors.grey.shade500),
-                                ),
-                                const SizedBox(height: 8),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                                      toastNotification.show(context, '请前往课表页添加课程', type: ToastType.error);
-                                    });
-                                  },
-                                  child: const Text('先添加课程'),
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          Flexible(
-                            child: ListView.builder(
-                              shrinkWrap: true,
-                              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-                              itemCount: courseGroups.length,
-                              itemBuilder: (context, index) {
-                                final entry = courseGroups[index];
-                                final courseName = entry.key;
-                                final courses = entry.value;
-                                final courseColor = _parseColor(courses.first.color);
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey.shade50,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey.shade200),
-                                  ),
-                                  child: ListTile(
-                                    leading: Container(
-                                      width: 40,
-                                      height: 40,
-                                      decoration: BoxDecoration(
-                                        color: courseColor.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Icon(Icons.book, color: courseColor, size: 20),
-                                    ),
-                                    title: Text(
-                                      courseName,
-                                      style: const TextStyle(fontWeight: FontWeight.w500),
-                                    ),
-                                    subtitle: courses.first.teacher != null && courses.first.teacher!.isNotEmpty
-                                        ? Text(courses.first.teacher!, style: TextStyle(fontSize: 12, color: Colors.grey.shade600))
-                                        : null,
-                                    shape: RoundedRectangleBorder(
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _showTaskDialog(courses.first);
-                                    },
+                                    child: const Icon(Icons.book,
+                                        color: Colors.white, size: 22),
                                   ),
-                                );
-                              },
+                                  const SizedBox(width: 14),
+                                  const Expanded(
+                                    child: Text(
+                                      '选择课程',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => Navigator.pop(context),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Colors.white.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(Icons.close,
+                                          color: Colors.white, size: 18),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                      ],
+                          if (allCourses.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.all(40),
+                              child: Column(
+                                children: [
+                                  Icon(Icons.book_outlined,
+                                      size: 48, color: Colors.grey.shade400),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    '暂无课程',
+                                    style:
+                                        TextStyle(color: Colors.grey.shade500),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        toastNotification.show(
+                                            context, '请前往课表页添加课程',
+                                            type: ToastType.error);
+                                      });
+                                    },
+                                    child: const Text('先添加课程'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            Flexible(
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                physics: const BouncingScrollPhysics(
+                                    parent: AlwaysScrollableScrollPhysics()),
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 12, 12, 20),
+                                itemCount: courseGroups.length,
+                                itemBuilder: (context, index) {
+                                  final entry = courseGroups[index];
+                                  final courseName = entry.key;
+                                  final courses = entry.value;
+                                  final courseColor =
+                                      _parseColor(courses.first.color);
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.4),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                          color: Colors.grey.shade200),
+                                    ),
+                                    child: ListTile(
+                                      leading: Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          color: courseColor.withValues(
+                                              alpha: 0.15),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: Icon(Icons.book,
+                                            color: courseColor, size: 20),
+                                      ),
+                                      title: Text(
+                                        courseName,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w500),
+                                      ),
+                                      subtitle: courses.first.teacher != null &&
+                                              courses.first.teacher!.isNotEmpty
+                                          ? Text(courses.first.teacher!,
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey.shade600))
+                                          : null,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      onTap: () {
+                                        Navigator.pop(context);
+                                        _showTaskDialog(courses.first);
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -613,7 +671,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
     String type = '作业';
     String priority = '中';
     String description = '';
-    
+
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -628,12 +686,14 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
             final isSmallScreen = screenHeight < 700;
             final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
             double dialogMaxHeight = baseMaxHeight;
-            final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+            final availableHeight =
+                screenHeight - topInset - keyboardHeight - 24;
             if (availableHeight < dialogMaxHeight) {
               dialogMaxHeight = availableHeight;
             }
-            dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
-            
+            dialogMaxHeight =
+                dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
+
             return BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
               child: Center(
@@ -643,339 +703,524 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                     opacity: animation,
                     child: ScaleTransition(
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                        CurvedAnimation(
+                            parent: animation, curve: Curves.easeOut),
                       ),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          left: isSmallScreen ? 16 : 24,
-                          right: isSmallScreen ? 16 : 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        constraints: BoxConstraints(
-                          maxWidth: 400, 
-                          maxHeight: dialogMaxHeight,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            margin: EdgeInsets.only(
+                              left: isSmallScreen ? 16 : 24,
+                              right: isSmallScreen ? 16 : 24,
+                              top: keyboardHeight > 0 ? topInset + 8 : 0,
+                              bottom:
+                                  keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                            constraints: BoxConstraints(
+                              maxWidth: 400,
+                              maxHeight: dialogMaxHeight,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(Icons.add_task, color: Colors.white, size: isSmallScreen ? 20 : 22),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 14),
-                                  Expanded(
-                                    child: Text(
-                                      '添加任务 - ${course.name}',
-                                      style: TextStyle(
-                                        fontSize: isSmallScreen ? 16 : 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(Icons.close, color: Colors.white, size: isSmallScreen ? 16 : 18),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                              ],
                             ),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    TextField(
-                                      decoration: InputDecoration(
-                                        labelText: '任务名称',
-                                        prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: Colors.grey.shade50,
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    padding:
+                                        EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          courseColor,
+                                          courseColor.withValues(alpha: 0.8)
+                                        ],
                                       ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                                      onChanged: (v) => taskTitle = v,
+                                      borderRadius: const BorderRadius.vertical(
+                                          top: Radius.circular(24)),
                                     ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
+                                    child: Row(
                                       children: [
-                                        Icon(Icons.category_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '任务类型',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                        Container(
+                                          padding: EdgeInsets.all(
+                                              isSmallScreen ? 8 : 10),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.2),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Icon(Icons.add_task,
+                                              color: Colors.white,
+                                              size: isSmallScreen ? 20 : 22),
+                                        ),
+                                        SizedBox(
+                                            width: isSmallScreen ? 10 : 14),
+                                        Expanded(
+                                          child: Text(
+                                            '添加任务 - ${course.name}',
+                                            style: TextStyle(
+                                              fontSize: isSmallScreen ? 16 : 18,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () => Navigator.pop(context),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.2),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Icon(Icons.close,
+                                                color: Colors.white,
+                                                size: isSmallScreen ? 16 : 18),
                                           ),
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Container(
-                                      padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 10 : 12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.grey.shade200),
-                                      ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<String>(
-                                          value: type,
-                                          isExpanded: true,
-                                          icon: Icon(Icons.expand_more, color: courseColor, size: isSmallScreen ? 18 : 20),
-                                          dropdownColor: Colors.white,
-                                          borderRadius: BorderRadius.circular(16),
-                                          items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                            value: e, 
-                                            child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
-                                          )).toList(),
-                                          onChanged: (v) => setDialogState(() => type = v!),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    physics: const BouncingScrollPhysics(
+                                        parent:
+                                            AlwaysScrollableScrollPhysics()),
+                                    padding:
+                                        EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        TextField(
+                                          decoration: InputDecoration(
+                                            labelText: '任务名称',
+                                            prefixIcon: Icon(Icons.task,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            filled: true,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            contentPadding:
+                                                EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: isSmallScreen
+                                                        ? 12
+                                                        : 14),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: courseColor, width: 2),
+                                            ),
+                                          ),
+                                          style: TextStyle(
+                                              fontSize:
+                                                  isSmallScreen ? 14 : 16),
+                                          onChanged: (v) => taskTitle = v,
                                         ),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    InkWell(
-                                      onTap: () async {
-                                        final date = await showAnimatedDatePicker(
-                                          context: context,
-                                          initialDate: dueDate,
-                                          firstDate: DateTime.now(),
-                                          lastDate: DateTime.now().add(const Duration(days: 365)),
-                                        );
-                                        if (date != null) {
-                                          final time = await show3DTimePicker(
-                                            context: context,
-                                            initialHour: dueDate.hour,
-                                            initialMinute: dueDate.minute,
-                                            title: '选择截止时间',
-                                          );
-                                          if (time != null) {
-                                            setDialogState(() {
-                                              dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                                            });
-                                          } else {
-                                            setDialogState(() => dueDate = date);
-                                          }
-                                        }
-                                      },
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Container(
-                                        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey.shade50,
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: Colors.grey.shade200),
-                                        ),
-                                        child: Row(
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        Row(
                                           children: [
-                                            Icon(Icons.calendar_today, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                            SizedBox(width: isSmallScreen ? 10 : 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text('截止时间', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey.shade600)),
-                                                  Text('${dueDate.year}/${dueDate.month}/${dueDate.day} ${dueDate.hour.toString().padLeft(2, '0')}:${dueDate.minute.toString().padLeft(2, '0')}', style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 14 : 16)),
-                                                ],
+                                            Icon(Icons.category_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            SizedBox(
+                                                width: isSmallScreen ? 6 : 8),
+                                            Text(
+                                              '任务类型',
+                                              style: TextStyle(
+                                                fontSize:
+                                                    isSmallScreen ? 11 : 12,
+                                                color: Colors.grey.shade600,
                                               ),
                                             ),
-                                            Icon(Icons.chevron_right, color: Colors.grey.shade400, size: isSmallScreen ? 18 : 20),
                                           ],
                                         ),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.flag_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '优先级',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                        SizedBox(height: isSmallScreen ? 6 : 8),
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal:
+                                                  isSmallScreen ? 10 : 12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                                color: Colors.grey.shade200),
                                           ),
+                                          child: BlurredDropdown<String>(
+                                            value: type,
+                                            isExpanded: true,
+                                            icon: Icon(Icons.expand_more,
+                                                color: courseColor,
+                                                size:
+                                                    isSmallScreen ? 18 : 20),
+                                            items: ['作业', '考试', '报告', '其他']
+                                                .map((e) => DropdownMenuItem(
+                                                    value: e,
+                                                    child: Text(e,
+                                                        style: TextStyle(
+                                                            fontSize:
+                                                                isSmallScreen
+                                                                    ? 14
+                                                                    : 16))))
+                                                .toList(),
+                                            onChanged: (v) => setDialogState(
+                                                () => type = v!),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        InkWell(
+                                          onTap: () async {
+                                            final date =
+                                                await showAnimatedDatePicker(
+                                              context: context,
+                                              initialDate: dueDate,
+                                              firstDate: DateTime.now(),
+                                              lastDate: DateTime.now().add(
+                                                  const Duration(days: 365)),
+                                            );
+                                            if (date != null) {
+                                              final time =
+                                                  await show3DTimePicker(
+                                                context: context,
+                                                initialHour: dueDate.hour,
+                                                initialMinute: dueDate.minute,
+                                                title: '选择截止时间',
+                                              );
+                                              if (time != null) {
+                                                setDialogState(() {
+                                                  dueDate = DateTime(
+                                                      date.year,
+                                                      date.month,
+                                                      date.day,
+                                                      time.hour,
+                                                      time.minute);
+                                                });
+                                              } else {
+                                                setDialogState(
+                                                    () => dueDate = date);
+                                              }
+                                            }
+                                          },
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Container(
+                                            padding: EdgeInsets.all(
+                                                isSmallScreen ? 12 : 16),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.4),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.calendar_today,
+                                                    color: courseColor
+                                                        .withValues(alpha: 0.7),
+                                                    size: isSmallScreen
+                                                        ? 18
+                                                        : 20),
+                                                SizedBox(
+                                                    width: isSmallScreen
+                                                        ? 10
+                                                        : 12),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text('截止时间',
+                                                          style: TextStyle(
+                                                              fontSize:
+                                                                  isSmallScreen
+                                                                      ? 11
+                                                                      : 12,
+                                                              color: Colors.grey
+                                                                  .shade600)),
+                                                      Text(
+                                                          '${dueDate.year}/${dueDate.month}/${dueDate.day} ${dueDate.hour.toString().padLeft(2, '0')}:${dueDate.minute.toString().padLeft(2, '0')}',
+                                                          style: TextStyle(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              fontSize:
+                                                                  isSmallScreen
+                                                                      ? 14
+                                                                      : 16)),
+                                                    ],
+                                                  ),
+                                                ),
+                                                Icon(Icons.chevron_right,
+                                                    color: Colors.grey.shade400,
+                                                    size: isSmallScreen
+                                                        ? 18
+                                                        : 20),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.flag_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            SizedBox(
+                                                width: isSmallScreen ? 6 : 8),
+                                            Text(
+                                              '优先级',
+                                              style: TextStyle(
+                                                fontSize:
+                                                    isSmallScreen ? 11 : 12,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: isSmallScreen ? 6 : 8),
+                                        Row(
+                                          children: ['高', '中', '低'].map((p) {
+                                            final isSelected = priority == p;
+                                            Color priorityColor;
+                                            if (p == '高') {
+                                              priorityColor = Colors.red;
+                                            } else if (p == '中')
+                                              priorityColor = Colors.orange;
+                                            else
+                                              priorityColor = Colors.green;
+
+                                            return Expanded(
+                                              child: GestureDetector(
+                                                onTap: () => setDialogState(
+                                                    () => priority = p),
+                                                child: Container(
+                                                  margin: EdgeInsets.symmetric(
+                                                      horizontal: isSmallScreen
+                                                          ? 3
+                                                          : 4),
+                                                  padding: EdgeInsets.symmetric(
+                                                      vertical: isSmallScreen
+                                                          ? 8
+                                                          : 10),
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected
+                                                        ? priorityColor
+                                                            .withValues(
+                                                                alpha: 0.15)
+                                                        : Colors.white
+                                                            .withValues(
+                                                                alpha: 0.4),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            10),
+                                                    border: Border.all(
+                                                      color: isSelected
+                                                          ? priorityColor
+                                                          : Colors
+                                                              .grey.shade200,
+                                                      width: isSelected ? 2 : 1,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    p,
+                                                    textAlign: TextAlign.center,
+                                                    style: TextStyle(
+                                                      fontSize: isSmallScreen
+                                                          ? 13
+                                                          : 14,
+                                                      color: isSelected
+                                                          ? priorityColor
+                                                          : Colors
+                                                              .grey.shade600,
+                                                      fontWeight: isSelected
+                                                          ? FontWeight.bold
+                                                          : FontWeight.normal,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          }).toList(),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        TextField(
+                                          maxLines: 1,
+                                          decoration: InputDecoration(
+                                            labelText: '备注',
+                                            prefixIcon: Icon(
+                                                Icons.note_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            filled: true,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            contentPadding:
+                                                EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: isSmallScreen
+                                                        ? 12
+                                                        : 14),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: courseColor, width: 2),
+                                            ),
+                                          ),
+                                          style: TextStyle(
+                                              fontSize:
+                                                  isSmallScreen ? 14 : 16),
+                                          onChanged: (v) => description = v,
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Row(
-                                      children: ['高', '中', '低'].map((p) {
-                                        final isSelected = priority == p;
-                                        Color priorityColor;
-                                        if (p == '高') {
-                                          priorityColor = Colors.red;
-                                        } else if (p == '中') priorityColor = Colors.orange;
-                                        else priorityColor = Colors.green;
-                                        
-                                        return Expanded(
-                                          child: GestureDetector(
-                                            onTap: () => setDialogState(() => priority = p),
-                                            child: Container(
-                                              margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
-                                              padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
-                                              decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.grey.shade50,
-                                                borderRadius: BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: isSelected ? priorityColor : Colors.grey.shade200,
-                                                  width: isSelected ? 2 : 1,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                p,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: isSmallScreen ? 13 : 14,
-                                                  color: isSelected ? priorityColor : Colors.grey.shade600,
-                                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    TextField(
-                                      maxLines: 1,
-                                      decoration: InputDecoration(
-                                        labelText: '备注',
-                                        prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: Colors.grey.shade50,
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                                      onChanged: (v) => description = v,
-                                    ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                            Container(
-                              padding: EdgeInsets.fromLTRB(isSmallScreen ? 16 : 20, 0, isSmallScreen ? 16 : 20, isSmallScreen ? 16 : 20),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                Container(
+                                  padding: EdgeInsets.fromLTRB(
+                                      isSmallScreen ? 16 : 20,
+                                      0,
+                                      isSmallScreen ? 16 : 20,
+                                      isSmallScreen ? 16 : 20),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          style: OutlinedButton.styleFrom(
+                                            padding: EdgeInsets.symmetric(
+                                                vertical:
+                                                    isSmallScreen ? 12 : 14),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12)),
+                                            side: BorderSide(
+                                                color: Colors.grey.shade300),
+                                          ),
+                                          child: Text('取消',
+                                              style: TextStyle(
+                                                  fontSize:
+                                                      isSmallScreen ? 13 : 14)),
+                                        ),
                                       ),
-                                      child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
-                                    ),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 12),
-                                  Expanded(
-                                    flex: 2,
-                                    child: ElevatedButton(
-                                      onPressed: () async {
-                                        if (taskTitle.isEmpty) {
-                                          toastNotification.show(context, '请输入任务名称', type: ToastType.error);
-                                          return;
-                                        }
-                                        final isMergedCourse = StorageService.getCourses()
-                                              .where((c) => c.name == course.name)
-                                              .length > 1;
-                                        final taskCourseId = isMergedCourse
-                                            ? 'course_name:${course.name}'
-                                            : course.id;
-                                        final task = Task(
-                                          id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                          courseId: taskCourseId,
-                                          name: taskTitle,
-                                          type: type,
-                                          dueDate: dueDate,
-                                          priority: priority,
-                                          note: description,
-                                        );
-                                        await StorageService.addTask(task);
-                                        Navigator.pop(context);
-                                        _loadData();
-                                        setState(() {});
-                                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                                          toastNotification.show(context, '添加任务成功', type: ToastType.success);
-                                        });
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: courseColor,
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      SizedBox(width: isSmallScreen ? 10 : 12),
+                                      Expanded(
+                                        flex: 2,
+                                        child: ElevatedButton(
+                                          onPressed: () async {
+                                            if (taskTitle.isEmpty) {
+                                              toastNotification.show(
+                                                  context, '请输入任务名称',
+                                                  type: ToastType.error);
+                                              return;
+                                            }
+                                            final isMergedCourse =
+                                                StorageService.getCourses()
+                                                        .where((c) =>
+                                                            c.name ==
+                                                            course.name)
+                                                        .length >
+                                                    1;
+                                            final taskCourseId = isMergedCourse
+                                                ? 'course_name:${course.name}'
+                                                : course.id;
+                                            final task = Task(
+                                              id: DateTime.now()
+                                                  .millisecondsSinceEpoch
+                                                  .toString(),
+                                              courseId: taskCourseId,
+                                              name: taskTitle,
+                                              type: type,
+                                              dueDate: dueDate,
+                                              priority: priority,
+                                              note: description,
+                                            );
+                                            await StorageService.addTask(task);
+                                            Navigator.pop(context);
+                                            _loadData();
+                                            setState(() {});
+                                            WidgetsBinding.instance
+                                                .addPostFrameCallback((_) {
+                                              toastNotification.show(
+                                                  context, '添加任务成功',
+                                                  type: ToastType.success);
+                                            });
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: courseColor,
+                                            foregroundColor: Colors.white,
+                                            padding: EdgeInsets.symmetric(
+                                                vertical:
+                                                    isSmallScreen ? 12 : 14),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12)),
+                                          ),
+                                          child: Text('保存',
+                                              style: TextStyle(
+                                                  fontSize:
+                                                      isSmallScreen ? 13 : 15)),
+                                        ),
                                       ),
-                                      child: Text('保存', style: TextStyle(fontSize: isSmallScreen ? 13 : 15)),
-                                    ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
                     ),
                   ),
                 ),
@@ -1010,8 +1255,9 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
           AnimatedBuilder(
             animation: _calendarHeightAnimation,
             builder: (context, child) {
-              final animatedHeight = _currentCalendarHeight + 
-                  (_targetCalendarHeight - _currentCalendarHeight) * _calendarHeightAnimation.value;
+              final animatedHeight = _currentCalendarHeight +
+                  (_targetCalendarHeight - _currentCalendarHeight) *
+                      _calendarHeightAnimation.value;
               return SizedBox(
                 height: animatedHeight,
                 child: child,
@@ -1022,22 +1268,25 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
               itemCount: 2400,
               onPageChanged: (index) {
                 final monthOffset = index - _calendarInitialPage;
-                final newMonth = DateTime(DateTime.now().year, DateTime.now().month + monthOffset, 1);
+                final newMonth = DateTime(
+                    DateTime.now().year, DateTime.now().month + monthOffset, 1);
                 final newHeight = _calculateMonthGridHeight(newMonth);
-                
+
                 setState(() {
-                  _currentCalendarHeight = _calculateMonthGridHeight(_selectedMonth);
+                  _currentCalendarHeight =
+                      _calculateMonthGridHeight(_selectedMonth);
                   _targetCalendarHeight = newHeight;
                   _selectedMonth = newMonth;
                   _selectedDate = null;
                 });
-                
+
                 // 触发动画
                 _calendarHeightController.forward(from: 0);
               },
               itemBuilder: (context, index) {
                 final monthOffset = index - _calendarInitialPage;
-                final month = DateTime(DateTime.now().year, DateTime.now().month + monthOffset, 1);
+                final month = DateTime(
+                    DateTime.now().year, DateTime.now().month + monthOffset, 1);
                 return _buildMonthGrid(month);
               },
             ),
@@ -1046,7 +1295,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
       ),
     );
   }
-  
+
   double _calculateMonthGridHeight(DateTime month) {
     final firstDayOfMonth = DateTime(month.year, month.month, 1);
     final lastDayOfMonth = DateTime(month.year, month.month + 1, 0);
@@ -1055,7 +1304,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
     final weeks = ((firstWeekday + daysInMonth) / 7).ceil();
     return weeks * 44.0;
   }
-  
+
   Widget _buildMonthHeader() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1088,42 +1337,44 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
       ],
     );
   }
-  
+
   Widget _buildWeekDaysHeader() {
     final weekDays = ['日', '一', '二', '三', '四', '五', '六'];
     return Row(
-      children: weekDays.map((day) => Expanded(
-        child: Center(
-          child: Text(
-            day,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey.shade500,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-      )).toList(),
+      children: weekDays
+          .map((day) => Expanded(
+                child: Center(
+                  child: Text(
+                    day,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade500,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ))
+          .toList(),
     );
   }
-  
+
   Widget _buildMonthGrid(DateTime month) {
     final firstDayOfMonth = DateTime(month.year, month.month, 1);
     final lastDayOfMonth = DateTime(month.year, month.month + 1, 0);
     final firstWeekday = firstDayOfMonth.weekday % 7;
     final daysInMonth = lastDayOfMonth.day;
     final weeks = ((firstWeekday + daysInMonth) / 7).ceil();
-    
+
     return Column(
       children: List.generate(weeks, (weekIndex) {
         return Row(
           children: List.generate(7, (dayIndex) {
             final dayNumber = weekIndex * 7 + dayIndex - firstWeekday + 1;
-            
+
             if (dayNumber < 1 || dayNumber > daysInMonth) {
               return Expanded(child: Container(height: 40));
             }
-            
+
             final date = DateTime(month.year, month.month, dayNumber);
             final taskCount = _getTaskCountForDate(date);
             final isToday = _isToday(date);
@@ -1131,7 +1382,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                 date.year == _selectedDate!.year &&
                 date.month == _selectedDate!.month &&
                 date.day == _selectedDate!.day;
-            
+
             return Expanded(
               child: GestureDetector(
                 onTap: () {
@@ -1143,7 +1394,9 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                   height: 40,
                   margin: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
-                    color: taskCount > 0 ? _getHeatColor(taskCount) : Colors.grey.shade50,
+                    color: taskCount > 0
+                        ? _getHeatColor(taskCount)
+                        : Colors.grey.shade50,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: isToday
@@ -1159,7 +1412,8 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                       '$dayNumber',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                        fontWeight:
+                            isToday ? FontWeight.bold : FontWeight.normal,
                         color: taskCount > 0
                             ? taskCount >= 3
                                 ? Colors.white
@@ -1204,7 +1458,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
   Widget _buildSelectedDateTasks() {
     final tasks = _getTasksForDate(_selectedDate!);
     final dateStr = DateFormat('yyyy年MM月dd日').format(_selectedDate!);
-    
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1232,16 +1486,21 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: tasks.isEmpty ? Colors.grey.shade100 : const Color(0xFFFF4D4D).withValues(alpha: 0.1),
+                  color: tasks.isEmpty
+                      ? Colors.grey.shade100
+                      : const Color(0xFFFF4D4D).withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   '${tasks.length} 个任务',
                   style: TextStyle(
                     fontSize: 12,
-                    color: tasks.isEmpty ? Colors.grey.shade600 : const Color(0xFFE60000),
+                    color: tasks.isEmpty
+                        ? Colors.grey.shade600
+                        : const Color(0xFFE60000),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -1270,17 +1529,21 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
 
   Widget _buildTaskItem(Task task) {
     final isOverdue = task.dueDate.isBefore(DateTime.now());
-    final priorityColor = task.priority == '高' ? Colors.red : 
-                          task.priority == '中' ? Colors.orange : Colors.green;
+    final priorityColor = task.priority == '高'
+        ? Colors.red
+        : task.priority == '中'
+            ? Colors.orange
+            : Colors.green;
     final isCompleted = task.completed;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isCompleted ? Colors.grey.shade100 : Colors.grey.shade50,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
+        border: Border.all(
+            color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
       ),
       child: Row(
         children: [
@@ -1310,7 +1573,9 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
             width: 4,
             height: 30,
             decoration: BoxDecoration(
-              color: isCompleted ? Colors.grey.shade400 : (isOverdue ? Colors.red : priorityColor),
+              color: isCompleted
+                  ? Colors.grey.shade400
+                  : (isOverdue ? Colors.red : priorityColor),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -1333,7 +1598,9 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                   '${task.type} · ${DateFormat('HH:mm').format(task.dueDate)}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isCompleted ? Colors.grey.shade400 : Colors.grey.shade600,
+                    color: isCompleted
+                        ? Colors.grey.shade400
+                        : Colors.grey.shade600,
                     decoration: isCompleted ? TextDecoration.lineThrough : null,
                   ),
                 ),
@@ -1343,8 +1610,8 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: isCompleted 
-                  ? Colors.grey.shade200 
+              color: isCompleted
+                  ? Colors.grey.shade200
                   : priorityColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(4),
             ),
@@ -1364,19 +1631,22 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
 
   bool _isToday(DateTime date) {
     final now = DateTime.now();
-    return date.year == now.year && date.month == now.month && date.day == now.day;
+    return date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
   }
 
   Widget _buildStatCard(String label, String value, Color color) {
     return Expanded(
       child: Card(
         elevation: 0,
+        margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: Colors.grey.shade200),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Column(
             children: [
               Text(
@@ -1387,7 +1657,7 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                   color: color,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               Text(
                 label,
                 style: TextStyle(
@@ -1429,16 +1699,20 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
 
   Widget _buildTaskCard(Task task, BuildContext context) {
     final isOverdue = task.dueDate.isBefore(DateTime.now());
-    final priorityColor = task.priority == '高' ? Colors.red : 
-                          task.priority == '中' ? Colors.orange : Colors.green;
+    final priorityColor = task.priority == '高'
+        ? Colors.red
+        : task.priority == '中'
+            ? Colors.orange
+            : Colors.green;
     final isCompleted = task.completed;
-    
+
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
+        side: BorderSide(
+            color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
       ),
       color: isCompleted ? Colors.grey.shade50 : null,
       child: ListTile(
@@ -1472,7 +1746,9 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
               width: 4,
               height: 40,
               decoration: BoxDecoration(
-                color: isCompleted ? Colors.grey.shade400 : (isOverdue ? Colors.red : priorityColor),
+                color: isCompleted
+                    ? Colors.grey.shade400
+                    : (isOverdue ? Colors.red : priorityColor),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -1494,60 +1770,51 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
               '${task.type} · 截止：${DateFormat('MM/dd HH:mm').format(task.dueDate)}',
               style: TextStyle(
                 fontSize: 12,
-                color: isCompleted 
-                    ? Colors.grey.shade400 
+                color: isCompleted
+                    ? Colors.grey.shade400
                     : (isOverdue ? Colors.red : Colors.grey.shade600),
                 decoration: isCompleted ? TextDecoration.lineThrough : null,
               ),
             ),
           ],
         ),
-        trailing: isCompleted 
-            ? null 
-            : PopupMenuButton<String>(
-          icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-          onOpened: () {
-            HapticFeedback.selectionClick();
-          },
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          color: Colors.white,
-          elevation: 8,
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'edit',
-              child: Row(
-                children: [
-                  Icon(Icons.edit_outlined, color: Color(0xFF4A90E2), size: 18),
-                  SizedBox(width: 8),
-                  Text('编辑'),
-                ],
+        trailing: isCompleted
+            ? null
+            : Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => HapticFeedback.selectionClick(),
+                child: BlurredPopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert,
+                      color: Colors.grey.shade400, size: 20),
+                  items: [
+                    const BlurredPopupMenuItem(
+                      value: 'edit',
+                      icon: Icons.edit_outlined,
+                      label: '编辑',
+                      iconColor: Color(0xFF4A90E2),
+                    ),
+                    const BlurredPopupMenuItem(
+                      value: 'delete',
+                      icon: Icons.delete_outline,
+                      label: '删除',
+                      iconColor: Colors.red,
+                      textColor: Colors.red,
+                    ),
+                  ],
+                  onSelected: (value) async {
+                    if (value == 'edit') {
+                      await Future.delayed(const Duration(milliseconds: 200));
+                      _showEditTaskDialog(task);
+                    } else if (value == 'delete') {
+                      StorageService.deleteTask(task.id);
+                      _loadData();
+                      setState(() {});
+                      toastNotification.show(context, '任务已删除',
+                          type: ToastType.error);
+                    }
+                  },
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: Row(
-                children: [
-                  Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                  SizedBox(width: 8),
-                  Text('删除', style: TextStyle(color: Colors.red)),
-                ],
-              ),
-            ),
-          ],
-          onSelected: (value) async {
-            if (value == 'edit') {
-              await Future.delayed(const Duration(milliseconds: 200));
-              _showEditTaskDialog(task);
-            } else if (value == 'delete') {
-              StorageService.deleteTask(task.id);
-              _loadData();
-              setState(() {});
-              toastNotification.show(context, '任务已删除', type: ToastType.error);
-            }
-          },
-        ),
       ),
     );
   }
@@ -1561,12 +1828,16 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
     Color courseColor = const Color(0xFF4A90E2);
     if (task.courseId.startsWith('course_name:')) {
       final courseName = task.courseId.substring('course_name:'.length);
-      final matchedCourse = StorageService.getCourses().where((c) => c.name == courseName).firstOrNull;
+      final matchedCourse = StorageService.getCourses()
+          .where((c) => c.name == courseName)
+          .firstOrNull;
       if (matchedCourse != null) {
         courseColor = _parseColor(matchedCourse.color);
       }
     } else if (task.courseId != 'ai_created') {
-      final matchedCourse = StorageService.getCourses().where((c) => c.id == task.courseId).firstOrNull;
+      final matchedCourse = StorageService.getCourses()
+          .where((c) => c.id == task.courseId)
+          .firstOrNull;
       if (matchedCourse != null) {
         courseColor = _parseColor(matchedCourse.color);
       }
@@ -1586,12 +1857,14 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
             final isSmallScreen = screenHeight < 700;
             final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
             double dialogMaxHeight = baseMaxHeight;
-            final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+            final availableHeight =
+                screenHeight - topInset - keyboardHeight - 24;
             if (availableHeight < dialogMaxHeight) {
               dialogMaxHeight = availableHeight;
             }
-            dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
-            
+            dialogMaxHeight =
+                dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
+
             return BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
               child: Center(
@@ -1601,329 +1874,512 @@ class HeatmapScreenState extends State<HeatmapScreen> with TickerProviderStateMi
                     opacity: animation,
                     child: ScaleTransition(
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                        CurvedAnimation(
+                            parent: animation, curve: Curves.easeOut),
                       ),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          left: isSmallScreen ? 16 : 24,
-                          right: isSmallScreen ? 16 : 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        constraints: BoxConstraints(
-                          maxWidth: 400, 
-                          maxHeight: dialogMaxHeight,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            margin: EdgeInsets.only(
+                              left: isSmallScreen ? 16 : 24,
+                              right: isSmallScreen ? 16 : 24,
+                              top: keyboardHeight > 0 ? topInset + 8 : 0,
+                              bottom:
+                                  keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                            constraints: BoxConstraints(
+                              maxWidth: 400,
+                              maxHeight: dialogMaxHeight,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(Icons.edit_note, color: Colors.white, size: isSmallScreen ? 20 : 22),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 14),
-                                  Expanded(
-                                    child: Text(
-                                      '编辑任务',
-                                      style: TextStyle(
-                                        fontSize: isSmallScreen ? 16 : 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(Icons.close, color: Colors.white, size: isSmallScreen ? 16 : 18),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                              ],
                             ),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    TextField(
-                                      controller: nameController,
-                                      decoration: InputDecoration(
-                                        labelText: '任务名称',
-                                        prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: Colors.grey.shade50,
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    padding:
+                                        EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          courseColor,
+                                          courseColor.withValues(alpha: 0.8)
+                                        ],
                                       ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                                      borderRadius: const BorderRadius.vertical(
+                                          top: Radius.circular(24)),
                                     ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
+                                    child: Row(
                                       children: [
-                                        Icon(Icons.category_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '任务类型',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                        Container(
+                                          padding: EdgeInsets.all(
+                                              isSmallScreen ? 8 : 10),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.2),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Icon(Icons.edit_note,
+                                              color: Colors.white,
+                                              size: isSmallScreen ? 20 : 22),
+                                        ),
+                                        SizedBox(
+                                            width: isSmallScreen ? 10 : 14),
+                                        Expanded(
+                                          child: Text(
+                                            '编辑任务',
+                                            style: TextStyle(
+                                              fontSize: isSmallScreen ? 16 : 18,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () => Navigator.pop(context),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.2),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Icon(Icons.close,
+                                                color: Colors.white,
+                                                size: isSmallScreen ? 16 : 18),
                                           ),
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Container(
-                                      padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 10 : 12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.grey.shade200),
-                                      ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<String>(
-                                          value: type,
-                                          isExpanded: true,
-                                          icon: Icon(Icons.expand_more, color: courseColor, size: isSmallScreen ? 18 : 20),
-                                          dropdownColor: Colors.white,
-                                          borderRadius: BorderRadius.circular(16),
-                                          items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                            value: e, 
-                                            child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
-                                          )).toList(),
-                                          onChanged: (v) => setDialogState(() => type = v!),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    physics: const BouncingScrollPhysics(
+                                        parent:
+                                            AlwaysScrollableScrollPhysics()),
+                                    padding:
+                                        EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        TextField(
+                                          controller: nameController,
+                                          decoration: InputDecoration(
+                                            labelText: '任务名称',
+                                            prefixIcon: Icon(Icons.task,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            filled: true,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            contentPadding:
+                                                EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: isSmallScreen
+                                                        ? 12
+                                                        : 14),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: courseColor, width: 2),
+                                            ),
+                                          ),
+                                          style: TextStyle(
+                                              fontSize:
+                                                  isSmallScreen ? 14 : 16),
                                         ),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    InkWell(
-                                      onTap: () async {
-                                        final date = await showAnimatedDatePicker(
-                                          context: context,
-                                          initialDate: dueDate,
-                                          firstDate: DateTime(2020),
-                                          lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
-                                        );
-                                        if (date != null) {
-                                          final time = await show3DTimePicker(
-                                            context: context,
-                                            initialHour: dueDate.hour,
-                                            initialMinute: dueDate.minute,
-                                            title: '选择截止时间',
-                                          );
-                                          if (time != null) {
-                                            setDialogState(() {
-                                              dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                                            });
-                                          }
-                                        }
-                                      },
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Container(
-                                        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey.shade50,
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: Colors.grey.shade200),
-                                        ),
-                                        child: Row(
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        Row(
                                           children: [
-                                            Icon(Icons.calendar_today, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                            SizedBox(width: isSmallScreen ? 10 : 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey.shade600)),
-                                                  Text(DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 14 : 16)),
-                                                ],
+                                            Icon(Icons.category_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            SizedBox(
+                                                width: isSmallScreen ? 6 : 8),
+                                            Text(
+                                              '任务类型',
+                                              style: TextStyle(
+                                                fontSize:
+                                                    isSmallScreen ? 11 : 12,
+                                                color: Colors.grey.shade600,
                                               ),
                                             ),
-                                            Icon(Icons.chevron_right, color: Colors.grey.shade400, size: isSmallScreen ? 18 : 20),
                                           ],
                                         ),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.flag_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '优先级',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                        SizedBox(height: isSmallScreen ? 6 : 8),
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal:
+                                                  isSmallScreen ? 10 : 12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                                color: Colors.grey.shade200),
                                           ),
+                                          child: BlurredDropdown<String>(
+                                            value: type,
+                                            isExpanded: true,
+                                            icon: Icon(Icons.expand_more,
+                                                color: courseColor,
+                                                size:
+                                                    isSmallScreen ? 18 : 20),
+                                            items: ['作业', '考试', '报告', '其他']
+                                                .map((e) => DropdownMenuItem(
+                                                    value: e,
+                                                    child: Text(e,
+                                                        style: TextStyle(
+                                                            fontSize:
+                                                                isSmallScreen
+                                                                    ? 14
+                                                                    : 16))))
+                                                .toList(),
+                                            onChanged: (v) => setDialogState(
+                                                () => type = v!),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        InkWell(
+                                          onTap: () async {
+                                            final date =
+                                                await showAnimatedDatePicker(
+                                              context: context,
+                                              initialDate: dueDate,
+                                              firstDate: DateTime(2020),
+                                              lastDate: DateTime.now().add(
+                                                  const Duration(
+                                                      days: 365 * 2)),
+                                            );
+                                            if (date != null) {
+                                              final time =
+                                                  await show3DTimePicker(
+                                                context: context,
+                                                initialHour: dueDate.hour,
+                                                initialMinute: dueDate.minute,
+                                                title: '选择截止时间',
+                                              );
+                                              if (time != null) {
+                                                setDialogState(() {
+                                                  dueDate = DateTime(
+                                                      date.year,
+                                                      date.month,
+                                                      date.day,
+                                                      time.hour,
+                                                      time.minute);
+                                                });
+                                              }
+                                            }
+                                          },
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Container(
+                                            padding: EdgeInsets.all(
+                                                isSmallScreen ? 12 : 16),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.4),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.calendar_today,
+                                                    color: courseColor
+                                                        .withValues(alpha: 0.7),
+                                                    size: isSmallScreen
+                                                        ? 18
+                                                        : 20),
+                                                SizedBox(
+                                                    width: isSmallScreen
+                                                        ? 10
+                                                        : 12),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text('截止日期',
+                                                          style: TextStyle(
+                                                              fontSize:
+                                                                  isSmallScreen
+                                                                      ? 11
+                                                                      : 12,
+                                                              color: Colors.grey
+                                                                  .shade600)),
+                                                      Text(
+                                                          DateFormat(
+                                                                  'yyyy/MM/dd HH:mm')
+                                                              .format(dueDate),
+                                                          style: TextStyle(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              fontSize:
+                                                                  isSmallScreen
+                                                                      ? 14
+                                                                      : 16)),
+                                                    ],
+                                                  ),
+                                                ),
+                                                Icon(Icons.chevron_right,
+                                                    color: Colors.grey.shade400,
+                                                    size: isSmallScreen
+                                                        ? 18
+                                                        : 20),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.flag_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            SizedBox(
+                                                width: isSmallScreen ? 6 : 8),
+                                            Text(
+                                              '优先级',
+                                              style: TextStyle(
+                                                fontSize:
+                                                    isSmallScreen ? 11 : 12,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: isSmallScreen ? 6 : 8),
+                                        Row(
+                                          children: ['高', '中', '低'].map((p) {
+                                            final isSelected = priority == p;
+                                            Color priorityColor;
+                                            if (p == '高') {
+                                              priorityColor = Colors.red;
+                                            } else if (p == '中')
+                                              priorityColor = Colors.orange;
+                                            else
+                                              priorityColor = Colors.green;
+
+                                            return Expanded(
+                                              child: GestureDetector(
+                                                onTap: () => setDialogState(
+                                                    () => priority = p),
+                                                child: Container(
+                                                  margin: EdgeInsets.symmetric(
+                                                      horizontal: isSmallScreen
+                                                          ? 3
+                                                          : 4),
+                                                  padding: EdgeInsets.symmetric(
+                                                      vertical: isSmallScreen
+                                                          ? 8
+                                                          : 10),
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected
+                                                        ? priorityColor
+                                                            .withValues(
+                                                                alpha: 0.15)
+                                                        : Colors.white
+                                                            .withValues(
+                                                                alpha: 0.4),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            10),
+                                                    border: Border.all(
+                                                      color: isSelected
+                                                          ? priorityColor
+                                                          : Colors
+                                                              .grey.shade200,
+                                                      width: isSelected ? 2 : 1,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    p,
+                                                    textAlign: TextAlign.center,
+                                                    style: TextStyle(
+                                                      fontSize: isSmallScreen
+                                                          ? 13
+                                                          : 14,
+                                                      color: isSelected
+                                                          ? priorityColor
+                                                          : Colors
+                                                              .grey.shade600,
+                                                      fontWeight: isSelected
+                                                          ? FontWeight.bold
+                                                          : FontWeight.normal,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          }).toList(),
+                                        ),
+                                        SizedBox(
+                                            height: isSmallScreen ? 12 : 16),
+                                        TextField(
+                                          controller: noteController,
+                                          maxLines: 1,
+                                          decoration: InputDecoration(
+                                            labelText: '备注（可选）',
+                                            prefixIcon: Icon(
+                                                Icons.note_outlined,
+                                                color: courseColor.withValues(
+                                                    alpha: 0.7),
+                                                size: isSmallScreen ? 18 : 20),
+                                            filled: true,
+                                            fillColor: Colors.white
+                                                .withValues(alpha: 0.4),
+                                            contentPadding:
+                                                EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: isSmallScreen
+                                                        ? 12
+                                                        : 14),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: Colors.grey.shade200),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide(
+                                                  color: courseColor, width: 2),
+                                            ),
+                                          ),
+                                          style: TextStyle(
+                                              fontSize:
+                                                  isSmallScreen ? 14 : 16),
                                         ),
                                       ],
                                     ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Row(
-                                      children: ['高', '中', '低'].map((p) {
-                                        final isSelected = priority == p;
-                                        Color priorityColor;
-                                        if (p == '高') {
-                                          priorityColor = Colors.red;
-                                        } else if (p == '中') priorityColor = Colors.orange;
-                                        else priorityColor = Colors.green;
-                                        
-                                        return Expanded(
-                                          child: GestureDetector(
-                                            onTap: () => setDialogState(() => priority = p),
-                                            child: Container(
-                                              margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
-                                              padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
-                                              decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.grey.shade50,
-                                                borderRadius: BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: isSelected ? priorityColor : Colors.grey.shade200,
-                                                  width: isSelected ? 2 : 1,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                p,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: isSmallScreen ? 13 : 14,
-                                                  color: isSelected ? priorityColor : Colors.grey.shade600,
-                                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    TextField(
-                                      controller: noteController,
-                                      maxLines: 1,
-                                      decoration: InputDecoration(
-                                        labelText: '备注（可选）',
-                                        prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: Colors.grey.shade50,
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                                    ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                            Container(
-                              padding: EdgeInsets.fromLTRB(isSmallScreen ? 16 : 20, 0, isSmallScreen ? 16 : 20, isSmallScreen ? 16 : 20),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                Container(
+                                  padding: EdgeInsets.fromLTRB(
+                                      isSmallScreen ? 16 : 20,
+                                      0,
+                                      isSmallScreen ? 16 : 20,
+                                      isSmallScreen ? 16 : 20),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          style: OutlinedButton.styleFrom(
+                                            padding: EdgeInsets.symmetric(
+                                                vertical:
+                                                    isSmallScreen ? 12 : 14),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12)),
+                                            side: BorderSide(
+                                                color: Colors.grey.shade300),
+                                          ),
+                                          child: Text('取消',
+                                              style: TextStyle(
+                                                  fontSize:
+                                                      isSmallScreen ? 13 : 14)),
+                                        ),
                                       ),
-                                      child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
-                                    ),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 12),
-                                  Expanded(
-                                    flex: 2,
-                                    child: ElevatedButton(
-                                      onPressed: () async {
-                                        if (nameController.text.isEmpty) return;
-                                        final updatedTask = Task(
-                                          id: task.id,
-                                          courseId: task.courseId,
-                                          name: nameController.text,
-                                          type: type,
-                                          dueDate: dueDate,
-                                          priority: priority,
-                                          note: noteController.text.isEmpty ? null : noteController.text,
-                                          completed: task.completed,
-                                        );
-                                        await StorageService.updateTask(updatedTask);
-                                        Navigator.pop(context);
-                                        _loadData();
-                                        if (mounted) setState(() {});
-                                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                                          toastNotification.show(context, '任务已更新', type: ToastType.success);
-                                        });
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: courseColor,
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      SizedBox(width: isSmallScreen ? 10 : 12),
+                                      Expanded(
+                                        flex: 2,
+                                        child: ElevatedButton(
+                                          onPressed: () async {
+                                            if (nameController.text.isEmpty)
+                                              return;
+                                            final updatedTask = Task(
+                                              id: task.id,
+                                              courseId: task.courseId,
+                                              name: nameController.text,
+                                              type: type,
+                                              dueDate: dueDate,
+                                              priority: priority,
+                                              note: noteController.text.isEmpty
+                                                  ? null
+                                                  : noteController.text,
+                                              completed: task.completed,
+                                            );
+                                            await StorageService.updateTask(
+                                                updatedTask);
+                                            Navigator.pop(context);
+                                            _loadData();
+                                            if (mounted) setState(() {});
+                                            WidgetsBinding.instance
+                                                .addPostFrameCallback((_) {
+                                              toastNotification.show(
+                                                  context, '任务已更新',
+                                                  type: ToastType.success);
+                                            });
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: courseColor,
+                                            foregroundColor: Colors.white,
+                                            padding: EdgeInsets.symmetric(
+                                                vertical:
+                                                    isSmallScreen ? 12 : 14),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12)),
+                                          ),
+                                          child: Text('保存',
+                                              style: TextStyle(
+                                                  fontSize:
+                                                      isSmallScreen ? 13 : 15)),
+                                        ),
                                       ),
-                                      child: Text('保存', style: TextStyle(fontSize: isSmallScreen ? 13 : 15)),
-                                    ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
                     ),
                   ),
                 ),

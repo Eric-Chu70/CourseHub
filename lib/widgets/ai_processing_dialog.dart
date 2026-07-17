@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +12,7 @@ import '../services/regex_parser_service.dart';
 import '../models/course.dart';
 import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
+import 'glass_dialog.dart';
 
 enum AIProcessingStep {
   ocr,
@@ -926,42 +926,47 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           margin: EdgeInsets.only(
-            left: 24, 
-            right: 24, 
+            left: 24,
+            right: 24,
             bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
           ),
           constraints: BoxConstraints(maxWidth: 500, maxHeight: actualMaxHeight),
-          decoration: BoxDecoration(
-            color: Colors.white,
+          child: ClipRRect(
             borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.2),
-                blurRadius: 30,
-                offset: const Offset(0, 15),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 30,
+                    offset: const Offset(0, 15),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildHeader(),
-              const Divider(height: 1),
-              Expanded(
-                child: ScrollConfiguration(
-                  behavior: ScrollConfiguration.of(context).copyWith(
-                    physics: const BouncingScrollPhysics(
-                      parent: AlwaysScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildHeader(),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ScrollConfiguration(
+                      behavior: ScrollConfiguration.of(context).copyWith(
+                        physics: const BouncingScrollPhysics(
+                          parent: AlwaysScrollableScrollPhysics(),
+                        ),
+                      ),
+                      child: _isChatMode ? _buildChatView() : _buildProcessingView(),
                     ),
                   ),
-                  child: _isChatMode ? _buildChatView() : _buildProcessingView(),
-                ),
+                  if (_currentStep == AIProcessingStep.completed) ...[
+                    const Divider(height: 1),
+                    _buildBottomActions(),
+                  ],
+                ],
               ),
-              if (_currentStep == AIProcessingStep.completed) ...[
-                const Divider(height: 1),
-                _buildBottomActions(),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -969,84 +974,87 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   }
 
   Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: _parseMode == ParseMode.ai
-              ? [const Color(0xFF9C27B0), const Color(0xFFBA68C8)]
-              : [const Color(0xFF4A90E2), const Color(0xFF6BA3F5)],
+    return Opacity(
+      opacity: 0.82,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: _parseMode == ParseMode.ai
+                ? [const Color(0xFF9C27B0), const Color(0xFFBA68C8)]
+                : [const Color(0xFF4A90E2), const Color(0xFF6BA3F5)],
+          ),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              _parseMode == ParseMode.ai ? Icons.auto_awesome : Icons.rule,
-              color: Colors.white,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '课程表识别',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _parseMode == ParseMode.ai 
-                    ? (_runtimeProvider == 'custom'
-                      ? '自定义模型 AI驱动'
-                      : (_runtimeProvider == 'hunyuan'
-                        ? '混元 Lite AI驱动'
-                        : (_runtimeProvider == 'glm'
-                          ? 'GLM-4.7-Flash AI驱动'
-                          : 'AI驱动')))
-                      : '正则表达式模式',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.white70,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_currentStep == AIProcessingStep.completed && _parsedCourses != null && _parsedCourses!.isNotEmpty)
-            IconButton(
-              onPressed: () {
-                setState(() {
-                  if (_showCourseListInDialog) {
-                    _showCourseListInDialog = false;
-                    _isChatMode = true;
-                  } else {
-                    _showCourseListInDialog = true;
-                    _isChatMode = false;
-                  }
-                });
-              },
-              icon: Icon(
-                _showCourseListInDialog ? Icons.chat : Icons.edit_note,
-                color: Colors.white,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
               ),
-              tooltip: _showCourseListInDialog ? 'AI对话' : '编辑课程',
+              child: Icon(
+                _parseMode == ParseMode.ai ? Icons.auto_awesome : Icons.rule,
+                color: Colors.white,
+                size: 24,
+              ),
             ),
-        ],
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '课程表识别',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _parseMode == ParseMode.ai
+                      ? (_runtimeProvider == 'custom'
+                        ? '自定义模型 AI驱动'
+                        : (_runtimeProvider == 'hunyuan'
+                          ? '混元 Lite AI驱动'
+                          : (_runtimeProvider == 'glm'
+                            ? 'GLM-4.7-Flash AI驱动'
+                            : 'AI驱动')))
+                      : '正则表达式模式',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_currentStep == AIProcessingStep.completed && _parsedCourses != null && _parsedCourses!.isNotEmpty)
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    if (_showCourseListInDialog) {
+                      _showCourseListInDialog = false;
+                      _isChatMode = true;
+                    } else {
+                      _showCourseListInDialog = true;
+                      _isChatMode = false;
+                    }
+                  });
+                },
+                icon: Icon(
+                  _showCourseListInDialog ? Icons.chat : Icons.edit_note,
+                  color: Colors.white,
+                ),
+                tooltip: _showCourseListInDialog ? 'AI对话' : '编辑课程',
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1083,7 +1091,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               valueColor: AlwaysStoppedAnimation(
                 _parseMode == ParseMode.ai ? const Color(0xFF9C27B0) : const Color(0xFF4A90E2),
               ),
-              backgroundColor: Colors.grey.shade200,
+              backgroundColor: Colors.white.withValues(alpha: 0.4),
             ),
           ),
           const SizedBox(height: 24),
@@ -1120,7 +1128,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       decoration: BoxDecoration(
         color: isActive
             ? (_parseMode == ParseMode.ai ? const Color(0xFF9C27B0) : const Color(0xFF4A90E2))
-            : Colors.grey.shade200,
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Text(
@@ -1138,7 +1146,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Container(
       width: 20,
       height: 2,
-      color: Colors.grey.shade300,
+      color: Colors.white.withValues(alpha: 0.4),
     );
   }
 
@@ -1152,7 +1160,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             width: 80,
             height: 80,
             decoration: BoxDecoration(
-              color: Colors.orange.shade50,
+              color: Colors.orange.shade50.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Icon(
@@ -1177,7 +1185,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.grey.shade200,
+                  backgroundColor: Colors.white.withValues(alpha: 0.4),
                   foregroundColor: Colors.grey.shade700,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -1200,7 +1208,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             margin: const EdgeInsets.all(16),
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.blue.shade50,
+              color: Colors.blue.shade50.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.blue.shade100),
             ),
@@ -1233,7 +1241,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
+                  color: Colors.white.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
@@ -1289,7 +1297,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       children: [
         Container(
           padding: const EdgeInsets.all(12),
-          color: Colors.grey.shade100,
+          color: Colors.transparent,
           child: Row(
             children: [
               Icon(Icons.edit_note, color: Colors.grey.shade700, size: 20),
@@ -1326,7 +1334,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               return Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
+                  color: Colors.white.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
@@ -1364,39 +1372,13 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                         ),
                       ),
                     ),
-                    PopupMenuButton<String>(
+                    BlurredPopupMenuButton<String>(
                       icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-                      onOpened: () {
-                        HapticFeedback.selectionClick();
-                      },
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      color: Colors.white,
-                      elevation: 8,
-                      onSelected: (value) => _handleCourseAction(value, course, index),
-                      itemBuilder: (context) => [
-                        const PopupMenuItem(
-                          value: 'edit',
-                          child: Row(
-                            children: [
-                              Icon(Icons.edit_outlined, color: Color(0xFF4A90E2), size: 18),
-                              SizedBox(width: 8),
-                              Text('编辑'),
-                            ],
-                          ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                              SizedBox(width: 8),
-                              Text('删除', style: TextStyle(color: Colors.red)),
-                            ],
-                          ),
-                        ),
+                      items: const [
+                        BlurredPopupMenuItem(value: 'edit', icon: Icons.edit_outlined, label: '编辑', iconColor: Color(0xFF4A90E2)),
+                        BlurredPopupMenuItem(value: 'delete', icon: Icons.delete_outline, label: '删除', iconColor: Colors.red, textColor: Colors.red),
                       ],
+                      onSelected: (value) => _handleCourseAction(value, course, index),
                     ),
                   ],
                 ),
@@ -1425,7 +1407,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: Colors.transparent,
             borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
           ),
           child: Row(
@@ -1436,7 +1418,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                   decoration: InputDecoration(
                     hintText: '问我任何关于课程表的问题...',
                     filled: true,
-                    fillColor: Colors.white,
+                    fillColor: Colors.white.withValues(alpha: 0.4),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
                       borderSide: BorderSide(color: Colors.grey.shade300),
@@ -1484,7 +1466,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         decoration: BoxDecoration(
           color: message.isUser
               ? const Color(0xFF9C27B0)
-              : Colors.grey.shade100,
+              : Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(16),
         ),
         child: message.isUser
@@ -1506,10 +1488,10 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                         p: const TextStyle(fontSize: 14),
                         code: TextStyle(
                           fontSize: 12,
-                          backgroundColor: Colors.grey.shade200,
+                          backgroundColor: Colors.white.withValues(alpha: 0.4),
                         ),
                         codeblockDecoration: BoxDecoration(
-                          color: Colors.grey.shade100,
+                          color: Colors.white.withValues(alpha: 0.4),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
@@ -1530,7 +1512,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: Colors.white.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.grey.shade200),
       ),
@@ -1582,7 +1564,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                     p: const TextStyle(fontSize: 12, height: 1.5),
                     code: TextStyle(
                       fontSize: 11,
-                      backgroundColor: Colors.grey.shade200,
+                      backgroundColor: Colors.white.withValues(alpha: 0.4),
                     ),
                   ),
                   extensionSet: md.ExtensionSet.gitHubWeb,
@@ -1790,84 +1772,63 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
           Row(
             children: [
               Expanded(
-                child: DropdownButtonFormField<int>(
-                  value: _selectedDay,
-                  decoration: InputDecoration(
-                    labelText: '星期',
-                    filled: true,
-                    fillColor: Colors.grey.shade50,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF9C27B0), width: 2),
-                    ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
                   ),
-                  items: List.generate(7, (i) => DropdownMenuItem(
-                    value: i,
-                    child: Text('周${_weekDayNames[i]}'),
-                  )),
-                  onChanged: (v) => setState(() => _selectedDay = v!),
+                  child: BlurredDropdown<int>(
+                    value: _selectedDay,
+                    isExpanded: true,
+                    items: List.generate(7, (i) => DropdownMenuItem(
+                      value: i,
+                      child: Text('周${_weekDayNames[i]}'),
+                    )),
+                    onChanged: (v) => setState(() => _selectedDay = v!),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: DropdownButtonFormField<int>(
-                  value: _selectedPeriod,
-                  decoration: InputDecoration(
-                    labelText: '节次',
-                    filled: true,
-                    fillColor: Colors.grey.shade50,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF9C27B0), width: 2),
-                    ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
                   ),
-                  items: List.generate(12, (i) => DropdownMenuItem(
-                    value: i + 1,
-                    child: Text('第${i + 1}节'),
-                  )),
-                  onChanged: (v) => setState(() => _selectedPeriod = v!),
+                  child: BlurredDropdown<int>(
+                    value: _selectedPeriod,
+                    isExpanded: true,
+                    items: List.generate(12, (i) => DropdownMenuItem(
+                      value: i + 1,
+                      child: Text('第${i + 1}节'),
+                    )),
+                    onChanged: (v) => setState(() => _selectedPeriod = v!),
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          DropdownButtonFormField<int>(
-            value: _selectedDuration,
-            decoration: InputDecoration(
-              labelText: '持续节数',
-              filled: true,
-              fillColor: Colors.grey.shade50,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey.shade300),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFF9C27B0), width: 2),
-              ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade300),
             ),
-            items: [1, 2, 3, 4].map((d) => DropdownMenuItem(
-              value: d,
-              child: Text('$d 节'),
-            )).toList(),
-            onChanged: (v) => setState(() => _selectedDuration = v!),
+            child: BlurredDropdown<int>(
+              value: _selectedDuration,
+              isExpanded: true,
+              items: [1, 2, 3, 4].map((d) => DropdownMenuItem(
+                value: d,
+                child: Text('$d 节'),
+              )).toList(),
+              onChanged: (v) => setState(() => _selectedDuration = v!),
+            ),
           ),
           const SizedBox(height: 12),
           GridView.builder(

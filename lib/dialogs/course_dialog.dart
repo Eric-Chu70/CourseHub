@@ -6,6 +6,7 @@ import 'package:hive/hive.dart';
 import '../models/course.dart';
 import '../utils/course_color_palette.dart';
 import '../utils/storage.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
 
 enum CourseEditFocusSection {
@@ -111,8 +112,9 @@ class _CourseDialogState extends State<CourseDialog> {
     _nameController = TextEditingController(text: widget.course?.name ?? '');
     _teacherController = TextEditingController(text: widget.course?.teacher ?? '');
     _locationController = TextEditingController(text: widget.course?.location ?? '');
+    final dailyPeriods = StorageService.getDailyPeriods();
     _selectedDay = (widget.course?.day ?? widget.selectedDay).clamp(0, 6);
-    _selectedStartTime = (widget.course?.time ?? widget.selectedPeriod ?? 0).clamp(0, 11);
+    _selectedStartTime = (widget.course?.time ?? widget.selectedPeriod ?? 0).clamp(0, dailyPeriods - 1);
     _selectedDuration = (widget.course?.duration ?? 2).clamp(1, 4);
     _selectedColor = widget.course != null
         ? _parseColor(widget.course!.color)
@@ -250,9 +252,7 @@ class _CourseDialogState extends State<CourseDialog> {
           maxHeight: dialogMaxHeight,
           maxWidth: isSmallScreen ? 340 : 380,
         ),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+        child: GlassDialogShell(
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.2),
@@ -260,8 +260,7 @@ class _CourseDialogState extends State<CourseDialog> {
               offset: const Offset(0, 10),
             ),
           ],
-        ),
-        child: Column(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildHeader(isSmallScreen),
@@ -362,24 +361,27 @@ class _CourseDialogState extends State<CourseDialog> {
               ),
             ],
           ),
+          ),
         ),
       );
   }
 
   Widget _buildHeader(bool isSmallScreen) {
-    return Container(
-      padding: EdgeInsets.all(isSmallScreen ? 12 : 20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [_selectedColor, _selectedColor.withValues(alpha: 0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    return Opacity(
+      opacity: 0.82,
+      child: Container(
+        padding: EdgeInsets.all(isSmallScreen ? 12 : 20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_selectedColor, _selectedColor.withValues(alpha: 0.8)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
         ),
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
-      ),
       child: Row(
         children: [
           Container(
@@ -419,6 +421,7 @@ class _CourseDialogState extends State<CourseDialog> {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -454,7 +457,7 @@ class _CourseDialogState extends State<CourseDialog> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isHighlighted ? _selectedColor.withValues(alpha: 0.7) : Colors.transparent,
-          width: isHighlighted ? 1.6 : 1,
+          width: 1,
         ),
       ),
       child: child,
@@ -512,7 +515,7 @@ class _CourseDialogState extends State<CourseDialog> {
         labelText: label,
         prefixIcon: Icon(icon, size: isSmallScreen ? 16 : 20, color: Colors.grey.shade500),
         filled: true,
-        fillColor: Colors.grey.shade50,
+        fillColor: Colors.white.withValues(alpha: 0.4),
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -545,7 +548,7 @@ class _CourseDialogState extends State<CourseDialog> {
     return Container(
       padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade200),
       ),
@@ -568,33 +571,29 @@ class _CourseDialogState extends State<CourseDialog> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: Colors.white.withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: Colors.grey.shade300),
                       ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<int>(
-                          value: _selectedDay,
-                          isExpanded: true,
-                          icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
-                          dropdownColor: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          items: List.generate(7, (i) => DropdownMenuItem(
-                            value: i,
-                            child: Text(
-                              '周${_weekDayNames[i]}',
-                              style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
-                            ),
-                          )),
-                          onChanged: (v) {
-                            if (v != null) {
-                              setState(() {
-                                _selectedDay = v;
-                                _removeConflictingWeeksFromSelection();
-                              });
-                            }
-                          },
-                        ),
+                      child: BlurredDropdown<int>(
+                        value: _selectedDay,
+                        isExpanded: true,
+                        icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
+                        items: List.generate(7, (i) => DropdownMenuItem(
+                          value: i,
+                          child: Text(
+                            '周${_weekDayNames[i]}',
+                            style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
+                          ),
+                        )),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() {
+                              _selectedDay = v;
+                              _removeConflictingWeeksFromSelection();
+                            });
+                          }
+                        },
                       ),
                     ),
                   ],
@@ -620,37 +619,33 @@ class _CourseDialogState extends State<CourseDialog> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: Colors.white.withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: Colors.grey.shade300),
                       ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<int>(
-                          value: _selectedStartTime,
-                          isExpanded: true,
-                          icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
-                          dropdownColor: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          items: List.generate(
-                            dailyPeriods,
-                            (i) => DropdownMenuItem(
-                              value: i,
-                              child: Text(
-                                isSmallScreen ? '第${i + 1}节' : _getTimeSlotLabel(i),
-                                style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                      child: BlurredDropdown<int>(
+                        value: _selectedStartTime,
+                        isExpanded: true,
+                        icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
+                        items: List.generate(
+                          dailyPeriods,
+                          (i) => DropdownMenuItem(
+                            value: i,
+                            child: Text(
+                              '第${i + 1}节',
+                              style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          onChanged: (v) {
-                            if (v != null) {
-                              setState(() {
-                                _selectedStartTime = v;
-                                _removeConflictingWeeksFromSelection();
-                              });
-                            }
-                          },
                         ),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() {
+                              _selectedStartTime = v;
+                              _removeConflictingWeeksFromSelection();
+                            });
+                          }
+                        },
                       ),
                     ),
                   ],
@@ -672,32 +667,28 @@ class _CourseDialogState extends State<CourseDialog> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: Colors.white.withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: Colors.grey.shade300),
                       ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<int>(
-                          value: _selectedDuration,
-                          isExpanded: true,
-                          icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
-                          dropdownColor: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          items: [1, 2, 3, 4].map((d) {
-                            return DropdownMenuItem(
-                              value: d,
-                              child: Text('$d 节', style: TextStyle(fontSize: isSmallScreen ? 12 : 13)),
-                            );
-                          }).toList(),
-                          onChanged: (v) {
-                            if (v != null) {
-                              setState(() {
-                                _selectedDuration = v;
-                                _removeConflictingWeeksFromSelection();
-                              });
-                            }
-                          },
-                        ),
+                      child: BlurredDropdown<int>(
+                        value: _selectedDuration,
+                        isExpanded: true,
+                        icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
+                        items: [1, 2, 3, 4].map((d) {
+                          return DropdownMenuItem(
+                            value: d,
+                            child: Text('$d 节', style: TextStyle(fontSize: isSmallScreen ? 12 : 13)),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() {
+                              _selectedDuration = v;
+                              _removeConflictingWeeksFromSelection();
+                            });
+                          }
+                        },
                       ),
                     ),
                   ],
@@ -745,7 +736,7 @@ class _CourseDialogState extends State<CourseDialog> {
     return Container(
       padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade200),
       ),
@@ -797,14 +788,13 @@ class _CourseDialogState extends State<CourseDialog> {
                     }
                   });
                 },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
+                child: Container(
                   width: isSmallScreen ? 32 : 36,
                   height: isSmallScreen ? 32 : 36,
                   decoration: BoxDecoration(
                     color: isDisabled
-                        ? Colors.grey.shade200
-                        : (isSelected ? _selectedColor : Colors.white),
+                        ? Colors.white.withValues(alpha: 0.4)
+                        : (isSelected ? _selectedColor : Colors.white.withValues(alpha: 0.4)),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
                       color: isDisabled
@@ -846,7 +836,7 @@ class _CourseDialogState extends State<CourseDialog> {
               margin: EdgeInsets.only(bottom: isSmallScreen ? 8 : 10),
               padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
               decoration: BoxDecoration(
-                color: Colors.grey.shade100,
+                color: Colors.white.withValues(alpha: 0.4),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey.shade300),
               ),
@@ -869,7 +859,7 @@ class _CourseDialogState extends State<CourseDialog> {
           Container(
             padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.white.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
             ),
@@ -924,7 +914,7 @@ class _CourseDialogState extends State<CourseDialog> {
         isSmallScreen ? 10 : 12,
       ),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade200),
       ),

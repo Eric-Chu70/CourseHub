@@ -9,6 +9,7 @@ import 'dart:io';
 import '../utils/storage.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/ai_processing_dialog.dart';
+import '../widgets/glass_dialog.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/ocr_service.dart';
@@ -30,13 +31,14 @@ class _ImportScreenState extends State<ImportScreen> {
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
-    
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FC),
       body: Stack(
         children: [
           CustomScrollView(
-            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+            physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics()),
             slivers: [
               SliverPadding(
                 padding: EdgeInsets.only(top: topPadding + 56),
@@ -53,7 +55,9 @@ class _ImportScreenState extends State<ImportScreen> {
                           color: Colors.blue,
                           title: '图片识别',
                           subtitle: '上传课程表图片，自动识别',
-                          onTap: _isImporting ? null : () => _showImageSourceDialog(context),
+                          onTap: _isImporting
+                              ? null
+                              : () => _showImageSourceDialog(context),
                         ),
                         const SizedBox(height: 12),
                         _buildImportCard(
@@ -62,7 +66,9 @@ class _ImportScreenState extends State<ImportScreen> {
                           color: Colors.green,
                           title: 'JSON 导入',
                           subtitle: '从 JSON 文件导入课程表数据',
-                          onTap: _isImporting ? null : () => _showImportOptions(context),
+                          onTap: _isImporting
+                              ? null
+                              : () => _showImportOptions(context),
                         ),
                         const SizedBox(height: 12),
                         _buildImportCard(
@@ -187,7 +193,8 @@ class _ImportScreenState extends State<ImportScreen> {
               ),
               Icon(
                 Icons.chevron_right,
-                color: onTap == null ? Colors.grey.shade300 : Colors.grey.shade400,
+                color:
+                    onTap == null ? Colors.grey.shade300 : Colors.grey.shade400,
               ),
             ],
           ),
@@ -318,7 +325,8 @@ class _ImportScreenState extends State<ImportScreen> {
                                 color: Colors.grey.shade100,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                              child: Icon(Icons.close,
+                                  size: 18, color: Colors.grey.shade600),
                             ),
                           ),
                         ],
@@ -428,11 +436,12 @@ class _ImportScreenState extends State<ImportScreen> {
 
   void _showPasteJsonDialog(BuildContext context) {
     final controller = TextEditingController();
-    
+
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
       barrierLabel: '粘贴JSON',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
       transitionDuration: const Duration(milliseconds: 300),
       pageBuilder: (context, animation, secondaryAnimation) {
         final mediaQuery = MediaQuery.of(context);
@@ -445,7 +454,8 @@ class _ImportScreenState extends State<ImportScreen> {
         if (availableHeight < dialogMaxHeight) {
           dialogMaxHeight = availableHeight;
         }
-        dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
+        dialogMaxHeight =
+            dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
 
         return BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
@@ -458,119 +468,136 @@ class _ImportScreenState extends State<ImportScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    margin: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: keyboardHeight > 0 ? topInset + 8 : 0,
-                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                    ),
-                    padding: const EdgeInsets.all(24),
-                    constraints: BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOut,
+                        margin: EdgeInsets.only(
+                          left: 24,
+                          right: 24,
+                          top: keyboardHeight > 0 ? topInset + 8 : 0,
+                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                         ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4CAF50), Color(0xFF81C784)],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Icon(
-                            Icons.paste,
-                            size: 32,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '粘贴 JSON 数据',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '粘贴课程表 JSON 数据进行导入',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            maxLines: null,
-                            expands: true,
-                            decoration: InputDecoration(
-                              hintText: '在此粘贴 JSON 数据...',
-                              hintStyle: TextStyle(color: Colors.grey.shade400),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
-                                  ),
-                                ),
-                                child: const Text('取消'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () async {
-                                  Navigator.pop(context);
-                                  await _processJsonData(context, controller.text);
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text('导入'),
-                              ),
+                        padding: const EdgeInsets.all(24),
+                        constraints: BoxConstraints(
+                            maxWidth: 400, maxHeight: dialogMaxHeight),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.2),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
                             ),
                           ],
                         ),
-                      ],
-                    ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF4CAF50),
+                                      Color(0xFF81C784)
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(
+                                  Icons.paste,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '粘贴 JSON 数据',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '粘贴课程表 JSON 数据进行导入',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            Expanded(
+                              child: TextField(
+                                controller: controller,
+                                maxLines: null,
+                                expands: true,
+                                decoration: InputDecoration(
+                                  hintText: '在此粘贴 JSON 数据...',
+                                  hintStyle:
+                                      TextStyle(color: Colors.grey.shade400),
+                                  filled: true,
+                                  fillColor:
+                                      Colors.white.withValues(alpha: 0.4),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                style: const TextStyle(
+                                    fontFamily: 'monospace', fontSize: 12),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        side: BorderSide(
+                                            color: Colors.grey.shade300),
+                                      ),
+                                    ),
+                                    child: const Text('取消'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () async {
+                                      Navigator.pop(context);
+                                      await _processJsonData(
+                                          context, controller.text);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: const Text('导入'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                   ),
                 ),
               ),
@@ -602,7 +629,7 @@ class _ImportScreenState extends State<ImportScreen> {
 
   void _showImportModeDialog(BuildContext context, Map<String, dynamic> data) {
     ImportMode selectedMode = ImportMode.merge;
-    
+
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -620,104 +647,121 @@ class _ImportScreenState extends State<ImportScreen> {
                     opacity: animation,
                     child: ScaleTransition(
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                        CurvedAnimation(
+                            parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                ),
-                                borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 400),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
                               ),
-                              child: const Icon(
-                                Icons.settings_suggest,
-                                size: 32,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              '选择导入模式',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            _buildModeOption(
-                              title: '合并导入',
-                              subtitle: '保留现有数据，添加新数据',
-                              icon: Icons.merge_type,
-                              color: Colors.green,
-                              isSelected: selectedMode == ImportMode.merge,
-                              onTap: () => setDialogState(() => selectedMode = ImportMode.merge),
-                            ),
-                            const SizedBox(height: 12),
-                            _buildModeOption(
-                              title: '替换导入',
-                              subtitle: '清空现有数据后导入',
-                              icon: Icons.refresh,
-                              color: Colors.orange,
-                              isSelected: selectedMode == ImportMode.replace,
-                              onTap: () => setDialogState(() => selectedMode = ImportMode.replace),
-                            ),
-                            const SizedBox(height: 20),
-                            Row(
+                            ],
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFF4A90E2),
+                                          Color(0xFF5BA0F2)
+                                        ],
                                       ),
+                                      borderRadius: BorderRadius.circular(16),
                                     ),
-                                    child: const Text('取消'),
+                                    child: const Icon(
+                                      Icons.settings_suggest,
+                                      size: 32,
+                                      color: Colors.white,
+                                    ),
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      Navigator.pop(context);
-                                      await _performImport(context, data, selectedMode);
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  '选择导入模式',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                _buildModeOption(
+                                  title: '合并导入',
+                                  subtitle: '保留现有数据，添加新数据',
+                                  icon: Icons.merge_type,
+                                  color: Colors.green,
+                                  isSelected: selectedMode == ImportMode.merge,
+                                  onTap: () => setDialogState(
+                                      () => selectedMode = ImportMode.merge),
+                                ),
+                                const SizedBox(height: 12),
+                                _buildModeOption(
+                                  title: '替换导入',
+                                  subtitle: '清空现有数据后导入',
+                                  icon: Icons.refresh,
+                                  color: Colors.orange,
+                                  isSelected:
+                                      selectedMode == ImportMode.replace,
+                                  onTap: () => setDialogState(
+                                      () => selectedMode = ImportMode.replace),
+                                ),
+                                const SizedBox(height: 20),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextButton(
+                                        onPressed: () => Navigator.pop(context),
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            side: BorderSide(
+                                                color: Colors.grey.shade300),
+                                          ),
+                                        ),
+                                        child: const Text('取消'),
                                       ),
                                     ),
-                                    child: const Text('开始导入'),
-                                  ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: () async {
+                                          Navigator.pop(context);
+                                          await _performImport(
+                                              context, data, selectedMode);
+                                        },
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              const Color(0xFF4A90E2),
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                        ),
+                                        child: const Text('开始导入'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -745,7 +789,9 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.1) : Colors.grey.shade50,
+          color: isSelected
+              ? color.withValues(alpha: 0.1)
+              : Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? color : Colors.grey.shade200,
@@ -787,20 +833,20 @@ class _ImportScreenState extends State<ImportScreen> {
                 ],
               ),
             ),
-            if (isSelected)
-              Icon(Icons.check_circle, color: color, size: 22),
+            if (isSelected) Icon(Icons.check_circle, color: color, size: 22),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _performImport(BuildContext context, Map<String, dynamic> data, ImportMode mode) async {
+  Future<void> _performImport(
+      BuildContext context, Map<String, dynamic> data, ImportMode mode) async {
     setState(() => _isImporting = true);
-    
+
     try {
       final result = await StorageService.importData(data, mode: mode);
-      
+
       if (mounted) {
         if (result.success) {
           toastNotification.show(
@@ -831,12 +877,12 @@ class _ImportScreenState extends State<ImportScreen> {
     try {
       final data = StorageService.exportData();
       final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
-      
+
       await Share.share(
         jsonStr,
         subject: 'CourseHub 数据备份 ${DateTime.now().toString().split(' ').first}',
       );
-      
+
       if (mounted) {
         toastNotification.show(context, '导出成功', type: ToastType.success);
       }
@@ -865,107 +911,115 @@ class _ImportScreenState extends State<ImportScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                          child: const Icon(
-                            Icons.cloud_sync_rounded,
-                            size: 32,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '云端数据管理',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '请选择你要执行的云端操作',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 20),
-                        _buildCloudActionTile(
-                          icon: Icons.cloud_upload_rounded,
-                          color: Colors.green,
-                          title: '备份数据到云端',
-                          subtitle: '可多选课表备份（含任务和设置）',
-                          onTap: () async {
-                            Navigator.pop(dialogContext);
-                            await _backupToCloud();
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        _buildCloudActionTile(
-                          icon: Icons.cloud_download_rounded,
-                          color: const Color(0xFF4A90E2),
-                          title: '从云端同步数据',
-                          subtitle: '支持合并到本地或云端覆盖本地',
-                          onTap: () async {
-                            Navigator.pop(dialogContext);
-                            await _syncFromCloud();
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        _buildCloudActionTile(
-                          icon: Icons.folder_open_rounded,
-                          color: Colors.orange,
-                          title: '管理云端数据',
-                          subtitle: '查看云端课表列表并删除',
-                          onTap: () async {
-                            Navigator.pop(dialogContext);
-                            await _manageCloudData();
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                        ],
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF4A90E2),
+                                      Color(0xFF5BA0F2)
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(
+                                  Icons.cloud_sync_rounded,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
-                            child: const Text('关闭'),
-                          ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '云端数据管理',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '请选择你要执行的云端操作',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 20),
+                            _buildCloudActionTile(
+                              icon: Icons.cloud_upload_rounded,
+                              color: Colors.green,
+                              title: '备份数据到云端',
+                              subtitle: '可多选课表备份（含任务和设置）',
+                              onTap: () async {
+                                Navigator.pop(dialogContext);
+                                await _backupToCloud();
+                              },
+                            ),
+                            const SizedBox(height: 10),
+                            _buildCloudActionTile(
+                              icon: Icons.cloud_download_rounded,
+                              color: const Color(0xFF4A90E2),
+                              title: '从云端同步数据',
+                              subtitle: '支持合并到本地或云端覆盖本地',
+                              onTap: () async {
+                                Navigator.pop(dialogContext);
+                                await _syncFromCloud();
+                              },
+                            ),
+                            const SizedBox(height: 10),
+                            _buildCloudActionTile(
+                              icon: Icons.folder_open_rounded,
+                              color: Colors.orange,
+                              title: '管理云端数据',
+                              subtitle: '查看云端课表列表并删除',
+                              onTap: () async {
+                                Navigator.pop(dialogContext);
+                                await _manageCloudData();
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(dialogContext),
+                                style: TextButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side:
+                                        BorderSide(color: Colors.grey.shade300),
+                                  ),
+                                ),
+                                child: const Text('关闭'),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -1057,14 +1111,17 @@ class _ImportScreenState extends State<ImportScreen> {
       return;
     }
 
-    final selectedIds = await _showCloudBackupTimetableMultiSelectDialog(timetables);
+    final selectedIds =
+        await _showCloudBackupTimetableMultiSelectDialog(timetables);
     if (selectedIds == null || selectedIds.isEmpty) {
       return;
     }
 
     final cloudSync = CloudSyncService.instance;
-    final selectedPayload = StorageService.exportSelectedDataByTimetableIds(selectedIds);
-    final selectedNames = StorageService.getCloudBackupTimetableNames(selectedPayload);
+    final selectedPayload =
+        StorageService.exportSelectedDataByTimetableIds(selectedIds);
+    final selectedNames =
+        StorageService.getCloudBackupTimetableNames(selectedPayload);
     if (selectedNames.isEmpty) {
       toastNotification.show(context, '所选课表没有可备份的数据', type: ToastType.info);
       return;
@@ -1074,7 +1131,8 @@ class _ImportScreenState extends State<ImportScreen> {
     if (!mounted) return;
 
     if (cloudBackup == null && cloudSync.lastError != null) {
-      toastNotification.show(context, cloudSync.lastError!, type: ToastType.error);
+      toastNotification.show(context, cloudSync.lastError!,
+          type: ToastType.error);
       return;
     }
 
@@ -1085,7 +1143,8 @@ class _ImportScreenState extends State<ImportScreen> {
             selectedPayload: selectedPayload,
           );
 
-    final cloudCount = StorageService.getCloudBackupTimetableNames(payload).length;
+    final cloudCount =
+        StorageService.getCloudBackupTimetableNames(payload).length;
     if (cloudCount > _maxCloudTimetableCount) {
       toastNotification.show(
         context,
@@ -1123,9 +1182,10 @@ class _ImportScreenState extends State<ImportScreen> {
     return {
       'version': '2.0',
       'backupType': 'full_named_timetables',
-      'currentTimetableId': (selectedCurrentId != null && selectedCurrentId.isNotEmpty)
-          ? selectedCurrentId
-          : cloudCurrentId,
+      'currentTimetableId':
+          (selectedCurrentId != null && selectedCurrentId.isNotEmpty)
+              ? selectedCurrentId
+              : cloudCurrentId,
       'namedTimetables': mergedNamed,
     };
   }
@@ -1137,17 +1197,23 @@ class _ImportScreenState extends State<ImportScreen> {
     if (namedTimetables is Map) {
       for (final entry in namedTimetables.entries) {
         if (entry.key is String && entry.value is Map) {
-          named[entry.key as String] = Map<String, dynamic>.from(entry.value as Map);
+          named[entry.key as String] =
+              Map<String, dynamic>.from(entry.value as Map);
         }
       }
     }
 
-    final hasLegacyData =
-        (payload['courses'] is List) || (payload['tasks'] is List) || (payload['settings'] is Map);
+    final hasLegacyData = (payload['courses'] is List) ||
+        (payload['tasks'] is List) ||
+        (payload['settings'] is Map);
     if (hasLegacyData && !named.containsKey('当前课表')) {
       named['当前课表'] = {
-        'courses': payload['courses'] is List ? List<dynamic>.from(payload['courses'] as List) : <dynamic>[],
-        'tasks': payload['tasks'] is List ? List<dynamic>.from(payload['tasks'] as List) : <dynamic>[],
+        'courses': payload['courses'] is List
+            ? List<dynamic>.from(payload['courses'] as List)
+            : <dynamic>[],
+        'tasks': payload['tasks'] is List
+            ? List<dynamic>.from(payload['tasks'] as List)
+            : <dynamic>[],
         'settings': payload['settings'] is Map
             ? Map<String, dynamic>.from(payload['settings'] as Map)
             : <String, dynamic>{},
@@ -1157,7 +1223,8 @@ class _ImportScreenState extends State<ImportScreen> {
     return named;
   }
 
-  Future<List<String>?> _showCloudBackupTimetableMultiSelectDialog(List<TimetableInfo> timetables) {
+  Future<List<String>?> _showCloudBackupTimetableMultiSelectDialog(
+      List<TimetableInfo> timetables) {
     return showGeneralDialog<List<String>>(
       context: context,
       barrierDismissible: true,
@@ -1177,147 +1244,172 @@ class _ImportScreenState extends State<ImportScreen> {
                     opacity: animation,
                     child: ScaleTransition(
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                        CurvedAnimation(
+                            parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
-                        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                ),
-                                borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                              maxWidth: 420, maxHeight: 560),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
                               ),
-                              child: const Icon(
-                                Icons.library_add_check_rounded,
-                                size: 32,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              '选择要备份的课表',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '可多选，未选中的课表不会上传',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
+                            ],
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedIds
-                                        ..clear()
-                                        ..addAll(timetables.map((t) => t.id));
-                                    });
-                                  },
-                                  child: const Text('全选'),
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFF4A90E2),
+                                          Color(0xFF5BA0F2)
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Icon(
+                                      Icons.library_add_check_rounded,
+                                      size: 32,
+                                      color: Colors.white,
+                                    ),
+                                  ),
                                 ),
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedIds.clear();
-                                    });
-                                  },
-                                  child: const Text('清空'),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  '选择要备份的课表',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '可多选，未选中的课表不会上传',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    TextButton(
+                                      onPressed: () {
+                                        setDialogState(() {
+                                          selectedIds
+                                            ..clear()
+                                            ..addAll(
+                                                timetables.map((t) => t.id));
+                                        });
+                                      },
+                                      child: const Text('全选'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () {
+                                        setDialogState(() {
+                                          selectedIds.clear();
+                                        });
+                                      },
+                                      child: const Text('清空'),
+                                    ),
+                                  ],
+                                ),
+                                Flexible(
+                                  child: ScrollConfiguration(
+                                    behavior:
+                                        ScrollConfiguration.of(dialogContext)
+                                            .copyWith(
+                                      physics: const BouncingScrollPhysics(
+                                          parent:
+                                              AlwaysScrollableScrollPhysics()),
+                                    ),
+                                    child: ListView.builder(
+                                      itemCount: timetables.length,
+                                      itemBuilder: (context, index) {
+                                        final timetable = timetables[index];
+                                        final selected =
+                                            selectedIds.contains(timetable.id);
+                                        return Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 10),
+                                          child: _buildSelectableTimetableTile(
+                                            title: timetable.name,
+                                            subtitle:
+                                                '创建于 ${_formatDateTime(timetable.createdAt)}',
+                                            selected: selected,
+                                            onTap: () {
+                                              setDialogState(() {
+                                                if (selected) {
+                                                  selectedIds
+                                                      .remove(timetable.id);
+                                                } else {
+                                                  selectedIds.add(timetable.id);
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext),
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            side: BorderSide(
+                                                color: Colors.grey.shade300),
+                                          ),
+                                        ),
+                                        child: const Text('取消'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: selectedIds.isEmpty
+                                            ? null
+                                            : () => Navigator.pop(dialogContext,
+                                                selectedIds.toList()),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              const Color(0xFF4A90E2),
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                        ),
+                                        child: const Text('开始备份'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                            Flexible(
-                              child: ScrollConfiguration(
-                                behavior: ScrollConfiguration.of(dialogContext).copyWith(
-                                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                ),
-                                child: ListView.builder(
-                                  itemCount: timetables.length,
-                                  itemBuilder: (context, index) {
-                                    final timetable = timetables[index];
-                                    final selected = selectedIds.contains(timetable.id);
-                                    return Padding(
-                                      padding: const EdgeInsets.only(bottom: 10),
-                                      child: _buildSelectableTimetableTile(
-                                        title: timetable.name,
-                                        subtitle: '创建于 ${_formatDateTime(timetable.createdAt)}',
-                                        selected: selected,
-                                        onTap: () {
-                                          setDialogState(() {
-                                            if (selected) {
-                                              selectedIds.remove(timetable.id);
-                                            } else {
-                                              selectedIds.add(timetable.id);
-                                            }
-                                          });
-                                        },
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () => Navigator.pop(dialogContext),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
-                                      ),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: selectedIds.isEmpty
-                                        ? null
-                                        : () => Navigator.pop(dialogContext, selectedIds.toList()),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    child: const Text('开始备份'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -1342,7 +1434,8 @@ class _ImportScreenState extends State<ImportScreen> {
     if (!mounted) return;
 
     if (backup == null && cloudSync.lastError != null) {
-      toastNotification.show(context, cloudSync.lastError!, type: ToastType.error);
+      toastNotification.show(context, cloudSync.lastError!,
+          type: ToastType.error);
       return;
     }
 
@@ -1351,7 +1444,8 @@ class _ImportScreenState extends State<ImportScreen> {
       return;
     }
 
-    final timetableNames = StorageService.getCloudBackupTimetableNames(backup.payload);
+    final timetableNames =
+        StorageService.getCloudBackupTimetableNames(backup.payload);
     if (timetableNames.isEmpty) {
       toastNotification.show(context, '云端备份中未找到可同步课表', type: ToastType.error);
       return;
@@ -1363,10 +1457,12 @@ class _ImportScreenState extends State<ImportScreen> {
     );
     if (selectedTimetable == null) return;
 
-    final mode = await _showCloudSyncModeDialog(backup.updatedAt, selectedTimetable);
+    final mode =
+        await _showCloudSyncModeDialog(backup.updatedAt, selectedTimetable);
     if (mode == null) return;
 
-    final selectedPayload = StorageService.getCloudBackupTimetableData(backup.payload, selectedTimetable);
+    final selectedPayload = StorageService.getCloudBackupTimetableData(
+        backup.payload, selectedTimetable);
     if (selectedPayload == null) {
       toastNotification.show(context, '选中的课表数据不存在或已损坏', type: ToastType.error);
       return;
@@ -1404,7 +1500,8 @@ class _ImportScreenState extends State<ImportScreen> {
     if (!mounted) return;
 
     if (backup == null && cloudSync.lastError != null) {
-      toastNotification.show(context, cloudSync.lastError!, type: ToastType.error);
+      toastNotification.show(context, cloudSync.lastError!,
+          type: ToastType.error);
       return;
     }
 
@@ -1427,7 +1524,8 @@ class _ImportScreenState extends State<ImportScreen> {
       selectedForDelete.toSet(),
     );
 
-    final remainingNames = StorageService.getCloudBackupTimetableNames(nextPayload);
+    final remainingNames =
+        StorageService.getCloudBackupTimetableNames(nextPayload);
     final success = remainingNames.isEmpty
         ? await cloudSync.deleteBackup()
         : await cloudSync.uploadBackup(nextPayload);
@@ -1471,148 +1569,169 @@ class _ImportScreenState extends State<ImportScreen> {
                     opacity: animation,
                     child: ScaleTransition(
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                        CurvedAnimation(
+                            parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
-                        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFFFF9800), Color(0xFFFFB74D)],
-                                ),
-                                borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                              maxWidth: 420, maxHeight: 560),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
                               ),
-                              child: const Icon(
-                                Icons.folder_open_rounded,
-                                size: 32,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              '管理云端课表',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '云端更新时间：${_formatDateTime(updatedAt)}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
+                            ],
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedNames
-                                        ..clear()
-                                        ..addAll(timetableNames);
-                                    });
-                                  },
-                                  child: const Text('全选'),
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFFFF9800),
+                                          Color(0xFFFFB74D)
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Icon(
+                                      Icons.folder_open_rounded,
+                                      size: 32,
+                                      color: Colors.white,
+                                    ),
+                                  ),
                                 ),
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedNames.clear();
-                                    });
-                                  },
-                                  child: const Text('清空'),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  '管理云端课表',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '云端更新时间：${_formatDateTime(updatedAt)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    TextButton(
+                                      onPressed: () {
+                                        setDialogState(() {
+                                          selectedNames
+                                            ..clear()
+                                            ..addAll(timetableNames);
+                                        });
+                                      },
+                                      child: const Text('全选'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () {
+                                        setDialogState(() {
+                                          selectedNames.clear();
+                                        });
+                                      },
+                                      child: const Text('清空'),
+                                    ),
+                                  ],
+                                ),
+                                Flexible(
+                                  child: ScrollConfiguration(
+                                    behavior:
+                                        ScrollConfiguration.of(dialogContext)
+                                            .copyWith(
+                                      physics: const BouncingScrollPhysics(
+                                          parent:
+                                              AlwaysScrollableScrollPhysics()),
+                                    ),
+                                    child: ListView.builder(
+                                      itemCount: timetableNames.length,
+                                      itemBuilder: (context, index) {
+                                        final name = timetableNames[index];
+                                        final selected =
+                                            selectedNames.contains(name);
+                                        return Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 10),
+                                          child: _buildSelectableTimetableTile(
+                                            title: name,
+                                            subtitle: '从云端备份中删除此课表',
+                                            selected: selected,
+                                            onTap: () {
+                                              setDialogState(() {
+                                                if (selected) {
+                                                  selectedNames.remove(name);
+                                                } else {
+                                                  selectedNames.add(name);
+                                                }
+                                              });
+                                            },
+                                            selectedColor: Colors.red,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext),
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            side: BorderSide(
+                                                color: Colors.grey.shade300),
+                                          ),
+                                        ),
+                                        child: const Text('取消'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: selectedNames.isEmpty
+                                            ? null
+                                            : () => Navigator.pop(dialogContext,
+                                                selectedNames.toList()),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.red,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 14),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                        ),
+                                        child: const Text('删除选中'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                            Flexible(
-                              child: ScrollConfiguration(
-                                behavior: ScrollConfiguration.of(dialogContext).copyWith(
-                                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                ),
-                                child: ListView.builder(
-                                  itemCount: timetableNames.length,
-                                  itemBuilder: (context, index) {
-                                    final name = timetableNames[index];
-                                    final selected = selectedNames.contains(name);
-                                    return Padding(
-                                      padding: const EdgeInsets.only(bottom: 10),
-                                      child: _buildSelectableTimetableTile(
-                                        title: name,
-                                        subtitle: '从云端备份中删除此课表',
-                                        selected: selected,
-                                        onTap: () {
-                                          setDialogState(() {
-                                            if (selected) {
-                                              selectedNames.remove(name);
-                                            } else {
-                                              selectedNames.add(name);
-                                            }
-                                          });
-                                        },
-                                        selectedColor: Colors.red,
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () => Navigator.pop(dialogContext),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
-                                      ),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: selectedNames.isEmpty
-                                        ? null
-                                        : () => Navigator.pop(dialogContext, selectedNames.toList()),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    child: const Text('删除选中'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -1697,97 +1816,111 @@ class _ImportScreenState extends State<ImportScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(maxWidth: 420, maxHeight: 520),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                          child: const Icon(
-                            Icons.list_alt_rounded,
-                            size: 32,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '选择要同步的课表',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '云端更新时间：${_formatDateTime(updatedAt)}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Flexible(
-                          child: ScrollConfiguration(
-                            behavior: ScrollConfiguration.of(dialogContext).copyWith(
-                              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                            ),
-                            child: SingleChildScrollView(
-                              child: Column(
-                                children: timetableNames
-                                    .map(
-                                      (name) => Padding(
-                                        padding: const EdgeInsets.only(bottom: 10),
-                                        child: _buildCloudActionTile(
-                                          icon: Icons.calendar_month_rounded,
-                                          color: const Color(0xFF4A90E2),
-                                          title: name,
-                                          subtitle: '同步此课表到当前设备',
-                                          onTap: () => Navigator.pop(dialogContext, name),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
+                        ],
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF4A90E2),
+                                      Color(0xFF5BA0F2)
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(
+                                  Icons.list_alt_rounded,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '选择要同步的课表',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
-                            child: const Text('取消'),
-                          ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '云端更新时间：${_formatDateTime(updatedAt)}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Flexible(
+                              child: ScrollConfiguration(
+                                behavior: ScrollConfiguration.of(dialogContext)
+                                    .copyWith(
+                                  physics: const BouncingScrollPhysics(
+                                      parent: AlwaysScrollableScrollPhysics()),
+                                ),
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    children: timetableNames
+                                        .map(
+                                          (name) => Padding(
+                                            padding: const EdgeInsets.only(
+                                                bottom: 10),
+                                            child: _buildCloudActionTile(
+                                              icon:
+                                                  Icons.calendar_month_rounded,
+                                              color: const Color(0xFF4A90E2),
+                                              title: name,
+                                              subtitle: '同步此课表到当前设备',
+                                              onTap: () => Navigator.pop(
+                                                  dialogContext, name),
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(dialogContext),
+                                style: TextButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side:
+                                        BorderSide(color: Colors.grey.shade300),
+                                  ),
+                                ),
+                                child: const Text('取消'),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -1799,7 +1932,8 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Future<ImportMode?> _showCloudSyncModeDialog(DateTime? updatedAt, String timetableName) {
+  Future<ImportMode?> _showCloudSyncModeDialog(
+      DateTime? updatedAt, String timetableName) {
     return showGeneralDialog<ImportMode>(
       context: context,
       barrierDismissible: true,
@@ -1817,96 +1951,106 @@ class _ImportScreenState extends State<ImportScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                          child: const Icon(
-                            Icons.cloud_download_rounded,
-                            size: 32,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '选择同步方式',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '已选择课表：$timetableName',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade700,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '云端更新时间：${_formatDateTime(updatedAt)}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        _buildCloudActionTile(
-                          icon: Icons.merge_type,
-                          color: Colors.green,
-                          title: '合并到本地',
-                          subtitle: '保留现有数据，并补充云端数据',
-                          onTap: () => Navigator.pop(dialogContext, ImportMode.merge),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildCloudActionTile(
-                          icon: Icons.system_update_alt_rounded,
-                          color: Colors.orange,
-                          title: '云端覆盖本地',
-                          subtitle: '清空当前课表数据后导入云端数据',
-                          onTap: () => Navigator.pop(dialogContext, ImportMode.replace),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                        ],
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF4A90E2),
+                                      Color(0xFF5BA0F2)
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(
+                                  Icons.cloud_download_rounded,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
-                            child: const Text('取消'),
-                          ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '选择同步方式',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '已选择课表：$timetableName',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '云端更新时间：${_formatDateTime(updatedAt)}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            _buildCloudActionTile(
+                              icon: Icons.merge_type,
+                              color: Colors.green,
+                              title: '合并到本地',
+                              subtitle: '保留现有数据，并补充云端数据',
+                              onTap: () => Navigator.pop(
+                                  dialogContext, ImportMode.merge),
+                            ),
+                            const SizedBox(height: 10),
+                            _buildCloudActionTile(
+                              icon: Icons.system_update_alt_rounded,
+                              color: Colors.orange,
+                              title: '云端覆盖本地',
+                              subtitle: '清空当前课表数据后导入云端数据',
+                              onTap: () => Navigator.pop(
+                                  dialogContext, ImportMode.replace),
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(dialogContext),
+                                style: TextButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side:
+                                        BorderSide(color: Colors.grey.shade300),
+                                  ),
+                                ),
+                                child: const Text('取消'),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -1933,7 +2077,9 @@ class _ImportScreenState extends State<ImportScreen> {
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? selectedColor.withValues(alpha: 0.12) : Colors.grey.shade50,
+          color: selected
+              ? selectedColor.withValues(alpha: 0.12)
+              : Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: selected ? selectedColor : Colors.grey.shade300,
@@ -2055,7 +2201,8 @@ class _ImportScreenState extends State<ImportScreen> {
                                 color: Colors.grey.shade100,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                              child: Icon(Icons.close,
+                                  size: 18, color: Colors.grey.shade600),
                             ),
                           ),
                         ],
@@ -2105,10 +2252,11 @@ class _ImportScreenState extends State<ImportScreen> {
   Future<void> _recognizeFromImage(ImageSource source) async {
     try {
       final picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: source, imageQuality: 85);
-      
+      final XFile? image =
+          await picker.pickImage(source: source, imageQuality: 85);
+
       if (image == null) return;
-      
+
       await AIProcessingDialog.show(
         context,
         imagePath: image.path,
@@ -2116,7 +2264,6 @@ class _ImportScreenState extends State<ImportScreen> {
           await _importParsedCourses(context, courses);
         },
       );
-      
     } catch (e) {
       if (mounted) {
         toastNotification.show(context, '操作失败：$e', type: ToastType.error);
@@ -2124,18 +2271,18 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
-  Future<void> _importParsedCourses(BuildContext context, List<CourseData> courses) async {
+  Future<void> _importParsedCourses(
+      BuildContext context, List<CourseData> courses) async {
     try {
       await StorageService.resetCurrentWeek();
-      
+
       final baseTime = DateTime.now().millisecondsSinceEpoch;
       final courseList = courses.asMap().entries.map((entry) {
         final index = entry.key;
         final c = entry.value;
         final timeSlot = (c.period ?? _getTimeSlot(c.startTime ?? '08:00')) - 1;
         final fallbackColor = CourseColorPalette.extendedHexColors[
-          index % CourseColorPalette.extendedHexColors.length
-        ];
+            index % CourseColorPalette.extendedHexColors.length];
         return Course(
           id: '${baseTime}_${index}_${c.name.hashCode}',
           name: c.name,
@@ -2143,28 +2290,34 @@ class _ImportScreenState extends State<ImportScreen> {
           location: c.location ?? '',
           day: c.dayOfWeek - 1,
           time: timeSlot,
-          duration: c.duration ?? _calculateDuration(c.startTime ?? '08:00', c.endTime ?? '09:40'),
-          weeks: c.weeks ?? (c.startWeek != null && c.endWeek != null ? '${c.startWeek}-${c.endWeek}' : null),
-          color: CourseColorPalette.normalizeHexColor(c.color, fallbackHex: fallbackColor),
+          duration: c.duration ??
+              _calculateDuration(c.startTime ?? '08:00', c.endTime ?? '09:40'),
+          weeks: c.weeks ??
+              (c.startWeek != null && c.endWeek != null
+                  ? '${c.startWeek}-${c.endWeek}'
+                  : null),
+          color: CourseColorPalette.normalizeHexColor(c.color,
+              fallbackHex: fallbackColor),
         );
       }).toList();
 
       final data = {
-        'courses': courseList.map((c) => {
-          'id': c.id,
-          'name': c.name,
-          'teacher': c.teacher,
-          'location': c.location,
-          'day': c.day,
-          'time': c.time,
-          'duration': c.duration,
-          'weeks': c.weeks,
-          'color': c.color,
-        }).toList(),
+        'courses': courseList
+            .map((c) => {
+                  'id': c.id,
+                  'name': c.name,
+                  'teacher': c.teacher,
+                  'location': c.location,
+                  'day': c.day,
+                  'time': c.time,
+                  'duration': c.duration,
+                  'weeks': c.weeks,
+                  'color': c.color,
+                })
+            .toList(),
       };
 
       await _performImport(context, data, ImportMode.merge);
-      
     } catch (e) {
       if (mounted) {
         toastNotification.show(context, '导入失败：$e', type: ToastType.error);
@@ -2175,9 +2328,11 @@ class _ImportScreenState extends State<ImportScreen> {
   int _getTimeSlot(String? startTime) {
     if (startTime == null) return 1;
     final hour = int.tryParse(startTime.split(':')[0]) ?? 8;
-    final minute = int.tryParse(startTime.split(':').length > 1 ? startTime.split(':')[1] : '0') ?? 0;
+    final minute = int.tryParse(
+            startTime.split(':').length > 1 ? startTime.split(':')[1] : '0') ??
+        0;
     final totalMinutes = hour * 60 + minute;
-    
+
     if (totalMinutes >= 7 * 60 + 30 && totalMinutes < 10 * 60) return 1;
     if (totalMinutes >= 10 * 60 && totalMinutes < 12 * 60 + 30) return 3;
     if (totalMinutes >= 13 * 60 + 30 && totalMinutes < 16 * 60) return 5;
@@ -2191,7 +2346,8 @@ class _ImportScreenState extends State<ImportScreen> {
     try {
       final startParts = startTime.split(':');
       final endParts = endTime.split(':');
-      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final startMinutes =
+          int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
       final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
       return ((endMinutes - startMinutes) / 90).round().clamp(1, 3);
     } catch (e) {

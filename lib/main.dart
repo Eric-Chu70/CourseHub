@@ -10,6 +10,7 @@ import 'screens/settings_screen.dart';
 import 'services/auth_service.dart';
 import 'services/glm_service.dart';
 import 'services/notification_service.dart';
+import 'services/widget_service.dart';
 import 'utils/storage.dart';
 import 'models/course.dart';
 import 'models/task.dart';
@@ -25,21 +26,12 @@ void main() async {
   Hive.registerAdapter(TaskAdapter());
   
   await StorageService.init();
-  
-  try {
-    await NotificationService.instance.init();
-    await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
-  } catch (e) {
-    debugPrint('Notification init error: $e');
-  }
-  
-  await AuthService.instance.init();
-  await AIService.instance.loadConfig();
-  
+
+  // 先 runApp，让 UI 尽快显示，避免从小组件进入时白屏卡死
   SystemChrome.setEnabledSystemUIMode(
     SystemUiMode.edgeToEdge,
   );
-  
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -52,8 +44,24 @@ void main() async {
       systemNavigationBarContrastEnforced: false,
     ),
   );
-  
+
   runApp(const CourseHubApp());
+
+  // 非关键初始化延迟到 runApp 之后执行
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    // 初始化桌面小组件数据
+    WidgetService.updateAllWidgets();
+
+    try {
+      await NotificationService.instance.init();
+      await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
+    } catch (e) {
+      debugPrint('Notification init error: $e');
+    }
+
+    await AuthService.instance.init();
+    await AIService.instance.loadConfig();
+  });
 }
 
 class CourseHubApp extends StatelessWidget {

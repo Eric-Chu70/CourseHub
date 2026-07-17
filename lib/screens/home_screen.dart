@@ -16,13 +16,15 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   int _currentIndex = 0;
   int? _pressedIndex;
   int? _hoveredIndex;
   double _dragOffset = 0;
   bool _isDragging = false;
-  
+
+  static const _widgetChannel = MethodChannel('coursehub/widget');
+
   final _timetableKey = GlobalKey<TimetableScreenState>();
   final _heatmapKey = GlobalKey<HeatmapScreenState>();
   final _aiAssistantKey = GlobalKey<AIAssistantScreenState>();
@@ -98,10 +100,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     StorageService.dataChangeListenable.addListener(_onStorageDataChanged);
     _loadWallpaperEnabled();
+    WidgetsBinding.instance.addObserver(this);
+    _checkWidgetRoute();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     StorageService.dataChangeListenable.removeListener(_onStorageDataChanged);
     _iconController.dispose();
     _pageController.dispose();
@@ -117,7 +122,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _timetableKey.currentState?.refreshData();
     } else if (_currentIndex == 1) {
       _heatmapKey.currentState?.refreshData();
+    } else {
+      // 当前不在课表页/DDL页时，标记需要在切回时刷新
+      TimetableScreenState.markNeedsRefresh();
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkWidgetRoute();
+    }
+  }
+
+  Future<void> _checkWidgetRoute() async {
+    try {
+      final route = await _widgetChannel.invokeMethod<String>('getWidgetRoute');
+      if (route != null && route.contains('timetable') && mounted) {
+        _onTabChanged(0);
+      }
+    } catch (_) {}
   }
 
   void _onTabChanged(int index, {bool withHaptic = false}) {
@@ -148,6 +172,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     
     if (_currentIndex == 2) {
       _aiAssistantKey.currentState?.saveScrollPosition();
+      // 离开对话页时强制清除输入框焦点，防止切回时键盘自动弹出
+      _aiAssistantKey.currentState?.clearInputFocus();
     }
     
     _pageController.animateToPage(
@@ -161,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
     
     if (index == 0) {
-      _timetableKey.currentState?.refreshData();
+      _timetableKey.currentState?.refreshIfNeeded();
       _loadWallpaperEnabled();
     } else if (index == 1) {
       _heatmapKey.currentState?.refreshData();
@@ -288,6 +314,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: PageView(
                   controller: _pageController,
                   physics: const NeverScrollableScrollPhysics(),
+                  onPageChanged: (index) {
+                    // 页面切换动画结束后才暂停/恢复视频（切换过程中继续播放）
+                    _timetableKey.currentState?.onTabVisibilityChanged(index == 0);
+                  },
                   children: _screens,
                 ),
               ),

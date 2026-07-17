@@ -1,8 +1,12 @@
 import 'dart:io';
-import 'dart:ui' show ImageFilter, ImageByteFormat, instantiateImageCodec, lerpDouble, Canvas, Rect;
+import 'dart:typed_data';
+import 'package:video_player/video_player.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:ui' show ImageFilter, ImageByteFormat, instantiateImageCodec, lerpDouble;
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +17,7 @@ import '../dialogs/course_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
+import '../widgets/glass_dialog.dart';
 
 class TimetableScreen extends StatefulWidget {
   final Function(bool) onScrollDirectionChanged;
@@ -23,7 +28,12 @@ class TimetableScreen extends StatefulWidget {
   State<TimetableScreen> createState() => TimetableScreenState();
 }
 
-class TimetableScreenState extends State<TimetableScreen> with TickerProviderStateMixin {
+class TimetableScreenState extends State<TimetableScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+  // 数据变更标志（参考对话页 _needsRefresh 模式，避免 tab 切换时无条件重载）
+  static bool _needsRefresh = false;
+  static void markNeedsRefresh() => _needsRefresh = true;
+
   List<Course> _courses = [];
   final Set<String> _retainedCompletedTaskIds = <String>{};
   List<Map<String, String>> _timeSlots = [];
@@ -43,37 +53,79 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
   bool _wallpaperEnabled = false;
   bool _wallpaperIsLight = true;
   bool _wallpaperBlurEnabled = false;
-  ui.Image? _preBlurredImage;
+  VideoPlayerController? _videoController;
+  bool _isVideoWallpaper = false;
+  String? _currentVideoPath;
+  Uint8List? _videoFirstFrameBytes;
+  bool _videoSoundEnabled = false;
+  bool _isTabVisible = true;
+  final GlobalKey _videoRepaintKey = GlobalKey();
+  Uint8List? _wallpaperBytes;
   final Map<int, double> _pageScrollOffsets = {};
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
     _previousWeek = _currentWeek;
-    _pageOffset = (_currentWeek - 1).toDouble();
-    
-    _pageController = PageController(initialPage: _currentWeek - 1);
+    // 假期状态下初始定位到假期页（最后一页）
+    final initialPage = _isInHoliday ? _effectiveTotalWeeks : _currentWeek - 1;
+    _pageOffset = initialPage.toDouble();
+    _pageController = PageController(initialPage: initialPage);
     _pageController.addListener(_onPageScroll);
+  }
+
+  /// 仅当数据变更时才刷新（参考对话页 refreshRuntimeConfig 模式）
+  void refreshIfNeeded() {
+    if (!_needsRefresh) return;
+    _needsRefresh = false;
+    refreshData();
   }
 
   void _onPageScroll() {
     if (_pageController.hasClients) {
       final page = _pageController.page;
       if (page != null && page.isFinite) {
-        setState(() {
-          _pageOffset = page.clamp(0.0, double.infinity);
-        });
+        _pageOffset = page.clamp(0.0, double.infinity);
       }
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pageController.removeListener(_onPageScroll);
     _pageController.dispose();
-    _preBlurredImage?.dispose();
+    _videoController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isVideoWallpaper && _videoController != null) {
+      if (state == AppLifecycleState.resumed && _isTabVisible) {
+        _videoController!.play();
+      } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+        // inactive 比 paused 更早触发，立即暂停避免后台解码堆积导致掉帧
+        _videoController!.pause();
+      }
+    }
+  }
+
+  /// 页面可见性变化（由 HomeScreen 在 tab 切换动画结束后调用）
+  void onTabVisibilityChanged(bool visible) {
+    _isTabVisible = visible;
+    if (_isVideoWallpaper && _videoController != null && _videoController!.value.isInitialized) {
+      if (visible) {
+        _videoController!.play();
+      } else {
+        _videoController!.pause();
+      }
+    }
   }
 
   void _loadData() {
@@ -82,6 +134,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     _dailyPeriods = StorageService.getDailyPeriods();
     _semesterStartDate = StorageService.getSemesterStartDate();
     _currentWeek = StorageService.getCurrentWeek();
+    // 总是调用 _loadWallpaper，内部已有视频路径未变则跳过重新初始化的逻辑
     _loadWallpaper();
   }
 
@@ -91,9 +144,38 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     final opacity = prefs.getInt('wallpaper_opacity') ?? 100;
     final enabled = prefs.getBool('wallpaper_enabled') ?? false;
     final blur = prefs.getBool('wallpaper_blur_enabled') ?? false;
+    final soundEnabled = prefs.getBool('wallpaper_video_sound') ?? false;
+    _videoSoundEnabled = soundEnabled;
+
+    // 提前检查：如果视频路径未变且控制器已初始化，仅更新参数（避免重建导致重播）
+    if (enabled && path != null) {
+      final ext = path.toLowerCase().split('.').last;
+      final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
+      if (isVideo && _currentVideoPath == path && _videoController != null && _videoController!.value.isInitialized) {
+        _isVideoWallpaper = true;
+        _videoController!.setVolume(_videoSoundEnabled ? 1 : 0);
+        if (_isTabVisible) _videoController!.play();
+        // 仍需更新透明度/模糊等参数
+        if (mounted) {
+          setState(() {
+            _wallpaperPath = path;
+            _wallpaperOpacity = opacity;
+            _wallpaperEnabled = enabled;
+            _wallpaperBlurEnabled = blur;
+          });
+        }
+        return;
+      }
+    }
+
     bool isLight = true;
     if (enabled && path != null) {
-      isLight = await _analyzeWallpaperBrightness(path);
+      final ext = path.toLowerCase().split('.').last;
+      final isVid = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
+      // 视频文件跳过亮度分析（instantiateImageCodec 不支持视频，会报错且浪费内存）
+      if (!isVid) {
+        isLight = await _analyzeWallpaperBrightness(path);
+      }
     }
     if (mounted) {
       setState(() {
@@ -104,35 +186,62 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
         _wallpaperBlurEnabled = blur;
       });
     }
-    if (enabled && blur && path != null) {
-      _preBlurWallpaper(path);
+    if (enabled && path != null) {
+      final ext = path.toLowerCase().split('.').last;
+      final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
+      if (isVideo) {
+        _isVideoWallpaper = true;
+        _currentVideoPath = path;
+        _videoController?.dispose();
+        _videoController = VideoPlayerController.file(File(path));
+        await _videoController!.initialize();
+        _videoController!.setLooping(true);
+        _videoController!.setVolume(_videoSoundEnabled ? 1 : 0);
+        // 先播放再捕获首帧
+        _videoController!.seekTo(Duration.zero);
+        _videoController!.play();
+        // 捕获首帧作为过渡背景
+        _captureFirstFrame();
+        if (mounted) setState(() {});
+      } else {
+        _isVideoWallpaper = false;
+        _currentVideoPath = null;
+        _videoFirstFrameBytes = null;
+        _videoController?.dispose();
+        _videoController = null;
+        _wallpaperBytes = await File(path).readAsBytes();
+        precacheImage(FileImage(File(path)), context);
+      }
     } else {
-      _preBlurredImage?.dispose();
-      _preBlurredImage = null;
+      _isVideoWallpaper = false;
+      _currentVideoPath = null;
+      _videoFirstFrameBytes = null;
+      _videoController?.dispose();
+      _videoController = null;
     }
   }
 
-  Future<void> _preBlurWallpaper(String imagePath) async {
-    try {
-      final file = File(imagePath);
-      if (!file.existsSync()) return;
-      final bytes = await file.readAsBytes();
-      final codec = await instantiateImageCodec(bytes);
-      final frameInfo = await codec.getNextFrame();
-      final original = frameInfo.image;
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final rect = Rect.fromLTWH(0, 0, original.width.toDouble(), original.height.toDouble());
-      canvas.saveLayer(rect, Paint()..imageFilter = ImageFilter.blur(sigmaX: 8, sigmaY: 8));
-      canvas.drawImage(original, Offset.zero, Paint());
-      canvas.restore();
-      final picture = recorder.endRecording();
-      final blurred = await picture.toImage(original.width, original.height);
-      original.dispose();
-      _preBlurredImage?.dispose();
-      _preBlurredImage = blurred;
-      if (mounted) setState(() {});
-    } catch (_) {}
+  /// 捕获视频当前帧作为过渡背景
+  void _captureFirstFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final ctx = _videoRepaintKey.currentContext;
+      if (ctx == null) return;
+      try {
+        final boundary = ctx.findRenderObject() as dynamic;
+        if (boundary == null || boundary.debugNeedsPaint == true) {
+          // 等待下一帧再试
+          WidgetsBinding.instance.addPostFrameCallback((_) => _captureFirstFrame());
+          return;
+        }
+        final image = await boundary.toImage(pixelRatio: 1.0);
+        final byteData = await image.toByteData(format: ImageByteFormat.png);
+        if (byteData != null && mounted) {
+          setState(() {
+            _videoFirstFrameBytes = byteData.buffer.asUint8List();
+          });
+        }
+      } catch (_) {}
+    });
   }
 
   Future<bool> _analyzeWallpaperBrightness(String imagePath) async {
@@ -168,9 +277,12 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
 
   void refreshData() {
     _loadData();
-    _loadWallpaper();
     _pageOffset = (_currentWeek - 1).toDouble();
-    if (mounted) {
+    // 视频壁纸已初始化时跳过 setState，避免 widget 重建导致视频视觉重播
+    final skipSetState = _isVideoWallpaper &&
+        _videoController != null &&
+        _videoController!.value.isInitialized;
+    if (mounted && !skipSetState) {
       setState(() {});
     }
   }
@@ -188,10 +300,11 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     }
   }
 
-  void _showTimetableSwitcher() {
+  void _showTimetableSwitcher({bool autoFocusNewField = false}) {
     var timetables = StorageService.getTimetables();
     String currentId = StorageService.currentTimetableId;
     final TextEditingController nameController = TextEditingController();
+    final FocusNode nameFocusNode = FocusNode();
     String? editingId;
     final TextEditingController editController = TextEditingController();
 
@@ -232,27 +345,27 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                       dialogMaxHeight = dialogMaxHeight.clamp(260.0, 450.0).toDouble();
 
                       return AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        width: 320,
-                        constraints: BoxConstraints(maxHeight: dialogMaxHeight),
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            margin: EdgeInsets.only(
+                              top: keyboardHeight > 0 ? topInset + 8 : 0,
+                              bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                             ),
-                          ],
-                        ),
-                        child: Column(
+                            width: 320,
+                            constraints: BoxConstraints(maxHeight: dialogMaxHeight),
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.1),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -277,17 +390,21 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                   return Container(
                                     margin: const EdgeInsets.only(bottom: 8),
                                     decoration: BoxDecoration(
-                                      color: isSelected 
+                                      color: isSelected
                                           ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-                                          : Colors.grey.shade50,
+                                          : Colors.white.withValues(alpha: 0.4),
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                        color: isSelected 
-                                            ? const Color(0xFF4A90E2) 
+                                        color: isSelected
+                                            ? const Color(0xFF4A90E2)
                                             : Colors.grey.shade200,
                                       ),
                                     ),
-                                    child: ListTile(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: ListTile(
                                       contentPadding: const EdgeInsets.only(left: 16, right: 4),
                                       leading: Container(
                                         width: 40,
@@ -300,7 +417,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                   end: Alignment.bottomRight,
                                                 )
                                               : null,
-                                          color: isSelected ? null : Colors.grey.shade200,
+                                          color: isSelected ? null : Colors.white.withValues(alpha: 0.4),
                                           borderRadius: BorderRadius.circular(10),
                                         ),
                                         child: Icon(
@@ -391,66 +508,55 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                   : Padding(
                                                       key: const ValueKey('menu'),
                                                       padding: EdgeInsets.zero,
-                                                      child: PopupMenuButton<String>(
-                                                        icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-                                                        onOpened: () {
-                                                          HapticFeedback.selectionClick();
-                                                        },
-                                                        shape: RoundedRectangleBorder(
-                                                          borderRadius: BorderRadius.circular(16),
-                                                        ),
-                                                        color: Colors.white,
-                                                        elevation: 8,
-                                                        onSelected: (value) async {
-                                                          if (value == 'rename') {
-                                                            editController.text = timetable.name;
-                                                            setDialogState(() {
-                                                              editingId = timetable.id;
-                                                            });
-                                                          } else if (value == 'delete') {
-                                                            final deletedName = timetable.name;
-                                                            await StorageService.deleteTimetable(timetable.id);
-                                                            currentId = StorageService.currentTimetableId;
-                                                            _loadData();
-                                                            setDialogState(() {
-                                                              timetables = StorageService.getTimetables();
-                                                              editingId = null;
-                                                            });
-                                                            if (mounted) {
-                                                              setState(() {
-                                                                _previousWeek = _currentWeek;
-                                                                _currentWeek = 1;
-                                                                _pageOffset = 0;
+                                                      child: Listener(
+                                                        behavior: HitTestBehavior.translucent,
+                                                        onPointerDown: (_) => HapticFeedback.selectionClick(),
+                                                        child: BlurredPopupMenuButton<String>(
+                                                          icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
+                                                          items: [
+                                                            const BlurredPopupMenuItem(
+                                                              value: 'rename',
+                                                              icon: Icons.edit_outlined,
+                                                              label: '重命名',
+                                                              iconColor: Color(0xFF4A90E2),
+                                                            ),
+                                                            const BlurredPopupMenuItem(
+                                                              value: 'delete',
+                                                              icon: Icons.delete_outline,
+                                                              label: '删除课表',
+                                                              iconColor: Colors.red,
+                                                              textColor: Colors.red,
+                                                            ),
+                                                          ],
+                                                          onSelected: (value) async {
+                                                            if (value == 'rename') {
+                                                              editController.text = timetable.name;
+                                                              setDialogState(() {
+                                                                editingId = timetable.id;
                                                               });
+                                                            } else if (value == 'delete') {
+                                                              final deletedName = timetable.name;
+                                                              await StorageService.deleteTimetable(timetable.id);
+                                                              currentId = StorageService.currentTimetableId;
+                                                              _loadData();
+                                                              setDialogState(() {
+                                                                timetables = StorageService.getTimetables();
+                                                                editingId = null;
+                                                              });
+                                                              if (mounted) {
+                                                                setState(() {
+                                                                  _previousWeek = _currentWeek;
+                                                                  _currentWeek = 1;
+                                                                  _pageOffset = 0;
+                                                                });
+                                                              }
+                                                              if (_pageController.hasClients) {
+                                                                _pageController.jumpToPage(0);
+                                                              }
+                                                              showTimetableTip('课表已删除：$deletedName');
                                                             }
-                                                            if (_pageController.hasClients) {
-                                                              _pageController.jumpToPage(0);
-                                                            }
-                                                            showTimetableTip('课表已删除：$deletedName');
-                                                          }
-                                                        },
-                                                        itemBuilder: (context) => [
-                                                          const PopupMenuItem(
-                                                            value: 'rename',
-                                                            child: Row(
-                                                              children: [
-                                                                Icon(Icons.edit_outlined, color: Color(0xFF4A90E2), size: 18),
-                                                                SizedBox(width: 8),
-                                                                Text('重命名'),
-                                                              ],
-                                                            ),
-                                                          ),
-                                                          const PopupMenuItem(
-                                                            value: 'delete',
-                                                            child: Row(
-                                                              children: [
-                                                                Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                                                                SizedBox(width: 8),
-                                                                Text('删除课表', style: TextStyle(color: Colors.red)),
-                                                              ],
-                                                            ),
-                                                          ),
-                                                        ],
+                                                          },
+                                                        ),
                                                       ),
                                                     ),
                                             )
@@ -479,6 +585,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                 Navigator.pop(context);
                                               }
                                             },
+                                        ),
+                                      ),
                                     ),
                                   );
                                 },
@@ -487,10 +595,14 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                             const SizedBox(height: 12),
                             TextField(
                               controller: nameController,
+                              focusNode: nameFocusNode,
+                              autofocus: autoFocusNewField,
                               decoration: InputDecoration(
                                 hintText: '新建课表名称',
                                 hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                filled: true,
+                                fillColor: Colors.white.withValues(alpha: 0.4),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                   borderSide: BorderSide(color: Colors.grey.shade300),
@@ -577,8 +689,13 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     );
   }
 
+  /// 第1周所在的周一。按开学日期所在自然周对齐，
+  /// 避免“开学日期不管选几号都被当作星期一”导致的星期与日期错位。
+  DateTime get _mondayOfWeek1 =>
+      _semesterStartDate.subtract(Duration(days: _semesterStartDate.weekday - 1));
+
   DateTime _getDateForDay(int dayIndex) {
-    final startOfWeek = _semesterStartDate.add(Duration(days: (_currentWeek - 1) * 7));
+    final startOfWeek = _mondayOfWeek1.add(Duration(days: (_currentWeek - 1) * 7));
     return startOfWeek.add(Duration(days: dayIndex));
   }
 
@@ -596,47 +713,71 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     const timeColumnWidth = 40.0;
     final topPadding = MediaQuery.of(context).padding.top;
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
-    
+
     return Scaffold(
-      backgroundColor: hasWallpaper ? Colors.black : const Color(0xFFF8F9FC),
-      body: Stack(
-        children: [
-          _buildPageView(),
-          _buildPinnedHeader(topPadding, timeColumnWidth, hasWallpaper: hasWallpaper),
-        ],
+      backgroundColor: hasWallpaper ? const Color(0xFF1A1A2E) : const Color(0xFFF8F9FC),
+      body: RepaintBoundary(
+        child: Stack(
+          children: [
+            _buildPageView(),
+            // 假期页滑动时标题栏与课表主体同步左移直到离开屏幕
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: AnimatedBuilder(
+                animation: _pageController,
+                builder: (context, child) {
+                  double dx = 0;
+                  if (_isInHoliday) {
+                    final page = _pageController.hasClients ? _pageController.page : null;
+                    if (page != null && page >= _effectiveTotalWeeks - 1) {
+                      final progress = (page - (_effectiveTotalWeeks - 1)).clamp(0.0, 1.0);
+                      dx = -progress * MediaQuery.of(context).size.width;
+                    }
+                  }
+                  return Transform.translate(
+                    offset: Offset(dx, 0),
+                    child: child,
+                  );
+                },
+                child: _buildPinnedHeader(topPadding, timeColumnWidth, hasWallpaper: hasWallpaper),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildPinnedHeader(double topPadding, double timeColumnWidth, {bool hasWallpaper = false}) {
-    return Positioned(
-      left: 0,
-      right: 0,
-      top: 0,
-      child: ClipRRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
-            decoration: BoxDecoration(
-              color: hasWallpaper
-                  ? Colors.white.withValues(alpha: 0.35)
-                  : const Color(0xFFF8F9FC).withValues(alpha: 0.75),
-              border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
-              ),
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          decoration: BoxDecoration(
+            color: hasWallpaper
+                ? Colors.white.withValues(alpha: 0.35)
+                : const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(height: topPadding),
-                Stack(
-                  children: [
-                    _buildWeekSelectorRow(),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(height: topPadding),
+              Stack(
+                children: [
+                  _buildWeekSelectorRow(),
+                  // 视频壁纸设置按钮（与切换课表按钮对称，仅视频壁纸时显示）
+                  if (_isVideoWallpaper)
                     Positioned(
-                      right: 8,
+                      left: 8,
                       top: 0,
                       bottom: 0,
                       child: Center(
@@ -647,25 +788,64 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                               color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Icon(Icons.swap_horiz, color: Color(0xFF4A90E2), size: 18),
+                            child: const Icon(Icons.equalizer, color: Color(0xFF4A90E2), size: 18),
                           ),
-                          onPressed: _showTimetableSwitcher,
+                          onPressed: _showVideoWallpaperSettings,
                         ),
                       ),
                     ),
-                  ],
-                ),
-                _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _wallpaperIsLight),
-              ],
-            ),
+                  Positioned(
+                    right: 8,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: IconButton(
+                        icon: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.swap_horiz, color: Color(0xFF4A90E2), size: 18),
+                        ),
+                        onPressed: _showTimetableSwitcher,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              AnimatedBuilder(
+                animation: _pageController,
+                builder: (context, _) {
+                  return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _wallpaperIsLight);
+                },
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
+  /// 课表总页数：仅取学期周数（不再用 max 包含当前周，避免假期时私自增加页数）
+  int get _effectiveTotalWeeks => StorageService.getSemesterWeeks();
+
+  /// 假期状态下 PageView 额外追加一页假期页
+  int get _pageCount => _isInHoliday ? _effectiveTotalWeeks + 1 : _effectiveTotalWeeks;
+
+  bool get _isInHoliday {
+    final semesterWeeks = StorageService.getSemesterWeeks();
+    final currentWeek = StorageService.getCurrentWeek();
+    return currentWeek > semesterWeeks;
+  }
+
   Widget _buildWeekSelectorRow() {
-    final totalWeeks = StorageService.getSemesterWeeks();
+    final totalWeeks = _effectiveTotalWeeks;
+    final pageCount = _pageCount;
+    final rawPage = _pageController.hasClients
+        ? (_pageController.page?.round() ?? (_currentWeek - 1))
+        : (_currentWeek - 1);
+    final currentPage = rawPage.clamp(0, totalWeeks - 1);
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
     final headerTextColor = hasWallpaper
         ? (_wallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
@@ -680,7 +860,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
           children: [
             _buildWeekNavButton(
               icon: Icons.chevron_left,
-              onPressed: _currentWeek > 1 ? () => _navigateWeek(-1) : null,
+              onPressed: currentPage > 0 ? () => _navigateWeek(-1) : null,
             ),
             const SizedBox(width: 8),
             Text(
@@ -695,7 +875,10 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
             SizedBox(
               width: 21,
               height: 24,
-              child: _buildAnimatedWeekNumber(totalWeeks, headerTextColor),
+              child: AnimatedBuilder(
+                animation: _pageController,
+                builder: (context, _) => _buildAnimatedWeekNumber(totalWeeks, headerTextColor),
+              ),
             ),
             Text(
               '周',
@@ -709,7 +892,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
             const SizedBox(width: 8),
             _buildWeekNavButton(
               icon: Icons.chevron_right,
-              onPressed: _currentWeek < totalWeeks ? () => _navigateWeek(1) : null,
+              onPressed: currentPage < pageCount - 1 ? () => _navigateWeek(1) : null,
             ),
           ],
         ),
@@ -718,8 +901,10 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
   }
 
   Widget _buildAnimatedWeekNumber(int totalWeeks, Color textColor) {
-    final integerPart = _pageOffset.floor();
-    final fractionalPart = _pageOffset - integerPart;
+    final page = (_pageController.hasClients ? _pageController.page : null) ?? (_currentWeek - 1).toDouble();
+    final pageOffset = page.clamp(0.0, (totalWeeks - 1).toDouble());
+    final integerPart = pageOffset.floor();
+    final fractionalPart = pageOffset - integerPart;
     
     final currentNum = integerPart + 1;
     final nextNum = currentNum + 1;
@@ -782,11 +967,13 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
   Widget _buildDateHeaderRow(double timeWidth, {bool hasWallpaper = false, bool wallpaperIsLight = true}) {
     final screenWidth = MediaQuery.of(context).size.width;
     final dayWidth = (screenWidth - timeWidth) / 7;
-    final currentWeekIndex = _pageOffset.floor();
-    final fractionalPart = (_pageOffset - currentWeekIndex).clamp(0.0, 1.0);
+    final page = (_pageController.hasClients ? _pageController.page : null) ?? (_currentWeek - 1).toDouble();
+    final pageOffset = page.clamp(0.0, (_effectiveTotalWeeks - 1).toDouble());
+    final currentWeekIndex = pageOffset.floor();
+    final fractionalPart = (pageOffset - currentWeekIndex).clamp(0.0, 1.0);
     
-    final currentStartOfWeek = _semesterStartDate.add(Duration(days: currentWeekIndex * 7));
-    final nextStartOfWeek = _semesterStartDate.add(Duration(days: (currentWeekIndex + 1) * 7));
+    final currentStartOfWeek = _mondayOfWeek1.add(Duration(days: currentWeekIndex * 7));
+    final nextStartOfWeek = _mondayOfWeek1.add(Duration(days: (currentWeekIndex + 1) * 7));
     
     Color dayLabelColor;
     Color dateNumberColor;
@@ -881,8 +1068,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
   
   void _showWeekPickerDialog() {
     int selectedWeek = _currentWeek;
-    final int totalWeeks = StorageService.getSemesterWeeks();
-    final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: selectedWeek - 1);
+    final int totalWeeks = _effectiveTotalWeeks;
+    final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: (selectedWeek - 1).clamp(0, totalWeeks - 1));
     
     showGeneralDialog(
       context: context,
@@ -904,12 +1091,10 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return Container(
+                      return SizedBox(
                         width: 280,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(20),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.1),
@@ -917,8 +1102,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                               offset: const Offset(0, 10),
                             ),
                           ],
-                        ),
-                        child: Column(
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -990,7 +1174,6 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                       if (selectedWeek != _currentWeek) {
                                         setState(() {
                                           _currentWeek = selectedWeek;
-                                          StorageService.setCurrentWeek(selectedWeek);
                                         });
                                         _pageController.animateToPage(
                                           selectedWeek - 1,
@@ -1013,6 +1196,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                               ],
                             ),
                           ],
+                        ),
                         ),
                       );
                     },
@@ -1068,43 +1252,219 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
   }
 
   void _navigateWeek(int delta) {
-    final newWeek = _currentWeek + delta;
-    if (newWeek >= 1 && newWeek <= StorageService.getSemesterWeeks()) {
+    final totalWeeks = _effectiveTotalWeeks;
+    final currentPage = _pageController.hasClients
+        ? (_pageController.page?.round() ?? _currentWeek - 1)
+        : _currentWeek - 1;
+    final newPage = currentPage + delta;
+    if (newPage >= 0 && newPage < _pageCount) {
       _pageController.animateToPage(
-        newWeek - 1,
+        newPage,
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeInOut,
       );
     }
   }
 
+  /// 构建壁纸背景：视频壁纸优先显示首帧过渡图，视频就绪后覆盖播放
+  Widget _buildWallpaperBackground() {
+    if (_isVideoWallpaper) {
+      final videoReady = _videoController != null && _videoController!.value.isInitialized;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          // 过渡层：首帧图片（视频未就绪时显示）
+          if (_videoFirstFrameBytes != null)
+            Image.memory(
+              _videoFirstFrameBytes!,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.none,
+              gaplessPlayback: true,
+            ),
+          // 视频层：就绪后覆盖首帧
+          if (videoReady)
+            FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: _videoController!.value.size.width,
+                height: _videoController!.value.size.height,
+                child: RepaintBoundary(
+                  key: _videoRepaintKey,
+                  child: VideoPlayer(_videoController!),
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    // 图片壁纸
+    if (_wallpaperBytes != null) {
+      return Image.memory(
+        _wallpaperBytes!,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.none,
+        gaplessPlayback: true,
+      );
+    }
+    return Image.file(
+      File(_wallpaperPath!),
+      fit: BoxFit.cover,
+      filterQuality: FilterQuality.none,
+      gaplessPlayback: true,
+    );
+  }
+
   Widget _buildPageView() {
-    final totalWeeks = StorageService.getSemesterWeeks();
+    final totalWeeks = _effectiveTotalWeeks;
+    final pageCount = _pageCount;
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
     return Stack(
       children: [
         if (hasWallpaper)
           Positioned.fill(
-            child: Image.file(
-              File(_wallpaperPath!),
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.none,
-            ),
+            child: _buildWallpaperBackground(),
           ),
-        PageView.builder(
-          controller: _pageController,
-          itemCount: totalWeeks,
-          onPageChanged: (index) {
-            setState(() {
-              _previousWeek = _currentWeek;
-              _currentWeek = index + 1;
-            });
-          },
-          itemBuilder: (context, index) {
-            return _buildTimetableForWeek(index + 1, hasWallpaper: hasWallpaper);
-          },
+        // 禁用 overscroll（Android 12+ stretch 效果会导致 BackdropFilter 模糊失效）
+        ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(
+            overscroll: false,
+          ),
+          child: PageView.builder(
+            controller: _pageController,
+            physics: const ClampingScrollPhysics(),
+            itemCount: pageCount,
+            onPageChanged: (index) {
+              setState(() {
+                _previousWeek = _currentWeek;
+                // 假期页（最后一页）的 _currentWeek 保持为最后一周
+                _currentWeek = (index >= totalWeeks) ? totalWeeks : index + 1;
+              });
+            },
+            itemBuilder: (context, index) {
+              // 最后一页为假期页
+              if (_isInHoliday && index == totalWeeks) {
+                return _buildHolidayPage(hasWallpaper: hasWallpaper);
+              }
+              return _buildTimetableForWeek(index + 1, hasWallpaper: hasWallpaper);
+            },
+          ),
         ),
       ],
+    );
+  }
+
+  /// 假期页面（作为 PageView 最后一页）
+  Widget _buildHolidayPage({bool hasWallpaper = false}) {
+    // 根据壁纸深浅决定文字颜色：浅色壁纸用深色字，深色壁纸用白字
+    final textColor = hasWallpaper
+        ? (_wallpaperIsLight ? const Color(0xFF1A1A2E) : Colors.white)
+        : const Color(0xFF1A1A2E);
+    return RepaintBoundary(
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ShaderMask(
+                shaderCallback: (bounds) => const LinearGradient(
+                  colors: [
+                    Color(0xFFFF6B6B),
+                    Color(0xFFFFD93D),
+                    Color(0xFF6BCB77),
+                    Color(0xFF4D96FF),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ).createShader(bounds),
+                child: const Icon(
+                  Icons.celebration_rounded,
+                  size: 64,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '本学期结束了！',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '右滑可查看课表哦',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: textColor.withValues(alpha: 0.6),
+                ),
+              ),
+              const SizedBox(height: 32),
+              // 按钮加透明度+模糊
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildHolidayButton(
+                    label: '切换课表',
+                    icon: Icons.swap_horiz,
+                    textColor: textColor,
+                    onTap: _showTimetableSwitcher,
+                  ),
+                  const SizedBox(width: 16),
+                  _buildHolidayButton(
+                    label: '新建课表',
+                    icon: Icons.add,
+                    textColor: textColor,
+                    onTap: () => _showTimetableSwitcher(autoFocusNewField: true),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 假期页按钮：透明背景+模糊
+  Widget _buildHolidayButton({
+    required String label,
+    required IconData icon,
+    required Color textColor,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: textColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: textColor.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 18, color: textColor.withValues(alpha: 0.8)),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: textColor.withValues(alpha: 0.9),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1116,12 +1476,38 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     final screenWidth = MediaQuery.of(context).size.width;
     final t = hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0;
     final scrollOffset = _pageScrollOffsets[week] ?? 0.0;
+    final dayColumnWidth = (screenWidth - timeColumnWidth) / 7;
+    final showBlur = hasWallpaper && _wallpaperBlurEnabled;
+
+    // Calculate course block rects for blur clipping (includes inactive courses)
+    final blurRRects = <RRect>[];
+    if (showBlur) {
+      for (int dayIndex = 0; dayIndex < 7; dayIndex++) {
+        for (int period = 0; period < _dailyPeriods; period++) {
+          final sameStartCourses = _courses.where((c) =>
+            c.day == dayIndex && c.time == period).toList();
+          if (sameStartCourses.isEmpty) continue;
+          final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
+          final course = activeCourses.isEmpty
+              ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
+              : activeCourses.first;
+          blurRRects.add(RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+              timeColumnWidth + dayColumnWidth * dayIndex + 2,
+              cellHeight * period + 2,
+              dayColumnWidth - 4,
+              course.duration * cellHeight - 4,
+            ),
+            const Radius.circular(5),
+          ));
+        }
+      }
+    }
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
           if (notification is ScrollUpdateNotification) {
             _pageScrollOffsets[week] = notification.metrics.pixels;
-            setState(() {});
           }
           return false;
         },
@@ -1129,24 +1515,38 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
         physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
         child: Padding(
           padding: EdgeInsets.only(top: headerHeight),
-          child: Row(
+          child: Stack(
             children: [
-              _buildTimeColumn(cellHeight, timeColumnWidth, hasWallpaper: hasWallpaper),
-              Expanded(
-                child: Row(
-                  children: List.generate(7, (dayIndex) {
-                    return Expanded(
-                      child: _buildDayColumn(dayIndex, cellHeight, week,
-                        hasWallpaper: hasWallpaper,
-                        transparencyFactor: t,
-                        scrollOffset: scrollOffset,
-                        screenWidth: screenWidth,
-                        headerHeight: headerHeight,
-                        timeColumnWidth: timeColumnWidth,
-                      ),
-                    );
-                  }),
+              if (showBlur && blurRRects.isNotEmpty)
+                Positioned.fill(
+                  child: ClipPath(
+                    clipper: _CourseBlurClipper(blurRRects),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
                 ),
+              Row(
+                children: [
+                  _buildTimeColumn(cellHeight, timeColumnWidth, hasWallpaper: hasWallpaper),
+                  Expanded(
+                    child: Row(
+                      children: List.generate(7, (dayIndex) {
+                        return Expanded(
+                          child: _buildDayColumn(dayIndex, cellHeight, week,
+                            hasWallpaper: hasWallpaper,
+                            transparencyFactor: t,
+                            scrollOffset: scrollOffset,
+                            screenWidth: screenWidth,
+                            headerHeight: headerHeight,
+                            timeColumnWidth: timeColumnWidth,
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1303,13 +1703,6 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
 
       final hasAlternativeCourses = sameStartCourses.length > 1;
 
-      final blurImageOffset = hasWallpaper && _wallpaperBlurEnabled && _preBlurredImage != null
-          ? Offset(
-              -(timeColumnWidth + dayColumnWidth * dayIndex + 2),
-              -(headerHeight + cellHeight * period + 2 - scrollOffset),
-            )
-          : Offset.zero;
-
       widgets.add(
         Positioned(
           top: period * cellHeight + 2,
@@ -1322,9 +1715,6 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
             isInactiveInCurrentWeek: isInactiveInCurrentWeek,
             hasWallpaper: hasWallpaper,
             transparencyFactor: transparencyFactor,
-            showBlurredBg: hasWallpaper && _wallpaperBlurEnabled && _preBlurredImage != null,
-            blurImageOffset: blurImageOffset,
-            weekForBlur: week,
           ),
         ),
       );
@@ -1380,9 +1770,6 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
     bool isInactiveInCurrentWeek = false,
     bool hasWallpaper = false,
     double transparencyFactor = 1.0,
-    bool showBlurredBg = false,
-    Offset blurImageOffset = Offset.zero,
-    int weekForBlur = 0,
   }) {
     final t = transparencyFactor;
     final courseColor = _parseColor(course.color);
@@ -1547,43 +1934,6 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
       ),
     );
     }
-    if (showBlurredBg && _preBlurredImage != null) {
-      final screenSize = MediaQuery.of(context).size;
-      return AnimatedBuilder(
-        animation: _pageController,
-        builder: (context, child) {
-          final pageNow = (_pageController.page ?? (_currentWeek - 1).toDouble())
-              .clamp(0.0, double.infinity);
-          final transitionX = (weekForBlur - 1 - pageNow) * screenSize.width;
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(5),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: OverflowBox(
-                    alignment: Alignment.topLeft,
-                    maxWidth: double.infinity,
-                    maxHeight: double.infinity,
-                    child: Transform.translate(
-                      offset: blurImageOffset + Offset(-transitionX, 0),
-                      child: SizedBox(
-                        width: screenSize.width,
-                        height: screenSize.height,
-                        child: RawImage(
-                          image: _preBlurredImage,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned.fill(child: card),
-              ],
-            ),
-          );
-        },
-      );
-    }
     return card;
   }
 
@@ -1654,39 +2004,41 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 260),
-                        curve: Curves.easeInOutCubic,
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 320),
-                              curve: Curves.easeInOutCubic,
-                              height: headerHeight,
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    courseColor.withValues(alpha: 0.24),
-                                    courseColor.withValues(alpha: 0.08),
-                                  ],
+                            duration: const Duration(milliseconds: 260),
+                            curve: Curves.easeInOutCubic,
+                            margin: const EdgeInsets.symmetric(horizontal: 24),
+                            constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                              ),
-                              child: Row(
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 320),
+                                    curve: Curves.easeInOutCubic,
+                                    height: headerHeight,
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          courseColor.withValues(alpha: 0.24),
+                                          courseColor.withValues(alpha: 0.08),
+                                        ],
+                                      ),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                    ),
+                                    child: Row(
                                 children: [
                                   AnimatedSwitcher(
                                     duration: const Duration(milliseconds: 260),
@@ -1824,7 +2176,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                   ),
                                 ],
                               ),
-                            ),
+                                ),
+                                ),
                             Flexible(
                               child: PageView.builder(
                                 controller: pageController,
@@ -1981,7 +2334,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                           decoration: BoxDecoration(
                                             color: selected
                                                 ? courseColor.withValues(alpha: 0.9)
-                                                : Colors.grey.shade300,
+                                                : Colors.white.withValues(alpha: 0.4),
                                             borderRadius: BorderRadius.circular(4),
                                           ),
                                         );
@@ -2048,23 +2401,21 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                                                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                                                       ),
-                                                      child: Container(
-                                                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                                                        constraints: const BoxConstraints(maxWidth: 340),
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.white,
-                                                          borderRadius: BorderRadius.circular(20),
-                                                          boxShadow: [
-                                                            BoxShadow(
-                                                              color: Colors.black.withValues(alpha: 0.2),
-                                                              blurRadius: 20,
-                                                              offset: const Offset(0, 10),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                        child: Padding(
-                                                          padding: const EdgeInsets.all(24),
-                                                          child: Column(
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                                                        child: ConstrainedBox(
+                                                          constraints: const BoxConstraints(maxWidth: 340),
+                                                          child: GlassDialogShell(
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: Colors.black.withValues(alpha: 0.2),
+                                                                blurRadius: 20,
+                                                                offset: const Offset(0, 10),
+                                                              ),
+                                                            ],
+                                                            child: Padding(
+                                                              padding: const EdgeInsets.all(24),
+                                                              child: Column(
                                                             mainAxisSize: MainAxisSize.min,
                                                             children: [
                                                               Container(
@@ -2096,7 +2447,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                                       child: Container(
                                                                         padding: const EdgeInsets.symmetric(vertical: 14),
                                                                         decoration: BoxDecoration(
-                                                                          color: Colors.grey.shade100,
+                                                                          color: Colors.white.withValues(alpha: 0.4),
                                                                           borderRadius: BorderRadius.circular(12),
                                                                         ),
                                                                         child: Center(
@@ -2133,6 +2484,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                                           ),
                                                         ),
                                                       ),
+                                                        ),
+                                                          ),
                                                     ),
                                                   ),
                                                 ),
@@ -2289,38 +2642,43 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                 opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
                 child: Material(
                   color: Colors.transparent,
-                  child: Container(
+                  child: SizedBox(
                     width: menuWidth,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(16),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildCourseEditMenuItem(
-                            icon: Icons.edit_outlined,
-                            label: '编辑当前课程',
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                            onTap: () => Navigator.pop(context, 'edit_current'),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 12, offset: const Offset(0, 4)),
+                            ],
                           ),
-                          Divider(height: 1, color: Colors.grey.shade200),
-                          _buildCourseEditMenuItem(
-                            icon: Icons.add_circle_outline,
-                            label: '添加同时段课程',
-                            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-                            onTap: () => Navigator.pop(context, 'add_same_slot'),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _buildCourseEditMenuItem(
+                                  icon: Icons.edit_outlined,
+                                  label: '编辑当前课程',
+                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                  onTap: () => Navigator.pop(context, 'edit_current'),
+                                ),
+                                Divider(height: 1, color: Colors.grey.shade200),
+                                _buildCourseEditMenuItem(
+                                  icon: Icons.add_circle_outline,
+                                  label: '添加同时段课程',
+                                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+                                  onTap: () => Navigator.pop(context, 'add_same_slot'),
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -2379,7 +2737,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isCompleted ? Colors.grey.shade100 : Colors.grey.shade50,
+        color: Colors.white.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
       ),
@@ -2448,8 +2806,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: isCompleted 
-                            ? Colors.grey.shade200 
-                            : priorityColor.withValues(alpha: 0.1),
+                            ? Colors.white.withValues(alpha: 0.4)
+                                            : priorityColor.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
@@ -2492,50 +2850,39 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
             ),
           ),
           if (!isCompleted)
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-              onOpened: () {
-                HapticFeedback.selectionClick();
-              },
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+            Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => HapticFeedback.selectionClick(),
+              child: BlurredPopupMenuButton<String>(
+                icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
+                items: [
+                  const BlurredPopupMenuItem(
+                    value: 'edit',
+                    icon: Icons.edit_outlined,
+                    label: '编辑',
+                    iconColor: Color(0xFF4A90E2),
+                  ),
+                  const BlurredPopupMenuItem(
+                    value: 'delete',
+                    icon: Icons.delete_outline,
+                    label: '删除',
+                    iconColor: Colors.red,
+                    textColor: Colors.red,
+                  ),
+                ],
+                onSelected: (value) async {
+                  if (value == 'edit') {
+                    await Future.delayed(const Duration(milliseconds: 200));
+                    _showEditTaskDialog(task, setDialogState);
+                  } else if (value == 'delete') {
+                    await StorageService.deleteTask(task.id);
+                    setDialogState(() {});
+                    _loadData();
+                    setState(() {});
+                    toastNotification.show(context, '任务已删除', type: ToastType.error);
+                  }
+                },
               ),
-              color: Colors.white,
-              elevation: 8,
-              onSelected: (value) async {
-                if (value == 'edit') {
-                  await Future.delayed(const Duration(milliseconds: 200));
-                  _showEditTaskDialog(task, setDialogState);
-                } else if (value == 'delete') {
-                  await StorageService.deleteTask(task.id);
-                  setDialogState(() {});
-                  _loadData();
-                  setState(() {});
-                  toastNotification.show(context, '任务已删除', type: ToastType.error);
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'edit',
-                  child: Row(
-                    children: [
-                      Icon(Icons.edit_outlined, color: Color(0xFF4A90E2), size: 18),
-                      SizedBox(width: 8),
-                      Text('编辑'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                      SizedBox(width: 8),
-                      Text('删除', style: TextStyle(color: Colors.red)),
-                    ],
-                  ),
-                ),
-              ],
             ),
         ],
       ),
@@ -2582,41 +2929,43 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          left: isSmallScreen ? 16 : 24,
-                          right: isSmallScreen ? 16 : 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        constraints: BoxConstraints(
-                          maxWidth: 400, 
-                          maxHeight: dialogMaxHeight,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            margin: EdgeInsets.only(
+                              left: isSmallScreen ? 16 : 24,
+                              right: isSmallScreen ? 16 : 24,
+                              top: keyboardHeight > 0 ? topInset + 8 : 0,
+                              bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                            constraints: BoxConstraints(
+                              maxWidth: 400,
+                              maxHeight: dialogMaxHeight,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                              ),
-                              child: Row(
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                                      ),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                    ),
+                                    child: Row(
                                 children: [
                                   Container(
                                     padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
@@ -2650,7 +2999,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                   ),
                                 ],
                               ),
-                            ),
+                                    ),
+                                  ),
                             Expanded(
                               child: SingleChildScrollView(
                                 physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
@@ -2665,7 +3015,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                         labelText: '任务名称',
                                         prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7)),
                                         filled: true,
-                                        fillColor: Colors.grey.shade50,
+                                        fillColor: Colors.white.withValues(alpha: 0.4),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
                                           borderSide: BorderSide(color: Colors.grey.shade200),
@@ -2692,23 +3042,19 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 12),
                                       decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
+                                        color: Colors.white.withValues(alpha: 0.4),
                                         borderRadius: BorderRadius.circular(12),
                                         border: Border.all(color: Colors.grey.shade200),
                                       ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<String>(
-                                          value: type,
-                                          isExpanded: true,
-                                          icon: Icon(Icons.expand_more, color: courseColor),
-                                          dropdownColor: Colors.white,
-                                          borderRadius: BorderRadius.circular(16),
-                                          items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                            value: e,
-                                            child: Text(e),
-                                          )).toList(),
-                                          onChanged: (v) => setState(() => type = v!),
-                                        ),
+                                      child: BlurredDropdown<String>(
+                                        value: type,
+                                        isExpanded: true,
+                                        icon: Icon(Icons.expand_more, color: courseColor),
+                                        items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
+                                          value: e,
+                                          child: Text(e),
+                                        )).toList(),
+                                        onChanged: (v) => setState(() => type = v!),
                                       ),
                                     ),
                                     const SizedBox(height: 16),
@@ -2738,7 +3084,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                       child: Container(
                                         padding: const EdgeInsets.all(16),
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade50,
+                                          color: Colors.white.withValues(alpha: 0.4),
                                           borderRadius: BorderRadius.circular(12),
                                           border: Border.all(color: Colors.grey.shade200),
                                         ),
@@ -2785,7 +3131,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                               margin: const EdgeInsets.symmetric(horizontal: 4),
                                               padding: const EdgeInsets.symmetric(vertical: 10),
                                               decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.grey.shade50,
+                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.4),
                                                 borderRadius: BorderRadius.circular(10),
                                                 border: Border.all(
                                                   color: isSelected ? priorityColor : Colors.grey.shade200,
@@ -2813,7 +3159,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                         labelText: '备注（可选）',
                                         prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7)),
                                         filled: true,
-                                        fillColor: Colors.grey.shade50,
+                                        fillColor: Colors.white.withValues(alpha: 0.4),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
                                           borderSide: BorderSide(color: Colors.grey.shade200),
@@ -2877,7 +3223,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                             ),
                           ],
                         ),
-                      ),
+                          ),
                     ),
                   ),
                 ),
@@ -2953,41 +3299,43 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          left: isSmallScreen ? 16 : 24,
-                          right: isSmallScreen ? 16 : 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        constraints: BoxConstraints(
-                          maxWidth: 400, 
-                          maxHeight: dialogMaxHeight,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            margin: EdgeInsets.only(
+                              left: isSmallScreen ? 16 : 24,
+                              right: isSmallScreen ? 16 : 24,
+                              top: keyboardHeight > 0 ? topInset + 8 : 0,
+                              bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                            constraints: BoxConstraints(
+                              maxWidth: 400,
+                              maxHeight: dialogMaxHeight,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                              ),
-                              child: Row(
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [courseColor, courseColor.withValues(alpha: 0.8)],
+                                      ),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                    ),
+                                    child: Row(
                                 children: [
                                   Container(
                                     padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
@@ -3021,7 +3369,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                   ),
                                 ],
                               ),
-                            ),
+                                    ),
+                                  ),
                             Expanded(
                               child: SingleChildScrollView(
                                 physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
@@ -3035,7 +3384,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                         labelText: '任务名称',
                                         prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
                                         filled: true,
-                                        fillColor: Colors.grey.shade50,
+                                        fillColor: Colors.white.withValues(alpha: 0.4),
                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -3070,23 +3419,19 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                     Container(
                                       padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 10 : 12),
                                       decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
+                                        color: Colors.white.withValues(alpha: 0.4),
                                         borderRadius: BorderRadius.circular(12),
                                         border: Border.all(color: Colors.grey.shade200),
                                       ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<String>(
-                                          value: type,
-                                          isExpanded: true,
-                                          icon: Icon(Icons.expand_more, color: courseColor, size: isSmallScreen ? 18 : 20),
-                                          dropdownColor: Colors.white,
-                                          borderRadius: BorderRadius.circular(16),
-                                          items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                            value: e, 
-                                            child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
-                                          )).toList(),
-                                          onChanged: (v) => setState(() => type = v!),
-                                        ),
+                                      child: BlurredDropdown<String>(
+                                        value: type,
+                                        isExpanded: true,
+                                        icon: Icon(Icons.expand_more, color: courseColor, size: isSmallScreen ? 18 : 20),
+                                        items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
+                                          value: e, 
+                                          child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
+                                        )).toList(),
+                                        onChanged: (v) => setState(() => type = v!),
                                       ),
                                     ),
                                     SizedBox(height: isSmallScreen ? 12 : 16),
@@ -3116,7 +3461,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                       child: Container(
                                         padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade50,
+                                          color: Colors.white.withValues(alpha: 0.4),
                                           borderRadius: BorderRadius.circular(12),
                                           border: Border.all(color: Colors.grey.shade200),
                                         ),
@@ -3169,7 +3514,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                               margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
                                               padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
                                               decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.grey.shade50,
+                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.4),
                                                 borderRadius: BorderRadius.circular(10),
                                                 border: Border.all(
                                                   color: isSelected ? priorityColor : Colors.grey.shade200,
@@ -3198,7 +3543,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                         labelText: '备注（可选）',
                                         prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
                                         filled: true,
-                                        fillColor: Colors.grey.shade50,
+                                        fillColor: Colors.white.withValues(alpha: 0.4),
                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -3273,7 +3618,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                             ),
                           ],
                         ),
-                      ),
+                          ),
                     ),
                   ),
                 ),
@@ -3331,7 +3676,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
       duration: const Duration(milliseconds: 150),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: Colors.white.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: Colors.grey.shade200,
@@ -3342,7 +3687,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
           Container(
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
-              color: Colors.grey.shade200,
+              color: Colors.white.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(5),
             ),
             child: Icon(
@@ -3400,6 +3745,335 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
         child: content,
       ),
     );
+  }
+
+  /// 视频壁纸设置底部弹窗
+  void _showVideoWallpaperSettings() {
+    if (_videoController == null || !_videoController!.value.isInitialized) return;
+    bool isDragging = false;
+    // 拖拽中的临时进度，避免视频 position 反馈干扰跟手
+    double? dragProgress;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => Container(
+          margin: const EdgeInsets.all(16),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 25,
+                      spreadRadius: 2,
+                      offset: const Offset(0, -4),
+                    ),
+                    BoxShadow(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      blurRadius: 0,
+                      offset: const Offset(0, -1),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 标题行
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              '视频壁纸设置',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.pop(context),
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 第一行：播放进度控制（暂停按钮 + 当前时间 + 进度条 + 总时长）
+                      // 进度条位置固定，不随读秒跳动（不监听视频 position 实时更新）
+                      // 只在拖拽或点击时更新进度
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            // 暂停/播放按钮（单独监听视频状态）
+                            AnimatedBuilder(
+                              animation: _videoController!,
+                              builder: (context, _) {
+                                final isPlaying = _videoController!.value.isPlaying;
+                                return GestureDetector(
+                                  onTap: () {
+                                    if (isPlaying) {
+                                      _videoController!.pause();
+                                    } else {
+                                      _videoController!.play();
+                                    }
+                                  },
+                                  child: Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                      color: const Color(0xFF4A90E2),
+                                      size: 22,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 12),
+                            // 当前时间（固定宽度，避免秒数跳动挤压进度条左侧边界）
+                            SizedBox(
+                              width: 42,
+                              child: AnimatedBuilder(
+                                animation: _videoController!,
+                                builder: (context, _) {
+                                  final position = _videoController!.value.position;
+                                  String fmt(Duration d) {
+                                    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+                                    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+                                    return '$m:$s';
+                                  }
+                                  return Text(
+                                    fmt(position),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF4A90E2),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            // 胶囊形进度条（占据剩余空间，长度随页面尺寸自适应）
+                            // 监听视频 position 以跟随播放进度（左侧秒数已用固定宽度，不会跳动）
+                            Expanded(
+                              child: AnimatedBuilder(
+                                animation: _videoController!,
+                                builder: (ctx, _) {
+                                  return LayoutBuilder(
+                                    builder: (ctx, constraints) {
+                                      final trackWidth = constraints.maxWidth;
+                                      // 获取当前进度（拖拽中用临时值，否则用视频实际进度）
+                                      final durMs = _videoController!.value.duration.inMilliseconds.toDouble().clamp(1, double.infinity);
+                                      final posMs = _videoController!.value.position.inMilliseconds.toDouble();
+                                      final videoProgress = (posMs / durMs).clamp(0.0, 1.0);
+                                      final displayProgress = isDragging ? (dragProgress ?? videoProgress) : videoProgress;
+                                      return GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onHorizontalDragStart: (details) {
+                                          // 按住任意位置即放大并可拖动
+                                          final localX = details.localPosition.dx;
+                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
+                                          setSheetState(() {
+                                            isDragging = true;
+                                            dragProgress = ratio;
+                                          });
+                                        },
+                                        onHorizontalDragUpdate: (details) {
+                                          // 手指拖动距离与进度条移动距离一致
+                                          final localX = details.localPosition.dx;
+                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
+                                          setSheetState(() {
+                                            dragProgress = ratio;
+                                          });
+                                        },
+                                        onHorizontalDragEnd: (_) {
+                                          // 拖拽结束后才 seek
+                                          if (dragProgress != null) {
+                                            _videoController!.seekTo(Duration(milliseconds: (dragProgress! * durMs).toInt()));
+                                          }
+                                          setSheetState(() {
+                                            isDragging = false;
+                                            dragProgress = null;
+                                          });
+                                        },
+                                        onTapDown: (details) {
+                                          final localX = details.localPosition.dx;
+                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
+                                          _videoController!.seekTo(Duration(milliseconds: (ratio * durMs).toInt()));
+                                        },
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(isDragging ? 6 : 3),
+                                          child: Stack(
+                                            children: [
+                                              // 背景轨道
+                                              Container(
+                                                height: isDragging ? 12 : 6,
+                                                color: Colors.grey.withValues(alpha: 0.3),
+                                              ),
+                                              // 已播放部分（从左向右增长）
+                                              Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Container(
+                                                  height: isDragging ? 12 : 6,
+                                                  width: trackWidth * displayProgress,
+                                                  color: const Color(0xFF4A90E2),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            // 总时长（固定宽度，避免右侧边界跳动）
+                            SizedBox(
+                              width: 42,
+                              child: Text(
+                                () {
+                                  final duration = _videoController!.value.duration;
+                                  final m = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+                                  final s = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+                                  return '$m:$s';
+                                }(),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // 第二行：两个圆角矩形（与 showAddOptions 统一样式）
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            // 左侧：启用动态壁纸声音
+                            Expanded(
+                              child: _buildAddOptionCard(
+                                icon: _videoSoundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                                label: _videoSoundEnabled ? '声音已开启' : '启用声音',
+                                color: _videoSoundEnabled ? Colors.green : Colors.grey,
+                                onTap: () async {
+                                  final newValue = !_videoSoundEnabled;
+                                  _videoSoundEnabled = newValue;
+                                  _videoController?.setVolume(newValue ? 1 : 0);
+                                  final prefs = await SharedPreferences.getInstance();
+                                  await prefs.setBool('wallpaper_video_sound', newValue);
+                                  setSheetState(() {});
+                                  setState(() {});
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            // 右侧：当前帧设为壁纸
+                            Expanded(
+                              child: _buildAddOptionCard(
+                                icon: Icons.image_outlined,
+                                label: '当前帧设为壁纸',
+                                color: const Color(0xFF4A90E2),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  _setCurrentFrameAsWallpaper();
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 将视频当前帧捕获并设置为静态图片壁纸
+  Future<void> _setCurrentFrameAsWallpaper() async {
+    final ctx = _videoRepaintKey.currentContext;
+    if (ctx == null) {
+      if (mounted) {
+        toastNotification.show(context, '无法捕获当前帧', type: ToastType.error);
+      }
+      return;
+    }
+    try {
+      final boundary = ctx.findRenderObject() as dynamic;
+      final image = await boundary.toImage(pixelRatio: 1.0);
+      final byteData = await image.toByteData(format: ImageByteFormat.png);
+      if (byteData == null) throw Exception('编码失败');
+      final bytes = byteData.buffer.asUint8List();
+
+      // 保存为文件
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/wallpaper_frame_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+
+      // 更新壁纸设置
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('wallpaper_path', filePath);
+      await prefs.setString('wallpaper_type', 'image');
+
+      // 同步添加到壁纸列表（最多保留5个，超出剔除最后一个）
+      final recentPaths = List<String>.from(
+          prefs.getStringList('wallpaper_recent_paths') ?? []);
+      recentPaths.insert(0, filePath);
+      if (recentPaths.length > 5) {
+        recentPaths.removeLast();
+      }
+      await prefs.setStringList('wallpaper_recent_paths', recentPaths);
+
+      // 先用捕获的帧作为过渡，再重新加载壁纸
+      _videoFirstFrameBytes = bytes;
+      _wallpaperBytes = bytes;
+      await _loadWallpaper();
+
+      if (mounted) {
+        toastNotification.show(context, '当前帧已设为壁纸', type: ToastType.success);
+      }
+    } catch (e) {
+      if (mounted) {
+        toastNotification.show(context, '设置失败', type: ToastType.error);
+      }
+    }
   }
 
   void showAddOptions() {
@@ -3576,36 +4250,35 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    constraints: BoxConstraints(
-                      maxWidth: 360, 
-                      maxHeight: screenHeight * 0.6
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [const Color(0xFF4A90E2), const Color(0xFF5BA0F2)],
-                            ),
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 360,
+                        maxHeight: screenHeight * 0.6
+                      ),
+                      child: GlassDialogShell(
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                          child: Row(
+                        ],
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [const Color(0xFF4A90E2), const Color(0xFF5BA0F2)],
+                                  ),
+                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                ),
+                                child: Row(
                             children: [
                               Container(
                                 padding: const EdgeInsets.all(10),
@@ -3639,7 +4312,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                               ),
                             ],
                           ),
-                        ),
+                            ),
+                              ),
                         if (allCourses.isEmpty)
                           Padding(
                             padding: const EdgeInsets.all(40),
@@ -3677,7 +4351,7 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade50,
+                                    color: Colors.white.withValues(alpha: 0.4),
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(color: Colors.grey.shade200),
                                   ),
@@ -3712,6 +4386,8 @@ class TimetableScreenState extends State<TimetableScreen> with TickerProviderSta
                           ),
                       ],
                     ),
+                        ),
+                      ),
                   ),
                 ),
               ),
@@ -4275,4 +4951,22 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
       ),
     );
   }
+}
+
+class _CourseBlurClipper extends CustomClipper<Path> {
+  final List<RRect> rRects;
+
+  _CourseBlurClipper(this.rRects);
+
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    for (final r in rRects) {
+      path.addRRect(r);
+    }
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_CourseBlurClipper old) => true;
 }

@@ -37,6 +37,8 @@ dependencies:
   image: ^4.1.0
   timezone: ^0.9.4
   flutter_timezone: ^4.1.0
+  video_player: ^2.9.2
+  home_widget: ^0.9.3
 
 dev_dependencies:
   flutter_test:

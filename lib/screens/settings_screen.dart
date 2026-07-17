@@ -3,10 +3,13 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../dialogs/ai_consent_dialog.dart';
 import '../utils/storage.dart';
+import 'timetable_screen.dart';
 import '../widgets/animated_calendar.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
@@ -14,6 +17,7 @@ import '../services/auth_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/glm_service.dart';
 import '../services/notification_service.dart';
+import '../widgets/glass_dialog.dart';
 
 enum _CloudSyncAction {
   syncFromCloud,
@@ -99,7 +103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<_CustomVisionMode>(
@@ -186,21 +190,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: StatefulBuilder(
                     builder: (builderCtx, setDialogState) {
-                      return Container(
+                      return SizedBox(
                         width: 320,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -215,7 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade50,
+                                color: Colors.white.withValues(alpha: 0.4),
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Row(
@@ -294,6 +288,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                             () async {
                                               newWallpaperSelected = true;
                                               await prefs.setString('wallpaper_path', path);
+                                              final ext = path.toLowerCase().split('.').last;
+                                              final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
+                                              await prefs.setString('wallpaper_type', isVideo ? 'video' : 'image');
                                               if (!_wallpaperEnabled) {
                                                 await prefs.setBool('wallpaper_enabled', true);
                                                 localEnabled = true;
@@ -305,6 +302,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                 _wallpaperPath = path;
                                               });
                                               setDialogState(() {});
+                                              // 切换到动态壁纸时提示功耗
+                                              if (isVideo && mounted) {
+                                                toastNotification.show(
+                                                  context,
+                                                  '视频壁纸会带来更高的功耗',
+                                                  type: ToastType.info,
+                                                );
+                                              }
                                             }();
                                           },
                                           onLongPress: () {
@@ -322,9 +327,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                 fit: StackFit.expand,
                                                 children: [
                                                   file.existsSync()
-                                                      ? Image.file(file, fit: BoxFit.cover)
+                                                      ? Builder(builder: (context) {
+  final ext = file.path.toLowerCase().split('.').last;
+  final isVid = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
+  if (isVid) {
+    return _VideoThumbnail(path: file.path);
+  }
+  return Image.file(file, fit: BoxFit.cover);
+})
                                                       : Container(
-                                                          color: Colors.grey.shade100,
+                                                          color: Colors.white.withValues(alpha: 0.4),
                                                           child: Icon(Icons.broken_image, color: Colors.grey.shade400),
                                                         ),
                                                   Container(
@@ -333,14 +345,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                       border: Border.all(
                                                         color: isActive && localEnabled
                                                             ? const Color(0xFF4A90E2)
-                                                            : Colors.grey.shade300,
+                                                            : Colors.white.withValues(alpha: 0.4),
                                                         width: isActive && localEnabled ? 2.5 : 1,
                                                       ),
                                                     ),
                                                   ),
                                                   if (!localEnabled)
                                                     Container(
-                                                      color: Colors.white.withValues(alpha: 0.6),
+                                                      color: Colors.white.withValues(alpha: 0.4),
                                                     ),
                                                   if (dialogDeleteMode)
                                                     Positioned(
@@ -383,20 +395,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           }
                                           if (!localEnabled) return;
                                           () async {
-                                            final ImagePicker picker = ImagePicker();
-                                            final XFile? image = await picker.pickImage(
-                                              source: ImageSource.gallery,
-                                              maxWidth: 1920,
-                                              imageQuality: 90,
+                                            final result = await FilePicker.platform.pickFiles(
+                                              type: FileType.media,
                                             );
-                                            if (image != null) {
+                                            if (result != null && result.files.single.path != null) {
+                                              final filePath = result.files.single.path!;
+                                              final extension = filePath.toLowerCase().split('.').last;
+                                              final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(extension);
+                                              await prefs.setString('wallpaper_type', isVideo ? 'video' : 'image');
                                               newWallpaperSelected = true;
-                                              dialogPaths.insert(0, image.path);
+                                              dialogPaths.insert(0, filePath);
                                               if (dialogPaths.length > 5) {
                                                 dialogPaths.removeLast();
                                               }
                                               await prefs.setStringList('wallpaper_recent_paths', dialogPaths);
-                                              await prefs.setString('wallpaper_path', image.path);
+                                              await prefs.setString('wallpaper_path', filePath);
                                               if (!_wallpaperEnabled) {
                                                 await prefs.setBool('wallpaper_enabled', true);
                                                 localEnabled = true;
@@ -405,9 +418,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                 });
                                               }
                                               setState(() {
-                                                _wallpaperPath = image.path;
+                                                _wallpaperPath = filePath;
                                               });
                                               setDialogState(() {});
+                                              // 切换到动态壁纸时提示功耗
+                                              if (isVideo && mounted) {
+                                                toastNotification.show(
+                                                  context,
+                                                  '视频壁纸会带来更高的功耗',
+                                                  type: ToastType.info,
+                                                );
+                                              }
                                             }
                                           }();
                                         },
@@ -420,7 +441,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                             fit: StackFit.expand,
                                             children: [
                                               Container(
-                                                color: Colors.grey.shade100,
+                                                color: Colors.white.withValues(alpha: 0.4),
                                                 child: Column(
                                                   mainAxisAlignment: MainAxisAlignment.center,
                                                   children: [
@@ -433,12 +454,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                               Container(
                                                 decoration: BoxDecoration(
                                                   borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: Colors.grey.shade300),
+                                                  border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
                                                 ),
                                               ),
                                               if (!localEnabled)
                                                 Container(
-                                                  color: Colors.white.withValues(alpha: 0.6),
+                                                  color: Colors.white.withValues(alpha: 0.4),
                                                 ),
                                             ],
                                           ),
@@ -460,7 +481,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -468,6 +489,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
+                        ),
                         ),
                       );
                     },
@@ -484,6 +506,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await prefs.setBool('wallpaper_enabled', false);
       if (mounted) setState(() {});
     }
+    // 壁纸设置可能变更，标记课表页需要在切回时刷新壁纸
+    TimetableScreenState.markNeedsRefresh();
   }
 
   void _selectWallpaperOpacity() {
@@ -513,21 +537,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return Container(
+                      return SizedBox(
                         width: 280,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -578,7 +592,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade50,
+                                color: Colors.white.withValues(alpha: 0.4),
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Row(
@@ -614,7 +628,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -630,6 +644,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         _wallpaperOpacity = selectedOpacity;
                                         _wallpaperBlurEnabled = localBlur;
                                       });
+                                      // 透明度/模糊变更，标记课表页刷新
+                                      TimetableScreenState.markNeedsRefresh();
                                       if (mounted) Navigator.pop(context);
                                     },
                                     style: ElevatedButton.styleFrom(
@@ -646,6 +662,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
+                        ),
                         ),
                       );
                     },
@@ -754,17 +771,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _buildSettingsItem(
                             icon: Icons.view_week_outlined,
                             title: '当前周次',
-                            subtitle: '第 ${StorageService.getCurrentWeek()} 周',
+                            subtitle: StorageService.isBeforeSemesterStart()
+                                ? '本学期尚未开始'
+                                : StorageService.getCurrentWeek() > _semesterWeeks
+                                    ? '本学期已结束'
+                                    : '第 ${StorageService.getCurrentWeek()} 周',
                             trailing: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                                color: StorageService.isHoliday()
+                                    ? Colors.grey.withValues(alpha: 0.15)
+                                    : const Color(0xFF4A90E2).withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
-                                '第 ${StorageService.getCurrentWeek()} 周',
-                                style: const TextStyle(
-                                  color: Color(0xFF4A90E2),
+                                StorageService.isBeforeSemesterStart()
+                                    ? '未开始'
+                                    : StorageService.getCurrentWeek() > _semesterWeeks
+                                        ? '已结束'
+                                        : '第 ${StorageService.getCurrentWeek()} 周',
+                                style: TextStyle(
+                                  color: StorageService.isHoliday()
+                                      ? Colors.grey.shade600
+                                      : const Color(0xFF4A90E2),
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -1201,29 +1230,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return AnimatedContainer(
+                      return AnimatedPadding(
                         duration: const Duration(milliseconds: 200),
                         curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
+                        padding: EdgeInsets.only(
                           left: 24,
                           right: 24,
                           top: keyboardHeight > 0 ? topInset + 8 : 0,
                           bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                         ),
-                        padding: const EdgeInsets.all(24),
-                        constraints: BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+                        child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              curve: Curves.easeOut,
+                              padding: const EdgeInsets.all(24),
+                              constraints: BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(24),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Row(
@@ -1276,7 +1308,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.grey.shade200,
+                                              color: Colors.white.withValues(alpha: 0.4),
                                             ),
                                           ),
                                           Padding(
@@ -1292,7 +1324,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.grey.shade200,
+                                              color: Colors.white.withValues(alpha: 0.4),
                                             ),
                                           ),
                                         ],
@@ -1316,7 +1348,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.grey.shade200,
+                                              color: Colors.white.withValues(alpha: 0.4),
                                             ),
                                           ),
                                           Padding(
@@ -1332,7 +1364,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.grey.shade200,
+                                              color: Colors.white.withValues(alpha: 0.4),
                                             ),
                                           ),
                                         ],
@@ -1389,7 +1421,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                   ),
                                 ),
                                 child: const Text('关闭'),
@@ -1397,6 +1429,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
+                            ),
                       );
                     },
                   ),
@@ -1421,10 +1454,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4A90E2).withValues(alpha: 0.1) : Colors.grey.shade50,
+          color: isSelected ? const Color(0xFF4A90E2).withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade200,
+            color: isSelected ? const Color(0xFF4A90E2) : Colors.white.withValues(alpha: 0.4),
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -1435,7 +1468,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               decoration: BoxDecoration(
                 color: isSelected
                     ? const Color(0xFF4A90E2).withValues(alpha: 0.2)
-                    : Colors.grey.shade200,
+                    : Colors.white.withValues(alpha: 0.4),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
@@ -1493,10 +1526,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: isSelected ? color.withValues(alpha: 0.1) : Colors.grey.shade50,
+            color: isSelected ? color.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.4),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? color : Colors.grey.shade200,
+              color: isSelected ? color : Colors.white.withValues(alpha: 0.4),
               width: isSelected ? 2 : 1,
             ),
           ),
@@ -1668,29 +1701,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: AnimatedContainer(
+                  child: AnimatedPadding(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
-                    margin: EdgeInsets.only(
+                    padding: EdgeInsets.only(
                       left: 24,
                       right: 24,
                       top: keyboardHeight > 0 ? topInset + 8 : 0,
                       bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                     ),
-                    padding: const EdgeInsets.all(24),
-                    constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: StatefulBuilder(
+                    child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          padding: const EdgeInsets.all(24),
+                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: StatefulBuilder(
                       builder: (context, setDialogState) {
                         return SingleChildScrollView(
                           child: Column(
@@ -1713,7 +1749,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: 'API 地址',
                                   hintText: 'https://api.example.com/v1/chat/completions',
                                   filled: true,
-                                  fillColor: Colors.grey.shade50,
+                                  fillColor: Colors.white.withValues(alpha: 0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
@@ -1724,7 +1760,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: 'API Key',
                                   hintText: '请输入API密钥',
                                   filled: true,
-                                  fillColor: Colors.grey.shade50,
+                                  fillColor: Colors.white.withValues(alpha: 0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
@@ -1735,7 +1771,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: '模型名称',
                                   hintText: 'gpt-4o-mini',
                                   filled: true,
-                                  fillColor: Colors.grey.shade50,
+                                  fillColor: Colors.white.withValues(alpha: 0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
@@ -1813,7 +1849,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         padding: const EdgeInsets.symmetric(vertical: 14),
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          side: BorderSide(color: Colors.grey.shade300),
+                                          side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                         ),
                                       ),
                                       child: const Text('取消'),
@@ -1838,12 +1874,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         );
                       },
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -1888,47 +1925,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: AnimatedContainer(
+                  child: AnimatedPadding(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
-                    margin: EdgeInsets.only(
+                    padding: EdgeInsets.only(
                       left: 24,
                       right: 24,
                       top: keyboardHeight > 0 ? topInset + 8 : 0,
                       bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                     ),
-                    padding: const EdgeInsets.all(24),
-                    constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF00C853), Color(0xFF69F0AE)],
+                    child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          padding: const EdgeInsets.all(24),
+                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
                               ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.cloud_outlined,
-                              size: 32,
-                              color: Colors.white,
-                            ),
+                            ],
                           ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Opacity(
+                                  opacity: 0.82,
+                                  child: Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [Color(0xFF00C853), Color(0xFF69F0AE)],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Icon(
+                                      Icons.cloud_outlined,
+                                      size: 32,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
                           const SizedBox(height: 16),
                           const Text(
                             '混元 Secret 配置',
@@ -1953,7 +1996,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               labelText: 'SecretId',
                               hintText: '请输入腾讯云 SecretId',
                               filled: true,
-                              fillColor: Colors.grey.shade50,
+                              fillColor: Colors.white.withValues(alpha: 0.4),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -1967,7 +2010,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               labelText: 'SecretKey',
                               hintText: '请输入腾讯云 SecretKey',
                               filled: true,
-                              fillColor: Colors.grey.shade50,
+                              fillColor: Colors.white.withValues(alpha: 0.4),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -1983,7 +2026,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                   ),
                                   child: const Text('取消'),
@@ -2038,6 +2081,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
+                          ),
                   ),
                 ),
               ),
@@ -2101,47 +2145,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: AnimatedContainer(
+                  child: AnimatedPadding(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
-                    margin: EdgeInsets.only(
+                    padding: EdgeInsets.only(
                       left: 24,
                       right: 24,
                       top: keyboardHeight > 0 ? topInset + 8 : 0,
                       bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                     ),
-                    padding: const EdgeInsets.all(24),
-                    constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                        Container(
-                          width: 64,
-                          height: 64,
+                    child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          padding: const EdgeInsets.all(24),
+                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
-                            ),
-                            borderRadius: BorderRadius.circular(16),
+                            color: Colors.white.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 20,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
                           ),
-                          child: const Icon(
-                            Icons.auto_awesome,
-                            size: 32,
-                            color: Colors.white,
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                        Opacity(
+                          opacity: 0.82,
+                          child: Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Icon(
+                              Icons.auto_awesome,
+                              size: 32,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -2167,14 +2217,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           decoration: InputDecoration(
                             hintText: '请输入API Key',
                             filled: true,
-                            fillColor: Colors.grey.shade50,
+                            fillColor: Colors.white.withValues(alpha: 0.4),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
+                              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                             ),
                             enabledBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
+                              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -2192,7 +2242,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -2243,6 +2293,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
+                          ),
                   ),
                 ),
               ),
@@ -2274,30 +2325,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
+                  child: SizedBox(
                     width: dialogWidth,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: AnimatedCalendarDatePicker(
-                      initialDate: _semesterStartDate,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2030),
-                      onDateChanged: (date) async {
-                        await StorageService.setSemesterStartDate(date);
-                        setState(() {
-                          _semesterStartDate = date;
-                        });
-                        Navigator.pop(context);
-                      },
+                    child: GlassDialogShell(
+                      child: AnimatedCalendarDatePicker(
+                        initialDate: _semesterStartDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                        onDateChanged: (date) async {
+                          await StorageService.setSemesterStartDate(date);
+                          setState(() {
+                            _semesterStartDate = date;
+                          });
+                          Navigator.pop(context);
+                        },
+                      ),
                     ),
                   ),
                 ),
@@ -2332,21 +2374,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return Container(
+                      return SizedBox(
                         width: 280,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -2405,7 +2437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -2434,6 +2466,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
+                        ),
                         ),
                       );
                     },
@@ -2481,21 +2514,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: StatefulBuilder(
                     builder: (context, setDialogState) {
-                      return Container(
+                      return SizedBox(
                         width: 280,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -2554,7 +2577,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -2590,6 +2613,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
+                        ),
                         ),
                       );
                     },
@@ -2634,24 +2658,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
-                        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
                             Row(
                               children: [
                                 Container(
@@ -2687,27 +2702,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       margin: const EdgeInsets.only(bottom: 8),
                                       padding: const EdgeInsets.all(12),
                                       decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
+                                        color: Colors.white.withValues(alpha: 0.4),
                                         borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(color: Colors.grey.shade200),
+                                        border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
                                       ),
                                       child: Row(
                                         children: [
-                                          Container(
-                                            width: 32,
-                                            height: 32,
-                                            decoration: BoxDecoration(
-                                              gradient: const LinearGradient(
-                                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                                          Opacity(
+                                            opacity: 0.82,
+                                            child: Container(
+                                              width: 32,
+                                              height: 32,
+                                              decoration: BoxDecoration(
+                                                gradient: const LinearGradient(
+                                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                                                ),
+                                                borderRadius: BorderRadius.circular(8),
                                               ),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Center(
-                                              child: Text(
-                                                '${index + 1}',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.bold,
+                                              child: Center(
+                                                child: Text(
+                                                  '${index + 1}',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                               ),
                                             ),
@@ -2754,7 +2772,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       padding: const EdgeInsets.symmetric(vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                       ),
                                     ),
                                     child: const Text('取消'),
@@ -2786,6 +2804,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
+                            ),
+                          ),
                       ),
                     ),
                   ),
@@ -2818,9 +2838,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
         ),
         child: Text(
           value,
@@ -2889,10 +2909,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         decoration: BoxDecoration(
                           color: isSelected
                               ? const Color(0xFF4A90E2).withValues(alpha: 0.12)
-                              : Colors.grey.shade100,
+                              : Colors.white.withValues(alpha: 0.4),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade300,
+                            color: isSelected ? const Color(0xFF4A90E2) : Colors.white.withValues(alpha: 0.4),
                             width: isSelected ? 1.5 : 1,
                           ),
                         ),
@@ -2960,7 +2980,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: Colors.grey.shade300),
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                 ),
               ),
               child: const Text('取消'),
@@ -3042,25 +3062,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       scale: Tween<double>(begin: 0.92, end: 1.0).animate(
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(20),
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                             Text(
                               title,
                               style: const TextStyle(
@@ -3079,7 +3090,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Row(
                               children: actionsBuilder(dialogContext, setDialogState),
                             ),
-                          ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -3111,21 +3124,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: GlassDialogShell(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         ClipRRect(
@@ -3191,11 +3194,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -3219,27 +3223,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: GlassDialogShell(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.red.shade50,
+                            color: Colors.red.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Icon(
@@ -3275,7 +3269,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -3300,11 +3294,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -3403,45 +3398,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
-                      child: AnimatedContainer(
+                      child: AnimatedPadding(
                         duration: const Duration(milliseconds: 200),
                         curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
+                        padding: EdgeInsets.only(
                           left: 24,
                           right: 24,
                           top: keyboardHeight > 0 ? topInset + 8 : 0,
                           bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
                         ),
-                        constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 64,
-                                height: 64,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF4A90E2),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: const Icon(
-                                  Icons.email_rounded,
-                                  size: 32,
-                                  color: Colors.white,
-                                ),
+                        child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              curve: Curves.easeOut,
+                              constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(24),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ],
                               ),
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Opacity(
+                                      opacity: 0.82,
+                                      child: Container(
+                                        width: 64,
+                                        height: 64,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF4A90E2),
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                        child: const Icon(
+                                          Icons.email_rounded,
+                                          size: 32,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
                               const SizedBox(height: 16),
                               const Text(
                                 '邮箱账号',
@@ -3471,6 +3472,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   hintText: '请输入邮箱地址',
                                   errorText: email.isEmpty || isEmailValid ? null : '邮箱格式不正确',
                                   prefixIcon: const Icon(Icons.email_outlined),
+                                  filled: true,
+                                  fillColor: Colors.white.withValues(alpha: 0.4),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
@@ -3496,6 +3499,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     },
                                     icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
                                   ),
+                                  filled: true,
+                                  fillColor: Colors.white.withValues(alpha: 0.4),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
@@ -3511,22 +3516,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   enabled: !isSubmitting,
                                   onChanged: (_) => setDialogState(() {}),
                                   decoration: InputDecoration(
-                                    hintText: '请再次输入密码',
-                                    errorText: confirmPassword.isEmpty || confirmPassword == password ? null : '两次密码输入不一致',
-                                    prefixIcon: const Icon(Icons.lock_reset_rounded),
-                                    suffixIcon: IconButton(
-                                      onPressed: () {
-                                        setDialogState(() {
-                                          obscureConfirmPassword = !obscureConfirmPassword;
-                                        });
-                                      },
-                                      icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
+                                      hintText: '请再次输入密码',
+                                      errorText: confirmPassword.isEmpty || confirmPassword == password ? null : '两次密码输入不一致',
+                                      prefixIcon: const Icon(Icons.lock_reset_rounded),
+                                      suffixIcon: IconButton(
+                                        onPressed: () {
+                                          setDialogState(() {
+                                            obscureConfirmPassword = !obscureConfirmPassword;
+                                          });
+                                        },
+                                        icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
+                                      ),
+                                      filled: true,
+                                      fillColor: Colors.white.withValues(alpha: 0.4),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                                     ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                  ),
                                 ),
                               ],
                               const SizedBox(height: 20),
@@ -3569,6 +3576,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ],
                           ),
                         ),
+                              ),
                       ),
                     ),
                   ),
@@ -3763,37 +3771,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                         CurvedAnimation(parent: animation, curve: Curves.easeOut),
                       ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
-                        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
+                          child: GlassDialogShell(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
                                 ),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: const Icon(
-                                Icons.library_add_check_rounded,
-                                size: 32,
-                                color: Colors.white,
+                                child: const Icon(
+                                  Icons.library_add_check_rounded,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 16),
@@ -3876,7 +3878,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       padding: const EdgeInsets.symmetric(vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                       ),
                                     ),
                                     child: const Text('取消'),
@@ -3903,6 +3905,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
+                            ),
+                          ),
                       ),
                     ),
                   ),
@@ -3933,37 +3937,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 400),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                        Opacity(
+                          opacity: 0.82,
+                          child: Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Icon(
-                            Icons.cloud_upload_rounded,
-                            size: 32,
-                            color: Colors.white,
+                            child: const Icon(
+                              Icons.cloud_upload_rounded,
+                              size: 32,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -3993,7 +3991,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                   ),
                                 ),
                                 child: const Text('暂不上传'),
@@ -4018,11 +4016,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -4046,37 +4046,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                        Opacity(
+                          opacity: 0.82,
+                          child: Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Icon(
-                            Icons.cloud_done_rounded,
-                            size: 32,
-                            color: Colors.white,
+                            child: const Icon(
+                              Icons.cloud_done_rounded,
+                              size: 32,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -4123,7 +4117,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                               ),
                             ),
                             child: const Text('稍后再说'),
@@ -4131,11 +4125,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -4162,37 +4158,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                        Opacity(
+                          opacity: 0.82,
+                          child: Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Icon(
-                            Icons.list_alt_rounded,
-                            size: 32,
-                            color: Colors.white,
+                            child: const Icon(
+                              Icons.list_alt_rounded,
+                              size: 32,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -4246,7 +4236,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                               ),
                             ),
                             child: const Text('取消'),
@@ -4254,11 +4244,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -4282,37 +4274,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                        Opacity(
+                          opacity: 0.82,
+                          child: Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Icon(
-                            Icons.settings_suggest_rounded,
-                            size: 32,
-                            color: Colors.white,
+                            child: const Icon(
+                              Icons.settings_suggest_rounded,
+                              size: 32,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -4371,7 +4357,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                               ),
                             ),
                             child: const Text('取消'),
@@ -4379,11 +4365,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -4473,10 +4461,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? selectedColor.withValues(alpha: 0.12) : Colors.grey.shade50,
+          color: selected ? selectedColor.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? selectedColor : Colors.grey.shade300,
+            color: selected ? selectedColor : Colors.white.withValues(alpha: 0.4),
             width: selected ? 1.6 : 1.0,
           ),
         ),
@@ -4556,27 +4544,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                     CurvedAnimation(parent: animation, curve: Curves.easeOut),
                   ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: GlassDialogShell(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.orange.shade50,
+                            color: Colors.orange.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Icon(
@@ -4612,7 +4590,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -4645,11 +4623,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         );
       },
     );
@@ -4764,7 +4743,7 @@ class _SegmentedSelectorState<T> extends State<_SegmentedSelector<T>> {
           child: Container(
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
+              color: Colors.white.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.grey.shade300, width: 1),
             ),
@@ -4875,6 +4854,113 @@ class _SegmentedSelectorState<T> extends State<_SegmentedSelector<T>> {
           child: Text(label, style: TextStyle(fontSize: 13, fontWeight: weight, color: color)),
         ),
       )).toList(),
+    );
+  }
+}
+
+class _VideoThumbnail extends StatefulWidget {
+  final String path;
+  const _VideoThumbnail({required this.path});
+
+  // 全局缓存：path -> controller，避免每次打开对话框都重新初始化视频播放器
+  static final Map<String, VideoPlayerController> _cache = {};
+
+  static void disposeAll() {
+    for (final c in _cache.values) {
+      c.dispose();
+    }
+    _cache.clear();
+  }
+
+  @override
+  State<_VideoThumbnail> createState() => _VideoThumbnailState();
+}
+
+class _VideoThumbnailState extends State<_VideoThumbnail> {
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final cached = _VideoThumbnail._cache[widget.path];
+    if (cached != null) {
+      _controller = cached;
+      if (_controller!.value.isInitialized) {
+        _initialized = true;
+        _controller!.pause();
+      } else {
+        _controller!.addListener(_onControllerUpdate);
+      }
+    } else {
+      _controller = VideoPlayerController.file(File(widget.path));
+      _VideoThumbnail._cache[widget.path] = _controller!;
+      _controller!.initialize().then((_) {
+        _controller!.seekTo(Duration.zero);
+        _controller!.pause();
+        if (mounted) setState(() => _initialized = true);
+      });
+    }
+  }
+
+  void _onControllerUpdate() {
+    if (_controller != null && _controller!.value.isInitialized && mounted) {
+      _controller!.removeListener(_onControllerUpdate);
+      _controller!.seekTo(Duration.zero);
+      _controller!.pause();
+      setState(() => _initialized = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    // 不释放 controller，保留在缓存中供下次复用
+    _controller?.removeListener(_onControllerUpdate);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_initialized && _controller != null && _controller!.value.isInitialized) {
+      final videoW = _controller!.value.size.width;
+      final videoH = _controller!.value.size.height;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRect(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              child: SizedBox(
+                width: videoW,
+                height: videoH,
+                child: VideoPlayer(_controller!),
+              ),
+            ),
+          ),
+          // 播放图标覆盖层，表明这是视频
+          Center(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.35),
+                shape: BoxShape.circle,
+              ),
+              padding: const EdgeInsets.all(6),
+              child: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
+            ),
+          ),
+        ],
+      );
+    }
+    return Container(
+      color: Colors.black,
+      child: const Center(
+        child: SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_dialog.dart';
 
 class TimePickerResult {
   final int hour;
@@ -54,12 +55,10 @@ Future<TimePickerResult?> show3DTimePicker({
                 ),
                 child: StatefulBuilder(
                   builder: (context, setDialogState) {
-                    return Container(
+                    return SizedBox(
                       width: 300,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(20),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(alpha: 0.1),
@@ -67,8 +66,7 @@ Future<TimePickerResult?> show3DTimePicker({
                             offset: const Offset(0, 10),
                           ),
                         ],
-                      ),
-                      child: Column(
+                        child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
@@ -208,6 +206,7 @@ Future<TimePickerResult?> show3DTimePicker({
                           ),
                         ],
                       ),
+                      ),
                     );
                   },
                 ),
@@ -311,12 +310,10 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                       );
                     }
 
-                    return Container(
+                    return SizedBox(
                       width: 340,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
+                      child: GlassDialogShell(
+                        padding: const EdgeInsets.all(20),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(alpha: 0.1),
@@ -324,8 +321,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                             offset: const Offset(0, 10),
                           ),
                         ],
-                      ),
-                      child: Column(
+                        child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
@@ -460,6 +456,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                             ],
                           ),
                         ],
+                      ),
                       ),
                     );
                   },

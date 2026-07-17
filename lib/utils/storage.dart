@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/course.dart';
 import '../models/task.dart';
 import '../services/notification_service.dart';
+import '../services/widget_service.dart';
 
 class TimetableInfo {
   final String id;
@@ -40,19 +41,29 @@ class StorageService {
 
   static void _notifyDataChanged() {
     _dataChangeNotifier.value++;
+    // 同步更新桌面小组件
+    WidgetService.updateAllWidgets();
   }
 
   static Future<void> init() async {
     _coursesBox = await Hive.openBox<Course>('courses');
     _tasksBox = await Hive.openBox<Task>('tasks');
     _settingsBox = await Hive.openBox('settings');
-    
+
     _currentTimetableId = _settingsBox.get('currentTimetableId', defaultValue: 'default');
-    
+
     if (!_settingsBox.containsKey('timetables')) {
       await _settingsBox.put('timetables', [
         {'id': 'default', 'name': '默认课表', 'createdAt': DateTime.now().toIso8601String()}
       ]);
+    }
+
+    // 清理旧版本残留的 manualCurrentWeek，确保假期逻辑能正确触发
+    final staleKeys = _settingsBox.keys
+        .where((k) => k is String && k.endsWith('_manualCurrentWeek'))
+        .toList();
+    for (final key in staleKeys) {
+      await _settingsBox.delete(key);
     }
   }
   
@@ -285,16 +296,28 @@ class StorageService {
   }
 
   static int getCurrentWeek() {
-    final manualWeek = _settingsBox.get('${_currentTimetableId}_manualCurrentWeek', defaultValue: -1);
-    if (manualWeek != -1) return manualWeek;
-    
+    // 周次切换已改为仅本次会话有效，不再持久化。
+    // 旧版本残留的 manualCurrentWeek 会阻碍假期逻辑生效，此处忽略并按实际日期计算。
     final startDate = getSemesterStartDate();
+    // 以开学日期所在周的周一作为第1周的起点，避免开学日期非星期一时周次计算错位
+    final mondayOfWeek1 = startDate.subtract(Duration(days: startDate.weekday - 1));
     final now = DateTime.now();
-    final diff = now.difference(startDate).inDays;
+    final diff = now.difference(mondayOfWeek1).inDays;
     final week = (diff ~/ 7) + 1;
     if (week < 1) return 1;
-    if (week > getSemesterWeeks()) return getSemesterWeeks();
     return week;
+  }
+
+  /// 当前日期是否在学期开始之前（上学期已结束、下学期还没开始）
+  static bool isBeforeSemesterStart() {
+    final startDate = getSemesterStartDate();
+    final mondayOfWeek1 = startDate.subtract(Duration(days: startDate.weekday - 1));
+    return DateTime.now().isBefore(mondayOfWeek1);
+  }
+
+  /// 是否处于假期状态：学期开始前或学期结束后
+  static bool isHoliday() {
+    return getCurrentWeek() > getSemesterWeeks() || isBeforeSemesterStart();
   }
   
   static Future<void> setCurrentWeek(int week) async {

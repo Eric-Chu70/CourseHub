@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../widgets/glass_dialog.dart';
 
 class AIConsentDialog {
   static Future<bool> show(BuildContext context) async {
@@ -29,11 +30,9 @@ class AIConsentDialog {
                       ),
                       child: Container(
                         margin: const EdgeInsets.symmetric(horizontal: 24),
-                        padding: const EdgeInsets.all(24),
                         constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
+                        child: GlassDialogShell(
+                          padding: const EdgeInsets.all(24),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.2),
@@ -41,23 +40,25 @@ class AIConsentDialog {
                               offset: const Offset(0, 10),
                             ),
                           ],
-                        ),
-                        child: Column(
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
                                 ),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: const Icon(
-                                Icons.auto_awesome,
-                                size: 32,
-                                color: Colors.white,
+                                child: const Icon(
+                                  Icons.auto_awesome,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 16),
@@ -74,7 +75,7 @@ class AIConsentDialog {
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade50,
+                                    color: Colors.white.withValues(alpha: 0.4),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: const Column(
@@ -177,6 +178,7 @@ class AIConsentDialog {
                               ],
                             ),
                           ],
+                        ),
                         ),
                       ),
                     ),

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'glass_dialog.dart';
 
 class AnimatedCalendarDatePicker extends StatefulWidget {
   final DateTime initialDate;
@@ -343,11 +344,9 @@ Future<DateTime?> showAnimatedDatePicker({
                 scale: Tween<double>(begin: 0.9, end: 1.0).animate(
                   CurvedAnimation(parent: animation, curve: Curves.easeOut),
                 ),
-                child: Container(
+                child: SizedBox(
                   width: dialogWidth,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
+                  child: GlassDialogShell(
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.2),
@@ -355,15 +354,15 @@ Future<DateTime?> showAnimatedDatePicker({
                         offset: const Offset(0, 10),
                       ),
                     ],
-                  ),
-                  child: AnimatedCalendarDatePicker(
-                    initialDate: initialDate,
-                    firstDate: firstDate ?? DateTime(2020),
-                    lastDate: lastDate ?? DateTime(2030),
-                    onDateChanged: (date) {
-                      selectedDate = date;
-                      Navigator.pop(context);
-                    },
+                    child: AnimatedCalendarDatePicker(
+                      initialDate: initialDate,
+                      firstDate: firstDate ?? DateTime(2020),
+                      lastDate: lastDate ?? DateTime(2030),
+                      onDateChanged: (date) {
+                        selectedDate = date;
+                        Navigator.pop(context);
+                      },
+                    ),
                   ),
                 ),
               ),
