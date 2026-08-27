@@ -759,6 +759,28 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     _scrollThinkingToBottom();
   }
 
+  /// 停止当前生成：取消流，保留已输出的思考与正文到当前气泡，
+  /// 行为对齐对话页的 _stopGeneration
+  void _stopGeneration() {
+    _cancelNoResponseTimer();
+    _streamSubscription?.cancel();
+    setState(() {
+      _isSending = false;
+      _isStreaming = false;
+      _isThinking = false;
+      if (_streamingContent.isNotEmpty || _thinkingContent.isNotEmpty) {
+        _updateLastAIMessage(
+          _streamingContent.isNotEmpty ? _streamingContent : '⏹️ 已停止生成',
+          thinkingContent: _thinkingContent.isNotEmpty ? _thinkingContent : null,
+          isThinkingCollapsed: _isThinkingCollapsed,
+        );
+      } else if (_currentStreamingFallback != null) {
+        _updateLastAIMessage('⏹️ 已停止生成');
+      }
+    });
+    _resetStreamingState();
+    _scrollToBottom();
+  }
   Future<void> _sendMessage() async {
     if (_parseMode == ParseMode.regex) {
       _addAIMessage('正则模式下暂不支持对话功能。请配置混元密钥后使用AI对话。');
@@ -1500,14 +1522,12 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 ),
               ),
               const SizedBox(width: 8),
+              // 流式/发送期间变为停止按钮（点击中断生成，已输出内容保留），
+              // 其余时间为发送按钮
               IconButton(
-                onPressed: _isSending ? null : _sendMessage,
-                icon: _isSending
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                onPressed: _isSending || _isStreaming ? _stopGeneration : _sendMessage,
+                icon: (_isSending || _isStreaming)
+                    ? Icon(Icons.stop_rounded, color: Colors.red.shade400, size: 26)
                     : const Icon(Icons.send, color: Color(0xFF9C27B0)),
               ),
             ],
@@ -1606,9 +1626,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
 
   Widget _buildThinkingBubble(ChatMessage message) {
     final isExpanded = !message.isThinkingCollapsed;
-    final isThinkingLive = _isStreaming && _isThinking;
     final isLiveMessage =
         _isStreaming && _chatMessages.isNotEmpty && identical(message, _chatMessages.last);
+    // 仅当前正在流式输出的最后一个气泡才显示"思考中"转圈，
+    // 历史消息的思考过程一律是普通的"思考过程"折叠块
+    final isThinkingLive = isLiveMessage && _isThinking;
 
     return Container(
       padding: const EdgeInsets.all(10),
