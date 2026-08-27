@@ -93,6 +93,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   String _thinkingContent = '';
   bool _isThinking = false;
   bool _isThinkingCollapsed = false;
+  // 重试用：记录当前图片解析走的路由（视觉直读 / OCR+AI）及其参数，
+  // 失败后点重试按钮按同一路由重新提交图片和提示词
+  String? _visionRouteProvider;
+  String? _visionRouteModel;
+  String _visionRouteLabel = '';
   bool _isFirstChunkReceived = false;
   /// 当前流式的占位正文（不含省略号，如"正在解析课表"）：
   /// 气泡渲染时对其追加 0-3 个循环增多的动画省略号
@@ -279,6 +284,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         } else {
           await _processWithOCRAndAI();
         }
+        // OCR+AI 路由（豆包/混元/GLM/无视觉自定义模型）：重试时重新
+        // 提交 OCR 文本给模型
+        _visionRouteProvider = null;
+        _visionRouteModel = null;
+        _visionRouteLabel = '';
       }
     } catch (e) {
       setState(() {
@@ -344,6 +354,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
 
     final bytes = await file.readAsBytes();
     final imageBase64 = base64Encode(bytes);
+
+    // 记录路由参数，供失败后的"重试"按钮复用
+    _visionRouteProvider = provider;
+    _visionRouteModel = model;
+    _visionRouteLabel = modelLabel;
 
     setState(() {
       _currentStep = AIProcessingStep.parsing;
@@ -417,7 +432,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             _errorMessage = 'AI解析失败: $error';
             _isStreaming = false;
           });
-          _updateLastAIMessage('❌ AI解析失败: $error', thinkingContent: null, isThinkingCollapsed: false);
+          _updateLastAIMessage('❌ AI解析失败: $error', thinkingContent: null, isThinkingCollapsed: false, isError: true);
         },
         onDone: () {
           _cancelNoResponseTimer();
@@ -432,7 +447,37 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         _errorMessage = 'AI解析失败: $e';
         _isStreaming = false;
       });
-      _updateLastAIMessage('❌ AI解析失败: $e', thinkingContent: null, isThinkingCollapsed: false);
+      _updateLastAIMessage('❌ AI解析失败: $e', thinkingContent: null, isThinkingCollapsed: false, isError: true);
+    }
+  }
+
+  /// 失败气泡上的"重试"：仅展示性地追加一条用户消息"重试"（这两个字
+  /// 不会发给模型），然后按原路由重新提交图片和提示词开始新一轮解析；
+  /// 新回复气泡在"重试"下方，再次失败同样展示重试按钮，可无限重试
+  void _retryParse() {
+    if (_isStreaming || _isSending) return;
+    _streamSubscription?.cancel();
+    setState(() {
+      _chatMessages.add(ChatMessage(
+        text: '重试',
+        isUser: true,
+        timestamp: DateTime.now(),
+      ));
+      _isChatMode = true;
+      _currentStep = AIProcessingStep.parsing;
+    });
+    _scrollToBottom();
+    if (_visionRouteProvider != null) {
+      _parseWithVisionModelStream(
+        provider: _visionRouteProvider!,
+        model: _visionRouteModel,
+        modelLabel: _visionRouteLabel,
+      );
+    } else if (_ocrText != null && _ocrText!.trim().isNotEmpty) {
+      _parseWithAI();
+    } else {
+      // OCR 文本缺失（如启动即失败）：从起点重新走完整流程
+      _startProcessing();
     }
   }
 
@@ -493,7 +538,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         _currentStep = AIProcessingStep.error;
         _errorMessage = 'JSON解析失败: $e';
       });
-      _updateLastAIMessage('❌ JSON解析失败: $e\n\n原始内容:\n$_streamingContent');
+      _updateLastAIMessage('❌ JSON解析失败: $e\n\n原始内容:\n$_streamingContent', isError: true);
     }
   }
 
@@ -606,7 +651,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             _errorMessage = 'AI解析失败: $error';
             _isStreaming = false;
           });
-          _updateLastAIMessage('❌ AI解析失败: $error', thinkingContent: null, isThinkingCollapsed: false);
+          _updateLastAIMessage('❌ AI解析失败: $error', thinkingContent: null, isThinkingCollapsed: false, isError: true);
         },
         onDone: () {
           _cancelNoResponseTimer();
@@ -621,7 +666,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         _errorMessage = 'AI解析失败: $e';
         _isStreaming = false;
       });
-      _updateLastAIMessage('❌ AI解析失败: $e', thinkingContent: null, isThinkingCollapsed: false);
+      _updateLastAIMessage('❌ AI解析失败: $e', thinkingContent: null, isThinkingCollapsed: false, isError: true);
     }
   }
 
@@ -629,6 +674,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     String text, {
     String? thinkingContent,
     bool isThinkingCollapsed = false,
+    bool isError = false,
   }) {
     _chatMessages.add(ChatMessage(
       text: text,
@@ -636,6 +682,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       timestamp: DateTime.now(),
       thinkingContent: thinkingContent,
       isThinkingCollapsed: isThinkingCollapsed,
+      isError: isError,
     ));
     _scrollToBottom();
   }
@@ -644,6 +691,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     String text, {
     String? thinkingContent,
     bool? isThinkingCollapsed,
+    bool isError = false,
   }) {
     if (_chatMessages.isNotEmpty && !_chatMessages.last.isUser) {
       final previous = _chatMessages[_chatMessages.length - 1];
@@ -653,6 +701,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         timestamp: DateTime.now(),
         thinkingContent: thinkingContent,
         isThinkingCollapsed: isThinkingCollapsed ?? previous.isThinkingCollapsed,
+        isError: isError,
       );
     }
   }
@@ -769,7 +818,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             _isStreaming = false;
             _resetStreamingState();
           });
-          _updateLastAIMessage('❌ 处理失败: $error', thinkingContent: null, isThinkingCollapsed: false);
+          _updateLastAIMessage('❌ 处理失败: $error', thinkingContent: null, isThinkingCollapsed: false, isError: true);
         },
         onDone: () {
           setState(() {
@@ -1522,6 +1571,33 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                       ),
                       extensionSet: md.ExtensionSet.gitHubWeb,
                     ),
+                  // 解析失败：底部右侧重试按钮（🔁 图标，样式对齐对话页
+                  // 重新生成按钮的极简灰底小方块），点击重新提交解析
+                  if (message.isError && !_isStreaming)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          GestureDetector(
+                            onTap: _retryParse,
+                            child: Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.loop,
+                                size: 17,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
       ),
@@ -1652,6 +1728,8 @@ class ChatMessage {
   final DateTime timestamp;
   final String? thinkingContent;
   final bool isThinkingCollapsed;
+  /// 解析失败的消息：气泡底部右侧展示"重试"按钮
+  final bool isError;
 
   ChatMessage({
     required this.text,
@@ -1659,6 +1737,7 @@ class ChatMessage {
     required this.timestamp,
     this.thinkingContent,
     this.isThinkingCollapsed = false,
+    this.isError = false,
   });
 }
 
