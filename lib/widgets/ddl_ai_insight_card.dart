@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import '../services/glm_service.dart';
 import '../models/task.dart';
+import '../utils/storage.dart';
 
 /// DDL 页面 AI 任务建议框
 /// - 打开 DDL 页面时自动触发 AI 分析（独立于对话页）
@@ -11,6 +13,8 @@ import '../models/task.dart';
 /// - 仅提取"任务建议"部分文字（不带标题）用打字机效果显示
 /// - 内存级缓存（仅本次 App 运行期间有效）
 class DDLAIInsightCard extends StatefulWidget {
+  /// 对外只读：本次 App 运行期间是否被用户关闭（供 DDL 页调整间距）
+  static bool get isDismissedThisRun => _DDLAIInsightCardState._dismissedByUser;
   final List<Task> tasks;
   // 高度变化回调，用于通知父 widget 更新布局
   final ValueChanged<double>? onHeightChanged;
@@ -25,7 +29,7 @@ class DDLAIInsightCard extends StatefulWidget {
   State<DDLAIInsightCard> createState() => _DDLAIInsightCardState();
 }
 
-enum _InsightPhase { idle, loading, typing, done, error, disabled }
+enum _InsightPhase { idle, loading, typing, done, error, disabled, hidden }
 
 class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     with TickerProviderStateMixin {
@@ -39,6 +43,11 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
 
   // Shimmer 动画
   late final AnimationController _shimmerController;
+
+  // 关闭（叉号）动画：参数对齐课程删除动画（220ms easeInCubic，
+  // 模糊增大 + 向内缩小 + 淡出），播完转入 hidden（本次运行不再加载）
+  AnimationController? _dismissController;
+  CurvedAnimation? _dismissCurved;
 
   // 流式累加（static：跨实例存活，切页不中断）
   static String _streamingContent = '';
@@ -54,6 +63,11 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
   // 内存级缓存（仅本次 App 运行期间有效，与对话页完全解耦）
   static String? _cachedInsight;
   static bool _hasAnalyzed = false;
+
+  // 本次分析基于的课表 id：切换课表后与之不同时，标题行展示"重新生成"按钮
+  static String? _analysisTimetableId;
+  // 用户点击叉号关闭后，本次 App 运行期间不再加载（直到 App 终止）
+  static bool _dismissedByUser = false;
 
   @override
   void initState() {
@@ -71,13 +85,15 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     _shimmerController.dispose();
     _typewriterTimer?.cancel();
     _streamUpdateTick.removeListener(_handleStreamUpdateTick);
+    _dismissCurved?.dispose();
+    _dismissController?.dispose();
     // 注意：不取消 _streamSubscription，让后台流继续运行
     super.dispose();
   }
 
   /// 后台流状态变化时同步 UI
   void _handleStreamUpdateTick() {
-    if (!mounted) return;
+    if (!mounted || _dismissedByUser) return;
     if (_isAnalyzing) {
       // 后台仍在分析中，显示 loading
       if (_phase != _InsightPhase.loading) {
@@ -95,6 +111,12 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
   }
 
   Future<void> _loadConfigAndAnalyze() async {
+    // 用户已点击叉号关闭：本次 App 运行期间不再加载，直到 App 终止
+    if (_dismissedByUser) {
+      if (mounted) setState(() => _phase = _InsightPhase.hidden);
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     _aiEnabled = prefs.getBool('ai_enabled') ?? false;
     _currentProvider = prefs.getString('ai_provider') ?? 'hunyuan';
@@ -187,6 +209,8 @@ $tasksInfo
             _cachedInsight = _streamingContent;
             _hasAnalyzed = true;
             _hasError = false;
+            // 记录本次分析基于的课表：切换课表后与之不同时展示"重新生成"
+            _analysisTimetableId = StorageService.currentTimetableId;
           } else {
             _hasError = true;
           }
@@ -273,6 +297,53 @@ $tasksInfo
 
   final GlobalKey _containerKey = GlobalKey();
 
+  /// 是否需要展示"重新生成"按钮：已有分析结果，且当前课表与
+  /// 分析时基于的课表不同（正常情况不展示）
+  bool get _needsRegenerate =>
+      _analysisTimetableId != null &&
+      _analysisTimetableId != StorageService.currentTimetableId;
+
+  /// 叉号关闭：参数对齐课表/课程删除动画（220ms easeInCubic，
+  /// 模糊增大 + 向内缩小 + 淡出），播完置 hidden——本次 App 运行
+  /// 期间不再加载，直到 App 终止
+  void _dismissInsight() {
+    if (_dismissController != null && _dismissController!.isAnimating) return;
+    _dismissCurved?.dispose();
+    _dismissController?.dispose();
+    _dismissController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _dismissCurved = CurvedAnimation(
+      parent: _dismissController!,
+      curve: Curves.easeInCubic,
+    );
+    setState(() {});
+    _dismissController!.forward(from: 0).whenComplete(() {
+      if (!mounted) return;
+      _dismissedByUser = true;
+      _shimmerController.stop();
+      _typewriterTimer?.cancel();
+      widget.onHeightChanged?.call(0);
+      setState(() => _phase = _InsightPhase.hidden);
+    });
+  }
+
+  /// 重新生成：丢弃缓存结果，按当前课表/任务重新分析
+  void _regenerate() {
+    if (_isAnalyzing) return;
+    _cachedInsight = null;
+    _hasAnalyzed = false;
+    _hasError = false;
+    _analysisTimetableId = null;
+    _typewriterContent = '';
+    _typewriterIndex = 0;
+    _typewriterTimer?.cancel();
+    _shimmerController.repeat();
+    setState(() => _phase = _InsightPhase.loading);
+    _analyzeDDL();
+  }
+
   void _measureHeight() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _containerKey.currentContext;
@@ -287,7 +358,12 @@ $tasksInfo
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
+    // 已被用户关闭：本次 App 运行期间不再展示（外层 AnimatedSize 平滑收起）
+    if (_phase == _InsightPhase.hidden) {
+      return const SizedBox.shrink();
+    }
+
+    Widget card = RepaintBoundary(
       child: Container(
         key: _containerKey,
         padding: const EdgeInsets.all(14),
@@ -311,6 +387,34 @@ $tasksInfo
         child: _buildContent(),
       ),
     );
+
+    // 关闭动画播放中：模糊增大 + 向内缩小 + 淡出（逐帧驱动）
+    if (_dismissController != null && _dismissController!.isAnimating) {
+      card = AnimatedBuilder(
+        animation: _dismissCurved ?? kAlwaysDismissedAnimation,
+        builder: (context, child) {
+          final t = _dismissCurved?.value ?? 0.0;
+          return IgnorePointer(
+            child: Opacity(
+              opacity: (1.0 - t).clamp(0.0, 1.0),
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(
+                  sigmaX: 14 * t,
+                  sigmaY: 14 * t,
+                ),
+                child: Transform.scale(
+                  scale: 1.0 - 0.45 * t,
+                  child: child,
+                ),
+              ),
+            ),
+          );
+        },
+        child: card,
+      );
+    }
+
+    return card;
   }
 
   Widget _buildContent() {
@@ -320,13 +424,70 @@ $tasksInfo
       case _InsightPhase.idle:
         return _buildIdleContent();
       case _InsightPhase.loading:
-        return _buildSkeletonWithShimmer();
+        return _buildActionWrapper(_buildSkeletonWithShimmer());
       case _InsightPhase.typing:
       case _InsightPhase.done:
-        return _buildInsightContent();
+        return _buildActionWrapper(_buildInsightContent());
       case _InsightPhase.error:
         return _buildErrorContent();
+      case _InsightPhase.hidden:
+        return const SizedBox.shrink();
     }
+  }
+
+  /// 右上角操作按钮（叉号 + 可选的重新生成），叠加在内容之上：
+  /// 按钮仅覆盖右上角，不占用正文空间（下方文字不避让）
+  Widget _buildActionWrapper(Widget content) {
+    return Stack(
+      children: [
+        content,
+        Positioned(
+          top: 0,
+          right: 0,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 重新生成：仅当课表已切换（与当前分析基于的课表不同）时展示，
+              // 🔁 循环图标 + 与叉号一致的极简配色
+              if (_needsRegenerate)
+                GestureDetector(
+                  onTap: _regenerate,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.loop,
+                      size: 17,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ),
+              if (_needsRegenerate) const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _dismissInsight,
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.close,
+                    size: 17,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildDisabledContent() {
@@ -383,8 +544,11 @@ $tasksInfo
         // 标题行
         _buildShimmerLine(fraction: 0.4, height: 14),
         const SizedBox(height: 12),
-        // 三行灰底条条
-        _buildShimmerLine(fraction: 1.0, height: 10),
+        // 三行灰底条条（首条右端避开右上角的叉号/重新生成按钮）
+        Padding(
+          padding: EdgeInsets.only(right: _needsRegenerate ? 72 : 36),
+          child: _buildShimmerLine(fraction: 1.0, height: 10),
+        ),
         const SizedBox(height: 8),
         _buildShimmerLine(fraction: 0.85, height: 10),
         const SizedBox(height: 8),
@@ -455,7 +619,7 @@ $tasksInfo
             ),
             const SizedBox(width: 8),
             const Text(
-              'AI 任务分析',
+              'AI任务提示',
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,

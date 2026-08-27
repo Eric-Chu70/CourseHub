@@ -199,8 +199,14 @@ class HeatmapScreenState extends State<HeatmapScreen>
                             _buildStatCard('已逾期', '$overdueTasks', Colors.red),
                           ],
                         ),
-                        // 中间间距
-                        const SizedBox(height: 16),
+                        // 中间间距：任务提示被用户关闭后收窄（动画与卡片收起
+                        // 同步，避免下方内容先跳变再滑动），使日历与数量统计
+                        // 的间距等于数量统计与标题栏的间距（16）
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutCubic,
+                          height: DDLAIInsightCard.isDismissedThisRun ? 0 : 16,
+                        ),
                         // AI 任务建议框（独立卡片，高度根据内容自适应，用 AnimatedSize 平滑延展）
                         AnimatedSize(
                           duration: const Duration(milliseconds: 250),
@@ -218,7 +224,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                             },
                           ),
                         ),
-                        const SizedBox(height: 24),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutCubic,
+                          height: DDLAIInsightCard.isDismissedThisRun ? 16 : 24,
+                        ),
 
                         _buildCalendarHeatmap(),
                         const SizedBox(height: 24),
@@ -465,37 +475,21 @@ class HeatmapScreenState extends State<HeatmapScreen>
     }
     final courseGroups = grouped.entries.toList();
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择课程',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    constraints: BoxConstraints(
-                        maxWidth: 360, maxHeight: screenHeight * 0.6),
-                    child: GlassDialogShell(
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                      child: Column(
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) => ConstrainedBox(
+        constraints: BoxConstraints(
+            maxWidth: 360, maxHeight: screenHeight * 0.6),
+        child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Opacity(
@@ -644,14 +638,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                             ),
                         ],
                       ),
-                    ),
-                  ),
-                ),
               ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -672,14 +659,22 @@ class HeatmapScreenState extends State<HeatmapScreen>
     String priority = '中';
     String description = '';
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '添加任务',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+      avoidKeyboard: true,
+      margin: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.height < 700 ? 16 : 24),
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
             final screenHeight = MediaQuery.of(context).size.height;
             final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
             final topInset = MediaQuery.of(context).padding.top;
@@ -694,44 +689,12 @@ class HeatmapScreenState extends State<HeatmapScreen>
             dialogMaxHeight =
                 dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
 
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            margin: EdgeInsets.only(
-                              left: isSmallScreen ? 16 : 24,
-                              right: isSmallScreen ? 16 : 24,
-                              top: keyboardHeight > 0 ? topInset + 8 : 0,
-                              bottom:
-                                  keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                            ),
-                            constraints: BoxConstraints(
-                              maxWidth: 400,
-                              maxHeight: dialogMaxHeight,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.7),
-                              borderRadius: BorderRadius.circular(24),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Column(
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 400,
+                maxHeight: dialogMaxHeight,
+              ),
+              child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -1220,15 +1183,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                 ),
                               ],
                             ),
-                          ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -1843,14 +1800,22 @@ class HeatmapScreenState extends State<HeatmapScreen>
       }
     }
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '编辑任务',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+      avoidKeyboard: true,
+      margin: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.height < 700 ? 16 : 24),
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
             final screenHeight = MediaQuery.of(context).size.height;
             final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
             final topInset = MediaQuery.of(context).padding.top;
@@ -1865,44 +1830,12 @@ class HeatmapScreenState extends State<HeatmapScreen>
             dialogMaxHeight =
                 dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
 
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            margin: EdgeInsets.only(
-                              left: isSmallScreen ? 16 : 24,
-                              right: isSmallScreen ? 16 : 24,
-                              top: keyboardHeight > 0 ? topInset + 8 : 0,
-                              bottom:
-                                  keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                            ),
-                            constraints: BoxConstraints(
-                              maxWidth: 400,
-                              maxHeight: dialogMaxHeight,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.7),
-                              borderRadius: BorderRadius.circular(24),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: Column(
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 400,
+                maxHeight: dialogMaxHeight,
+              ),
+              child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -2379,15 +2312,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                 ),
                               ],
                             ),
-                          ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

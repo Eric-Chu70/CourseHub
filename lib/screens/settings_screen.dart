@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../main.dart' show appVersion;
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
@@ -11,9 +12,11 @@ import '../dialogs/ai_consent_dialog.dart';
 import '../utils/storage.dart';
 import 'timetable_screen.dart';
 import '../widgets/animated_calendar.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../services/auth_service.dart';
+import '../services/wallpaper_storage_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/glm_service.dart';
 import '../services/notification_service.dart';
@@ -105,27 +108,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
       ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<_CustomVisionMode>(
-          value: value,
-          isDense: true,
-          borderRadius: BorderRadius.circular(12),
-          icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
-          items: _CustomVisionMode.values
-              .map((mode) => DropdownMenuItem<_CustomVisionMode>(
-                    value: mode,
-                    child: Text(
-                      _customVisionModeLabel(mode),
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ))
-              .toList(),
-          onChanged: (next) {
-            if (next != null) {
-              onChanged(next);
-            }
-          },
-        ),
+      // BlurredDropdown（而非原生 DropdownButton）：原生下拉经子路由显示，
+      // 收起时路由焦点恢复会钻回同对话框内的输入框导致键盘反复弹出；
+      // BlurredDropdown 打开前已做焦点锚点转移，且与全局毛玻璃风格一致
+      child: BlurredDropdown<_CustomVisionMode>(
+        value: value,
+        icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
+        items: _CustomVisionMode.values
+            .map((mode) => DropdownMenuItem<_CustomVisionMode>(
+                  value: mode,
+                  child: Text(
+                    _customVisionModeLabel(mode),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ))
+            .toList(),
+        onChanged: (next) {
+          if (next != null) {
+            onChanged(next);
+          }
+        },
       ),
     );
   }
@@ -170,31 +172,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     int? deletingIndex;
     bool newWallpaperSelected = false;
 
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '课表壁纸',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (builderCtx, setDialogState) {
-                      return SizedBox(
-                        width: 320,
-                        child: GlassDialogShell(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
+      shellPadding: const EdgeInsets.all(20),
+      // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+      shellWidth: 320,
+      margin: EdgeInsets.zero,
+      builder: (context) => StatefulBuilder(
+        builder: (builderCtx, setDialogState) {
+          return SizedBox(
+            child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -265,6 +253,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         opacity: isBeingDeleted ? 0 : 1,
                                         onEnd: () {
                                           if (!isBeingDeleted) return;
+                                          // 同步删除持久目录中的物理文件
+                                          WallpaperStorageService.deleteWallpaperFile(path);
                                           dialogPaths.removeAt(index);
                                           if (dialogPaths.isEmpty) {
                                             dialogDeleteMode = false;
@@ -399,7 +389,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                               type: FileType.media,
                                             );
                                             if (result != null && result.files.single.path != null) {
-                                              final filePath = result.files.single.path!;
+                                              // 持久化到应用内部目录，防止清理缓存后壁纸失效
+                                              final filePath = await WallpaperStorageService.persistWallpaper(result.files.single.path!);
                                               final extension = filePath.toLowerCase().split('.').last;
                                               final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(extension);
                                               await prefs.setString('wallpaper_type', isVideo ? 'video' : 'image');
@@ -490,16 +481,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        ),
                       );
                     },
                   ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
     if (!newWallpaperSelected && _wallpaperPath == null) {
       _wallpaperEnabled = false;
@@ -517,31 +501,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       initialItem: (selectedOpacity - 50) ~/ 5,
     );
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '背景透明度',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return SizedBox(
-                        width: 280,
-                        child: GlassDialogShell(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
+      shellPadding: const EdgeInsets.all(20),
+      // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+      shellWidth: 280,
+      margin: EdgeInsets.zero,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return SizedBox(
+            child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -663,16 +633,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        ),
                       );
                     },
                   ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -1018,7 +981,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _buildSettingsItem(
                             icon: Icons.info_outline,
                             title: '关于',
-                            subtitle: 'CourseHub v1.0.5',
+                            subtitle: 'CourseHub v$appVersion',
                             onTap: _showAboutDialog,
                           ),
                           _buildDivider(),
@@ -1199,12 +1162,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showDeveloperOptionsDialog() {
-    return showGeneralDialog(
+    return showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: 'AI功能配置',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）；
+      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -1216,46 +1188,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           dialogMaxHeight = availableHeight;
         }
         dialogMaxHeight = dialogMaxHeight.clamp(280.0, baseMaxHeight).toDouble();
-
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return AnimatedPadding(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        padding: EdgeInsets.only(
-                          left: 24,
-                          right: 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              curve: Curves.easeOut,
-                              padding: const EdgeInsets.all(24),
-                              constraints: BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.7),
-                                borderRadius: BorderRadius.circular(24),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
+        return BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Row(
@@ -1428,15 +1366,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ),
                           ],
-                        ),
-                            ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
+                        );
+          },
         );
       },
     );
@@ -1672,12 +1603,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     String localReasoning = reasoningEffort;
     bool localWebSearch = webSearchEnabled;
 
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '自定义API',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -1689,47 +1628,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           dialogMaxHeight = availableHeight;
         }
         dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
-
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    padding: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: keyboardHeight > 0 ? topInset + 8 : 0,
-                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                    ),
-                    child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          padding: const EdgeInsets.all(24),
-                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: StatefulBuilder(
-                      builder: (context, setDialogState) {
-                        return SingleChildScrollView(
-                          child: Column(
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
+        return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return SingleChildScrollView(
+                child: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -1873,15 +1778,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ],
                           ),
                         );
-                      },
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        );
+              },
+          );
       },
     );
   }
@@ -1896,12 +1794,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       text: prefs.getString('tencent_secret_key') ?? '',
     );
 
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '混元配置',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -1913,45 +1819,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           dialogMaxHeight = availableHeight;
         }
         dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
-
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    padding: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: keyboardHeight > 0 ? topInset + 8 : 0,
-                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                    ),
-                    child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          padding: const EdgeInsets.all(24),
-                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: SingleChildScrollView(
-                            child: Column(
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
+        return SingleChildScrollView(
+            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -2080,14 +1952,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ],
                       ),
-                    ),
-                          ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
       },
     );
   }
@@ -2116,12 +1981,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     final controller = TextEditingController(text: prefs.getString('glm_api_key') ?? '');
 
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: 'GLM API Key',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -2133,45 +2006,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           dialogMaxHeight = availableHeight;
         }
         dialogMaxHeight = dialogMaxHeight.clamp(300.0, baseMaxHeight).toDouble();
-
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    padding: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: keyboardHeight > 0 ? topInset + 8 : 0,
-                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                    ),
-                    child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          padding: const EdgeInsets.all(24),
-                          constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: SingleChildScrollView(
-                            child: Column(
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
+        return SingleChildScrollView(
+            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                         Opacity(
@@ -2292,59 +2131,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         ],
                       ),
-                    ),
-                          ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
       },
     );
   }
 
   Future<void> _selectSemesterStartDate() async {
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择日期',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: EdgeInsets.zero,
+      margin: EdgeInsets.zero,
+      builder: (context) {
         final screenWidth = MediaQuery.of(context).size.width;
         final dialogWidth = screenWidth > 400 ? 360.0 : screenWidth * 0.9;
-        
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: SizedBox(
-                    width: dialogWidth,
-                    child: GlassDialogShell(
-                      child: AnimatedCalendarDatePicker(
-                        initialDate: _semesterStartDate,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime(2030),
-                        onDateChanged: (date) async {
-                          await StorageService.setSemesterStartDate(date);
-                          setState(() {
-                            _semesterStartDate = date;
-                          });
-                          Navigator.pop(context);
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+        return SizedBox(
+          width: dialogWidth,
+          child: AnimatedCalendarDatePicker(
+            initialDate: _semesterStartDate,
+            firstDate: DateTime(2020),
+            lastDate: DateTime(2030),
+            onDateChanged: (date) async {
+              await StorageService.setSemesterStartDate(date);
+              setState(() {
+                _semesterStartDate = date;
+              });
+              Navigator.pop(context);
+            },
           ),
         );
       },
@@ -2355,30 +2168,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     int selectedWeeks = _semesterWeeks;
     final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: selectedWeeks - 1);
     
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '学期周数',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return SizedBox(
-                        width: 280,
-                        child: GlassDialogShell(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
+      shellPadding: const EdgeInsets.all(20),
+      // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+      shellWidth: 280,
+      margin: EdgeInsets.zero,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return SizedBox(
+            child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -2467,27 +2267,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        ),
                       );
                     },
                   ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
-            child: child,
-          ),
-        );
-      },
     );
   }
 
@@ -2495,30 +2277,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     int selectedPeriods = _dailyPeriods;
     final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: selectedPeriods - 1);
     
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '每日节数',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return SizedBox(
-                        width: 280,
-                        child: GlassDialogShell(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
+      shellPadding: const EdgeInsets.all(20),
+      // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+      shellWidth: 280,
+      margin: EdgeInsets.zero,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return SizedBox(
+            child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
@@ -2614,57 +2383,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        ),
                       );
                     },
                   ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
-            child: child,
-          ),
-        );
-      },
     );
   }
 
   Future<void> _showTimeSlotsDialog() async {
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '时间段设置',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellMaxWidth: 400,
+      shellMaxHeight: 500,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                             Row(
@@ -2803,18 +2538,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
-                        ),
-                            ),
-                          ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
+                        );
           },
-        );
-      },
+        ),
     );
   }
 
@@ -3042,33 +2768,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required List<Widget> Function(BuildContext dialogContext, StateSetter setDialogState)
         actionsBuilder,
   }) {
-    return showGeneralDialog<T>(
+    return showBouncyDialog<T>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: title,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-      transitionDuration: const Duration(milliseconds: 260),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.92, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 420),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
+      shellPadding: const EdgeInsets.all(20),
+      // 壳总宽含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellMaxWidth: 420,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return Column(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -3090,144 +2798,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Row(
                               children: actionsBuilder(dialogContext, setDialogState),
                             ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              ],
             );
-          },
-        );
-      },
+        },
+      ),
     );
   }
 
   void _showAboutDialog() {
-    showGeneralDialog(
+    // 关于式弹性对话框：孔洞遮罩（四周压暗、对话框背后白净毛玻璃）+
+    // 果冻回弹开闭 + 内容聚焦/化开动画（见 BouncyDialogHost）
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '关于',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: GlassDialogShell(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: Image.asset(
-                            'assets/coursehub_logo.jpg',
-                            width: 64,
-                            height: 64,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'CourseHub',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'v1.0.5',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'AI驱动的学习与日程管理平台',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade700,
-                            height: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Copyright©2026 - CourseHub项目组',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade500,
-                            height: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: () => Navigator.pop(context),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF4A90E2),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: const Text('确定'),
-                          ),
-                        ),
-                      ],
-                    ),
-                      ),
-                    ),
-                  ),
+      shellPadding: const EdgeInsets.all(24),
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Image.asset(
+              'assets/coursehub_logo.jpg',
+              width: 64,
+              height: 64,
+              fit: BoxFit.cover,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'CourseHub',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'v$appVersion',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade600,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'AI驱动的学习与日程管理平台',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade700,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Copyright©2026 - CourseHub项目组',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey.shade500,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4A90E2),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
+              child: const Text('确定'),
             ),
-        );
-      },
+          ),
+        ],
+      ),
     );
   }
 
   Future<void> _clearAllData() async {
-    final confirmed = await showGeneralDialog<bool>(
+    final confirmed = await showBouncyDialog<bool>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '清除数据',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: GlassDialogShell(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      builder: (context) => Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
@@ -3294,14 +2953,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        );
-      },
     );
 
     if (confirmed == true) {
@@ -3322,12 +2973,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool obscurePassword = true;
     bool obscureConfirmPassword = true;
     
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '电子邮箱登录',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）；
+      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -3339,7 +2999,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           dialogMaxHeight = availableHeight;
         }
         dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
-
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final email = emailController.text.trim();
@@ -3387,43 +3049,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
             }
 
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: AnimatedPadding(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        padding: EdgeInsets.only(
-                          left: 24,
-                          right: 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              curve: Curves.easeOut,
-                              constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.7),
-                                borderRadius: BorderRadius.circular(24),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
-                              ),
-                              child: SingleChildScrollView(
+            return SingleChildScrollView(
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -3575,14 +3201,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ],
                           ),
-                        ),
-                              ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
+                        );
           },
         );
       },
@@ -3750,34 +3369,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<List<String>?> _showLocalTimetableUploadSelectorDialog(List<TimetableInfo> timetables) {
-    return showGeneralDialog<List<String>>(
+    return showBouncyDialog<List<String>>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择上传课表',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellMaxHeight: 560,
+      builder: (dialogContext) {
         final selectedIds = timetables.map((t) => t.id).toSet();
 
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
+            return Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                             Opacity(
@@ -3904,15 +3508,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
-                        ),
-                            ),
-                          ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
+                        );
           },
         );
       },
@@ -3920,30 +3516,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<bool?> _showUploadToCloudDialog() {
-    return showGeneralDialog<bool>(
+    return showBouncyDialog<bool>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '云端暂无备份',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 400),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 400,
+      builder: (dialogContext) {
+        return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                         Opacity(
@@ -4015,44 +3595,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       ],
-                    ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         );
       },
     );
   }
 
   Future<_CloudSyncAction?> _showCloudSyncChoiceDialog(DateTime? updatedAt) {
-    return showGeneralDialog<_CloudSyncAction>(
+    return showBouncyDialog<_CloudSyncAction>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '检测到云端数据',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      builder: (dialogContext) {
+        return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                         Opacity(
@@ -4124,14 +3680,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ],
-                    ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         );
       },
     );
@@ -4141,30 +3689,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     List<String> timetableNames, {
     DateTime? updatedAt,
   }) {
-    return showGeneralDialog<String>(
+    return showBouncyDialog<String>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择要同步的课表',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellMaxHeight: 520,
+      builder: (dialogContext) {
+        return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                         Opacity(
@@ -4243,44 +3776,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ],
-                    ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         );
       },
     );
   }
 
   Future<ImportMode?> _showCloudImportModeDialog(DateTime? updatedAt, String timetableName) {
-    return showGeneralDialog<ImportMode>(
+    return showBouncyDialog<ImportMode>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择同步方式',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      builder: (dialogContext) {
+        return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                         Opacity(
@@ -4364,14 +3873,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ],
-                    ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         );
       },
     );
@@ -4527,28 +4028,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showLogoutDialog(AuthService auth) {
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '退出登录',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: GlassDialogShell(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      builder: (context) {
+        return Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
@@ -4622,13 +4107,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       ],
-                    ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         );
       },
     );

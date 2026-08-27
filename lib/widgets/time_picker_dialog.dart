@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'glass_dialog.dart';
 
@@ -35,38 +34,23 @@ Future<TimePickerResult?> show3DTimePicker({
   final FixedExtentScrollController hourController = FixedExtentScrollController(initialItem: initialHour);
   final FixedExtentScrollController minuteController = FixedExtentScrollController(initialItem: initialMinute);
 
-  final result = await showGeneralDialog<TimePickerResult>(
+  final result = await showBouncyDialog<TimePickerResult>(
     context: context,
-    barrierDismissible: true,
     barrierLabel: title,
-    barrierColor: Colors.black.withValues(alpha: 0.5),
-    transitionDuration: const Duration(milliseconds: 300),
-    pageBuilder: (context, animation, secondaryAnimation) {
-      return BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Center(
-          child: Material(
-            color: Colors.transparent,
-            child: FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                ),
-                child: StatefulBuilder(
-                  builder: (context, setDialogState) {
-                    return SizedBox(
-                      width: 300,
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        child: Column(
+    shellPadding: const EdgeInsets.all(20),
+    // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+    shellWidth: 300,
+    shellBoxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.1),
+        blurRadius: 20,
+        offset: const Offset(0, 10),
+      ),
+    ],
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        return SizedBox(
+          child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
@@ -206,27 +190,9 @@ Future<TimePickerResult?> show3DTimePicker({
                           ),
                         ],
                       ),
-                      ),
                     );
                   },
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-    transitionBuilder: (context, animation, secondaryAnimation, child) {
-      return FadeTransition(
-        opacity: animation,
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-            CurvedAnimation(parent: animation, curve: Curves.easeOut),
-          ),
-          child: child,
-        ),
-      );
-    },
+    ),
   );
 
   return result;
@@ -251,26 +217,21 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
   final FixedExtentScrollController minuteController =
       FixedExtentScrollController(initialItem: initialMinutes);
 
-  final result = await showGeneralDialog<LeadTimePickerResult>(
+  final result = await showBouncyDialog<LeadTimePickerResult>(
     context: context,
-    barrierDismissible: true,
     barrierLabel: title,
-    barrierColor: Colors.black.withValues(alpha: 0.5),
-    transitionDuration: const Duration(milliseconds: 300),
-    pageBuilder: (context, animation, secondaryAnimation) {
-      return BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Center(
-          child: Material(
-            color: Colors.transparent,
-            child: FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                ),
-                child: StatefulBuilder(
-                  builder: (context, setDialogState) {
+    shellPadding: const EdgeInsets.all(20),
+    // 壳总宽含壳内边距（与旧版 SizedBox(width:) 包壳一致）
+    shellWidth: 340,
+    shellBoxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.1),
+        blurRadius: 20,
+        offset: const Offset(0, 10),
+      ),
+    ],
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) {
                     Widget buildWheel({
                       required FixedExtentScrollController controller,
                       required int count,
@@ -311,17 +272,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                     }
 
                     return SizedBox(
-                      width: 340,
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        child: Column(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
@@ -457,27 +408,9 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                           ),
                         ],
                       ),
-                      ),
                     );
                   },
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-    transitionBuilder: (context, animation, secondaryAnimation, child) {
-      return FadeTransition(
-        opacity: animation,
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-            CurvedAnimation(parent: animation, curve: Curves.easeOut),
-          ),
-          child: child,
-        ),
-      );
-    },
+    ),
   );
 
   return result;

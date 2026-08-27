@@ -10,8 +10,10 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
+import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -40,6 +42,9 @@ class TodayMediumWidget : GlanceAppWidget() {
 
     override val stateDefinition = HomeWidgetGlanceStateDefinition()
 
+    // 按组件实际尺寸逐个构图，配合 LocalSize 约束卡片宽高比
+    override val sizeMode = SizeMode.Exact
+
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val data = WidgetData.loadTodayDataAuto(context)
         provideContent {
@@ -50,16 +55,31 @@ class TodayMediumWidget : GlanceAppWidget() {
     @Composable
     private fun Content(context: Context, data: WidgetData.TodayData) {
         val courses = data.courses.take(2)
+
+        // 与 2x2/4x4 同构的 min 约束 + 底部对齐，但 2:1 比例需网格间距修正：
+        // 宿主宽 = 4格 + 3个列间距，直接 宽/2 = 2格 + 1.5间距；
+        // 而 2 行的正确高度（与 2x2 视觉边长一致）= 2格 + 1间距，
+        // 故需扣掉半个网格间距。按实机反馈校准：等效网格间距 26dp（半格=13dp）
+        val size = LocalSize.current
+        val gridGap = 26.dp
+        val cardHeight = minOf(size.height, (size.width - gridGap) / 2)
+        val cardWidth = minOf(size.width, cardHeight * 2 + gridGap)
+
         Box(
-            modifier = GlanceModifier
-                .fillMaxSize()
-                .cornerRadius(20.dp)
-                .background(WidgetTheme.bgProvider())
-                .clickable(actionStartActivity<MainActivity>(
-                    context, Uri.parse("coursehub://widget/timetable")
-                ))
+            modifier = GlanceModifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
         ) {
-            Column(
+            Box(
+                modifier = GlanceModifier
+                    .width(cardWidth)
+                    .height(cardHeight)
+                    .cornerRadius(20.dp)
+                    .background(WidgetTheme.bgProvider())
+                    .clickable(actionStartActivity<MainActivity>(
+                        context, Uri.parse("coursehub://widget/timetable")
+                    ))
+            ) {
+                Column(
                 modifier = GlanceModifier.fillMaxSize().padding(12.dp, 10.dp, 12.dp, 12.dp),
                 horizontalAlignment = Alignment.Horizontal.Start
             ) {
@@ -130,6 +150,7 @@ class TodayMediumWidget : GlanceAppWidget() {
                             )
                         )
                     }
+                }
                 }
             }
         }

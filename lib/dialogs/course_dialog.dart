@@ -23,6 +23,27 @@ class CourseDialog extends StatefulWidget {
   final bool saveOnConfirm;
   final CourseEditFocusSection? initialFocusSection;
 
+  /// 传入时对对话框壳背后做局部高斯模糊（GlassDialogShell.blurSigma，
+  /// 含提亮层，毛玻璃白净不发灰）。默认 null 不模糊。
+  final double? backgroundBlurSigma;
+
+  /// 由宿主（如 _MorphDialogHost）传入并挂到壳上，用于精确测量壳矩形
+  /// （不含对话框自身的水平/键盘 margin），孔洞与 morph 锚定都用它。
+  final GlobalKey? shellKey;
+
+  /// hosted 模式：由 showBouncyDialog 宿主提供壳/边距/键盘避让，
+  /// 本组件不再自绘 GlassDialogShell 与外层 margin（避免双重壳）。
+  final bool hosted;
+
+  /// 统一淡出模式（加号遮罩取消添加）：由 morph 宿主在 pop-cancel
+  /// 瞬间置 true。配合 [routeAnimation] 在淡出期间对壳**内**内容施加
+  /// 递增模糊（sigma 0→10，与 BouncyDialogHost 关闭公式一致）——壳
+  /// 本身保持锐利（整树模糊会糊出壳毛边、与孔洞边缘错位成多重框）
+  final ValueNotifier<bool>? unifiedFadeMode;
+
+  /// 路由原始动画：统一淡出期间驱动壳内内容模糊（非淡出期不生效）
+  final Animation<double>? routeAnimation;
+
   const CourseDialog({
     super.key,
     this.course,
@@ -30,6 +51,11 @@ class CourseDialog extends StatefulWidget {
     this.selectedPeriod,
     this.saveOnConfirm = true,
     this.initialFocusSection,
+    this.backgroundBlurSigma,
+    this.shellKey,
+    this.hosted = false,
+    this.unifiedFadeMode,
+    this.routeAnimation,
   });
 
   static Future<Course?> show({
@@ -40,40 +66,32 @@ class CourseDialog extends StatefulWidget {
     bool saveOnConfirm = true,
     CourseEditFocusSection? initialFocusSection,
   }) {
-    return showGeneralDialog<Course>(
+    // 关于式弹性对话框（孔洞遮罩 + 果冻开闭 + 内容聚焦动画）；
+    // hosted 模式下壳/边距/键盘避让由 BouncyDialogHost 提供
+    final isSmallScreen = MediaQuery.of(context).size.height < 700;
+    return showBouncyDialog<Course>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '课程编辑',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: CourseDialog(
-                course: course,
-                selectedDay: selectedDay,
-                selectedPeriod: selectedPeriod,
-                saveOnConfirm: saveOnConfirm,
-                initialFocusSection: initialFocusSection,
-              ),
-            ),
-          ),
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
-            child: child,
-          ),
-        );
-      },
+      avoidKeyboard: true,
+      margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 12 : 24),
+      shellPadding: EdgeInsets.zero,
+      // 紧凑阴影：收缩阴影伸展范围（约 16px+4 偏移），保证阴影
+      // 可见区域明显小于对话框本体，不再「阴影大于对话框」
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.15),
+          blurRadius: 10,
+          offset: const Offset(0, 4),
+        ),
+      ],
+      builder: (context) => CourseDialog(
+        course: course,
+        selectedDay: selectedDay,
+        selectedPeriod: selectedPeriod,
+        saveOnConfirm: saveOnConfirm,
+        initialFocusSection: initialFocusSection,
+        hosted: true,
+      ),
     );
   }
 
@@ -125,7 +143,12 @@ class _CourseDialogState extends State<CourseDialog> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final section = widget.initialFocusSection;
       if (section != null) {
-        _focusSection(section, animate: false);
+        // 等宿主的打开动画（morph 350ms / 弹性 400ms）完成后再滚动定位并
+        // 高亮，避免与打开动画叠加造成对话框元素闪烁跳动
+        Future.delayed(const Duration(milliseconds: 460), () {
+          if (!mounted) return;
+          _focusSection(section);
+        });
       }
     });
   }
@@ -238,29 +261,7 @@ class _CourseDialogState extends State<CourseDialog> {
     }
     dialogMaxHeight = dialogMaxHeight.clamp(260.0, screenHeight).toDouble();
     
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
-      margin: EdgeInsets.only(
-        left: isSmallScreen ? 12 : 24,
-        right: isSmallScreen ? 12 : 24,
-        top: keyboardHeight > 0 ? topInset + 8 : 0,
-        bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-      ),
-      child: Container(
-        constraints: BoxConstraints(
-          maxHeight: dialogMaxHeight,
-          maxWidth: isSmallScreen ? 340 : 380,
-        ),
-        child: GlassDialogShell(
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-          child: Column(
+    final content = Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildHeader(isSmallScreen),
@@ -360,10 +361,73 @@ class _CourseDialogState extends State<CourseDialog> {
                 child: _buildBottomButtons(isSmallScreen),
               ),
             ],
-          ),
-          ),
+          );
+
+    // hosted 模式：壳/边距/键盘避让由 BouncyDialogHost 提供；
+    // 否则沿用自带壳（morph 版详情/添加课程对话框仍走该路径）
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      margin: widget.hosted
+          ? EdgeInsets.zero
+          : EdgeInsets.only(
+              left: isSmallScreen ? 12 : 24,
+              right: isSmallScreen ? 12 : 24,
+              top: keyboardHeight > 0 ? topInset + 8 : 0,
+              bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
+            ),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: dialogMaxHeight,
+          maxWidth: isSmallScreen ? 340 : 380,
         ),
-      );
+        child: widget.hosted
+            ? content
+            : GlassDialogShell(
+                key: widget.shellKey,
+                blurSigma: widget.backgroundBlurSigma,
+                // 紧凑阴影（与 bouncy 入口一致）：阴影可见区域
+                // 明显小于对话框本体
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+                child: _wrapUnifiedFadeBlur(content),
+              ),
+      ),
+    );
+  }
+
+  /// 统一淡出的壳内内容模糊：sigma = 10 × closeU（与 BouncyDialogHost
+  /// 关闭公式逐参数一致，壳保持锐利）。加号遮罩取消路径的路由已设
+  /// reverseTransitionDuration=400ms（与正常对话框一致），closeU 直接
+  /// 用 easeInCubic(1-t)（无需 ×1.5 压缩），逐帧与正常对话框关闭一致。
+  /// 非淡出期（unifiedFadeMode=false）零开销直接返回 child
+  Widget _wrapUnifiedFadeBlur(Widget content) {
+    final anim = widget.routeAnimation;
+    final mode = widget.unifiedFadeMode;
+    if (anim == null || mode == null) return content;
+    return AnimatedBuilder(
+      animation: Listenable.merge([anim, mode]),
+      builder: (context, child) {
+        if (!mode.value) return child!;
+        final closeU = Curves.easeInCubic.transform(1.0 - anim.value);
+        final sigma = 10.0 * closeU;
+        if (sigma <= 0.01) return child!;
+        return ImageFiltered(
+          imageFilter: ImageFilter.blur(
+            sigmaX: sigma,
+            sigmaY: sigma,
+            tileMode: TileMode.clamp,
+          ),
+          child: child,
+        );
+      },
+      child: content,
+    );
   }
 
   Widget _buildHeader(bool isSmallScreen) {

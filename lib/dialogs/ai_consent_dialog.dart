@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/glass_dialog.dart';
@@ -8,39 +6,23 @@ class AIConsentDialog {
   static Future<bool> show(BuildContext context) async {
     bool consentChecked = false;
 
-    final result = await showGeneralDialog<bool>(
+    final result = await showBouncyDialog<bool>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: 'AI功能说明',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 24),
-                        constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
-                        child: GlassDialogShell(
-                          padding: const EdgeInsets.all(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                          child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束（含壳内边距，与旧版壳外 Container(constraints:) 一致）
+      shellMaxWidth: 400,
+      shellMaxHeight: 500,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Opacity(
@@ -178,17 +160,9 @@ class AIConsentDialog {
                               ],
                             ),
                           ],
-                        ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
+                        );
           },
-        );
-      },
+        ),
     );
 
     return result ?? false;

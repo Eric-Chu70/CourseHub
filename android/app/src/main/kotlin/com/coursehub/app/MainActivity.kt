@@ -92,9 +92,17 @@ class MainActivity : FlutterActivity() {
 
                 val bestMode = activeDisplay?.supportedModes?.maxByOrNull { it.refreshRate }
                 if (bestMode != null) {
+                    // 去抖：模式未变化时跳过写入。每次 onResume/onWindowFocusChanged
+                    // 都无条件写 window.attributes 会触发窗口重排/显示模式切换，
+                    // 与长后台恢复时 Flutter Surface 重建竞态可致光栅线程死等
+                    // （白屏/画面冻结）。仅在目标模式与已应用值不同时写一次
+                    if (bestMode.modeId == lastAppliedModeId &&
+                        attrs.preferredDisplayModeId == bestMode.modeId
+                    ) return
                     attrs.preferredDisplayModeId = bestMode.modeId
                     attrs.preferredRefreshRate = bestMode.refreshRate
                     window.attributes = attrs
+                    lastAppliedModeId = bestMode.modeId
                     Log.d("MainActivity", "Requested refresh mode=${bestMode.modeId}, rate=${bestMode.refreshRate}")
                     return
                 }
@@ -102,10 +110,13 @@ class MainActivity : FlutterActivity() {
 
             attrs.preferredRefreshRate = 0f
             window.attributes = attrs
+            lastAppliedModeId = -1
         } catch (e: Exception) {
             Log.w("MainActivity", "applyHighRefreshRateHint failed", e)
         }
     }
+
+    private var lastAppliedModeId = -1
     
     private fun setMiuiStatusBarLightMode(lightMode: Boolean) {
         try {

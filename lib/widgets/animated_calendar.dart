@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'glass_dialog.dart';
 
@@ -324,54 +323,42 @@ Future<DateTime?> showAnimatedDatePicker({
 }) async {
   DateTime? selectedDate;
   
-  await showGeneralDialog(
+  await showBouncyDialog(
     context: context,
-    barrierDismissible: true,
     barrierLabel: title,
-    transitionDuration: const Duration(milliseconds: 300),
-    pageBuilder: (context, animation, secondaryAnimation) {
+    shellPadding: EdgeInsets.zero,
+    shellBoxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.2),
+        blurRadius: 20,
+        offset: const Offset(0, 10),
+      ),
+    ],
+    builder: (context) {
       final screenWidth = MediaQuery.of(context).size.width;
       final dialogWidth = screenWidth > 400 ? 360.0 : screenWidth * 0.9;
       
-      return BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Center(
-          child: Material(
-            color: Colors.transparent,
-            child: FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                ),
-                child: SizedBox(
-                  width: dialogWidth,
-                  child: GlassDialogShell(
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.2),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                    child: AnimatedCalendarDatePicker(
+      return SizedBox(
+        width: dialogWidth,
+        child: AnimatedCalendarDatePicker(
                       initialDate: initialDate,
-                      firstDate: firstDate ?? DateTime(2020),
-                      lastDate: lastDate ?? DateTime(2030),
+                      // 归一化到当天 00:00：调用方常传 DateTime.now()（含时分），
+                      // 而日历格子日期是当天零点，未归一化时今天会被
+                      // isBefore 误判为禁用，导致当天无法选择
+                      firstDate: firstDate != null
+                          ? DateTime(firstDate.year, firstDate.month, firstDate.day)
+                          : DateTime(2020),
+                      lastDate: lastDate != null
+                          ? DateTime(lastDate.year, lastDate.month, lastDate.day)
+                          : DateTime(2030),
                       onDateChanged: (date) {
                         selectedDate = date;
                         Navigator.pop(context);
                       },
                     ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
       );
     },
   );
-  
+
   return selectedDate;
 }

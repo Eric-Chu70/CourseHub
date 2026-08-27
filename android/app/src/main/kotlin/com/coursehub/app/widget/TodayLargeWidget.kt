@@ -10,8 +10,10 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
+import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.provideContent
@@ -40,6 +42,9 @@ import es.antonborri.home_widget.actionStartActivity
 class TodayLargeWidget : GlanceAppWidget() {
 
     override val stateDefinition = HomeWidgetGlanceStateDefinition()
+
+    // 按组件实际尺寸逐个构图，配合 LocalSize 约束卡片宽高比
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val data = WidgetData.loadTodayDataAuto(context)
@@ -70,14 +75,25 @@ class TodayLargeWidget : GlanceAppWidget() {
             context, Uri.parse("coursehub://widget/timetable")
         )
 
+        // 桌面网格行高普遍大于列宽，直接铺满会导致 4x4 高>宽。
+        // 取宽高较小值作为边长：卡片近正方形并底部对齐（底边与图标行对齐），顶部剩余区域透明。
+        // 实测桌面会从宿主宽度里再吃掉约 2dp，高度补 +2dp 使顶边精确贴齐图标行（2dp 宽高差肉眼不可辨）
+        val size = LocalSize.current
+        val side = minOf(size.width, size.height)
+
         Box(
-            modifier = GlanceModifier
-                .fillMaxSize()
-                .cornerRadius(24.dp)
-                .background(WidgetTheme.bgProvider())
-                .clickable(clickAction)
+            modifier = GlanceModifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
         ) {
-            LazyColumn(
+            Box(
+                modifier = GlanceModifier
+                    .width(side)
+                    .height(side + 2.dp)
+                    .cornerRadius(24.dp)
+                    .background(WidgetTheme.bgProvider())
+                    .clickable(clickAction)
+            ) {
+                LazyColumn(
                 modifier = GlanceModifier.fillMaxSize().padding(16.dp)
             ) {
                 // 标题行
@@ -179,6 +195,7 @@ class TodayLargeWidget : GlanceAppWidget() {
                             )
                         }
                     }
+                }
                 }
             }
         }

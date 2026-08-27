@@ -39,7 +39,7 @@ class AIAssistantScreen extends StatefulWidget {
 }
 
 class AIAssistantScreenState extends State<AIAssistantScreen>
-    with WidgetsBindingObserver, SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+    with WidgetsBindingObserver, TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   // 保活：在 PageView 中切走再切回时不再销毁重建整个聊天，避免重复解析 Markdown/重载图片造成卡顿
   @override
   bool get wantKeepAlive => true;
@@ -47,6 +47,9 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   static List<_ChatMessage> _persistentMessages = [];
   static String? _persistentSelectedModel;
   static bool _hasAnalyzed = false;
+  /// 欢迎消息（课程分析）基于的课表 id：切换课表后与之不同时，
+  /// 欢迎消息右上角展示"重新生成"按钮（正常不展示）
+  static String? _analysisTimetableId;
   static double _persistentScrollOffset = 0.0;
   static bool _needsRefresh = false;
   static bool _isAnalyzing = false;
@@ -64,6 +67,11 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   static bool _isThinking = false;
   static bool _isThinkingCollapsed = false;
   bool _showAddMenu = false;
+  /// 加号菜单弹出动画（对齐三点菜单 _MenuPopTransition）：
+  /// 220ms easeOutBack 弹出 / easeInCubic 收起，透明度 + 向上滑入 + 自底部缩放；
+  /// 菜单自按钮上方向上弹出，故方向与锚点对齐方式与向下弹出的三点菜单镜像
+  AnimationController? _addMenuController;
+  CurvedAnimation? _addMenuCurved;
   bool _pauseAutoScrollDuringOutput = false;
   bool _customModelIsReasoning = false;
   bool _customModelSupportsVision = false;
@@ -157,7 +165,20 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     }
   }
 
+  bool get _isTimetableMismatch =>
+      _analysisTimetableId != null &&
+      _analysisTimetableId != StorageService.currentTimetableId;
+
+  /// 课表切换等数据变化：欢迎消息"重新生成"按钮主动出现/消失。
+  /// 注意不能用快照做变化检测——重新生成完成后 _analysisTimetableId
+  /// 会在流式回调里被静默更新，快照失真后再次切换课表时按钮不再出现
+  void _handleStorageDataChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   void scrollToBottom() {
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom();
     });
@@ -226,6 +247,8 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _streamUpdateTick.addListener(_handleStreamUpdateTick);
+    // 课表切换等数据变化时刷新：欢迎消息"重新生成"按钮需主动出现/消失
+    StorageService.dataChangeListenable.addListener(_handleStorageDataChanged);
     _messageController.addListener(_updateTextLinesExtraHeight);
     _messages = _persistentMessages;
     _selectedModel = _persistentSelectedModel;
@@ -803,8 +826,21 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
 
     _retryCount = 0;
     debugPrint('[AI Assistant] Starting schedule analysis');
-    
+
     _executeAnalyzeSchedule();
+  }
+
+  /// 重新生成课程分析（欢迎消息）：切换课表后由欢迎消息右上角的
+  /// 重启按钮触发——移除旧欢迎消息，按当前课表重新分析
+  void _regenerateScheduleAnalysis() {
+    if (_isAnalyzing) return;
+    setState(() {
+      _messages.removeWhere((m) => m.isWelcome);
+      _persistentMessages = List.from(_messages);
+      _hasAnalyzed = false;
+      _analysisTimetableId = null;
+    });
+    _analyzeSchedule();
   }
 
   Future<void> _executeAnalyzeSchedule({bool isRetry = false}) async {
@@ -1054,6 +1090,8 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
                 _streamingContent = '';
                 _thinkingContent = '';
                 _hasAnalyzed = true;
+                // 记录本次课程分析基于的课表：切换课表后与之不同时展示"重新生成"
+                _analysisTimetableId = StorageService.currentTimetableId;
               });
               _persistentMessages = List.from(_messages);
               _publishStreamUpdate();
@@ -1239,6 +1277,8 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
             _streamingContent = '';
             _thinkingContent = '';
             _hasAnalyzed = true;
+            // 记录本次课程分析基于的课表：切换课表后与之不同时展示"重新生成"
+            _analysisTimetableId = StorageService.currentTimetableId;
           });
           _persistentMessages = List.from(_messages);
           _publishStreamUpdate();
@@ -2429,42 +2469,25 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     }
     final models = _fastModeEnabled ? _fastModels : _normalModels;
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择模型',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            maxWidth: 400,
-                            maxHeight: 500,
-                          ),
-                          child: GlassDialogShell(
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                            child: Column(
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 400,
+              maxHeight: 500,
+            ),
+            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -2617,17 +2640,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             ),
                           ],
                             ),
-                          ),
-                          ),
-                        );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     ).then((_) => _unfocusAfterDialog());
   }
 
@@ -2644,24 +2659,44 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
     if (!mounted) return;
 
-    await showGeneralDialog(
+    await showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: 'AI配置',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (ctx, animation, secondaryAnimation) {
-        return _buildCustomAIConfigDialog(
-          prefs: prefs,
-          urlController: urlController,
-          keyController: keyController,
-          modelController: modelController,
-          manualVisionOverride: manualVisionOverride,
-          manualVisionEnabled: manualVisionEnabled,
-          reasoningEffort: reasoningEffort,
-          webSearchEnabled: webSearchEnabled,
-          animation: animation,
-        );
+      avoidKeyboard: true,
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）；
+      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
+      shellConstraintsBuilder: (context) {
+        final mediaQuery = MediaQuery.of(context);
+        final keyboardHeight = mediaQuery.viewInsets.bottom;
+        final topInset = mediaQuery.padding.top;
+        final screenHeight = mediaQuery.size.height;
+        const baseMaxHeight = 650.0;
+        double dialogMaxHeight = baseMaxHeight;
+        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+        if (availableHeight < dialogMaxHeight) {
+          dialogMaxHeight = availableHeight;
+        }
+        dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
       },
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (ctx) => _buildCustomAIConfigDialog(
+        prefs: prefs,
+        urlController: urlController,
+        keyController: keyController,
+        modelController: modelController,
+        manualVisionOverride: manualVisionOverride,
+        manualVisionEnabled: manualVisionEnabled,
+        reasoningEffort: reasoningEffort,
+        webSearchEnabled: webSearchEnabled,
+      ),
     );
 
     urlController.dispose();
@@ -2678,55 +2713,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     required bool manualVisionEnabled,
     required String reasoningEffort,
     required bool webSearchEnabled,
-    required Animation<double> animation,
   }) {
-    final mediaQuery = MediaQuery.of(context);
-    final keyboardHeight = mediaQuery.viewInsets.bottom;
     var localWebSearch = webSearchEnabled;
-    final topInset = mediaQuery.padding.top;
-    final screenHeight = mediaQuery.size.height;
-    const baseMaxHeight = 650.0;
-    double dialogMaxHeight = baseMaxHeight;
-    final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-    if (availableHeight < dialogMaxHeight) {
-      dialogMaxHeight = availableHeight;
-    }
-    dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
 
-    return BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-      child: Center(
-        child: Material(
-          color: Colors.transparent,
-          child: FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                CurvedAnimation(parent: animation, curve: Curves.easeOut),
-              ),
-              child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    margin: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: keyboardHeight > 0 ? topInset + 8 : 0,
-                      bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                    ),
-                    padding: const EdgeInsets.all(24),
-                    constraints: BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: StatefulBuilder(
+    return StatefulBuilder(
                   builder: (builderCtx, setDialogState) {
                     return SingleChildScrollView(
                       child: Column(
@@ -2888,12 +2878,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       ),
                     );
                   },
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -3066,11 +3050,35 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     });
   }
 
+  /// 懒创建菜单动画控制器（首次点开菜单时才需要）
+  AnimationController _ensureAddMenuController() {
+    if (_addMenuController == null) {
+      _addMenuController = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 220),
+      );
+      _addMenuCurved = CurvedAnimation(
+        parent: _addMenuController!,
+        // 与三点菜单一致：弹出过冲回弹，收起加速退出；
+        // easeOutBack 值域会过冲，渲染处需 clamp
+        curve: Curves.easeOutBack,
+        reverseCurve: Curves.easeInCubic,
+      );
+    }
+    return _addMenuController!;
+  }
+
   void _toggleAddMenu() {
     HapticFeedback.selectionClick();
+    final controller = _ensureAddMenuController();
     setState(() {
       _showAddMenu = !_showAddMenu;
     });
+    if (_showAddMenu) {
+      controller.forward(from: 0);
+    } else {
+      controller.reverse(from: 1);
+    }
   }
 
   void _closeAddMenu() {
@@ -3078,6 +3086,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       setState(() {
         _showAddMenu = false;
       });
+      _addMenuController?.reverse(from: 1);
     }
   }
 
@@ -3157,12 +3166,15 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     }
     WidgetsBinding.instance.removeObserver(this);
     _streamUpdateTick.removeListener(_handleStreamUpdateTick);
+    StorageService.dataChangeListenable.removeListener(_handleStorageDataChanged);
     _cancelSlowResponseTimer();
     _cancelNoResponseTimer();
     _messageController.removeListener(_updateTextLinesExtraHeight);
     _messageController.dispose();
     _scrollController.dispose();
     _thinkingScrollController.dispose();
+    _addMenuCurved?.dispose();
+    _addMenuController?.dispose();
     _focusNode.dispose();
     _keyboardDismissAnimController.dispose();
     _keyboardLayoutNotifier.dispose();
@@ -3243,11 +3255,27 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             Positioned(
                               left: 16,
                               bottom: inputBottomWithBounce + 58,
-                              child: AnimatedOpacity(
-                                opacity: _showAddMenu ? 1.0 : 0.0,
-                                duration: const Duration(milliseconds: 200),
-                                child: IgnorePointer(
-                                  ignoring: !_showAddMenu,
+                              child: IgnorePointer(
+                                ignoring: !_showAddMenu,
+                                // 弹出动画逐帧驱动（对齐三点菜单 _MenuPopTransition）：
+                                // 透明度 + 自下方 14px 向上滑入 + 0.85→1 自底部缩放。
+                                // 未创建控制器（从未点开过）时按收起态渲染，纯透明不可见
+                                child: AnimatedBuilder(
+                                  animation: _addMenuCurved ?? kAlwaysDismissedAnimation,
+                                  builder: (context, child) {
+                                    final t = _addMenuCurved?.value ?? 0.0;
+                                    return Opacity(
+                                      opacity: t.clamp(0.0, 1.0),
+                                      child: Transform.translate(
+                                        offset: Offset(0, 14 * (1 - t)),
+                                        child: Transform.scale(
+                                          scale: 0.85 + 0.15 * t,
+                                          alignment: Alignment.bottomCenter,
+                                          child: child,
+                                        ),
+                                      ),
+                                    );
+                                  },
                                   child: Material(
                                     color: Colors.transparent,
                                     child: DecoratedBox(
@@ -3266,11 +3294,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         child: BackdropFilter(
                                           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                                           child: Container(
-                                            width: 120,
+                                            // 样式对齐统一三点菜单（_blurredMenuShell）：
+                                            // 宽 160、边框 0.5 白 alpha0.5、无分割线、
+                                            // 镂空风格图标；弹出动画保持不变
+                                            width: 160,
                                             decoration: BoxDecoration(
                                               color: Colors.white.withValues(alpha: 0.7),
                                               borderRadius: BorderRadius.circular(16),
-                                              border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.5),
+                                              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
                                             ),
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
@@ -3278,17 +3309,16 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                                 SizedBox(
                                                   width: double.infinity,
                                                   child: _buildMenuItem(
-                                                    icon: Icons.camera_alt,
+                                                    icon: Icons.camera_alt_outlined,
                                                     label: '拍照',
                                                     onTap: () => _handleMenuSelection('camera'),
                                                     borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
                                                   ),
                                                 ),
-                                                Divider(height: 1, color: Colors.grey.shade200),
                                                 SizedBox(
                                                   width: double.infinity,
                                                   child: _buildMenuItem(
-                                                    icon: Icons.photo_library,
+                                                    icon: Icons.photo_library_outlined,
                                                     label: '相册',
                                                     onTap: () => _handleMenuSelection('gallery'),
                                                     borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
@@ -3469,7 +3499,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       children: [
                         const Expanded(
                           child: Text(
-                            'AI 对话',
+                            '课表助手',
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w600,
@@ -3785,10 +3815,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       )
                     : null,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+              child: Stack(
                 children: [
+                  Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                   if (message.imagePath != null) ...[
                     GestureDetector(
                       onTap: () => _showImagePreview(message.imagePath!, useHero: true, messageIndex: messageIndex, imageAspectRatio: message.imageAspectRatio),
@@ -3859,6 +3891,33 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       ),
                     ),
                   ],
+                    ],
+                  ),
+                  // 重新生成按钮（欢迎消息右上角）：悬浮叠加在内容之上，
+                  // 不占用布局空间（思考过程/正文不向下避让）；仅当课表
+                  // 已切换（与当前课程分析基于的课表不同）时展示，
+                  // 🔁 循环图标 + 极简配色（与 DDL 任务提示一致）
+                  if (!isUser && message.isWelcome && _isTimetableMismatch)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: GestureDetector(
+                        onTap: _regenerateScheduleAnalysis,
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.loop,
+                            size: 17,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -4460,27 +4519,13 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
   void _deleteCourseFromMessage(Course course, int messageIndex) {
     _unfocusBeforeDialog();
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '确认删除',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 250),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return Center(
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-            ),
-            child: FadeTransition(
-              opacity: animation,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: GlassDialogShell(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 400,
+      builder: (context) => Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -4529,13 +4574,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         ),
                       ],
                     ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     ).then((_) => _unfocusAfterDialog());
   }
 }

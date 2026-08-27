@@ -9,8 +9,10 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
+import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -39,6 +41,9 @@ class TodaySmallWidget : GlanceAppWidget() {
 
     override val stateDefinition = HomeWidgetGlanceStateDefinition()
 
+    // 按组件实际尺寸逐个构图，配合 LocalSize 约束卡片宽高比
+    override val sizeMode = SizeMode.Exact
+
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val data = WidgetData.loadTodayDataAuto(context)
         provideContent {
@@ -50,16 +55,25 @@ class TodaySmallWidget : GlanceAppWidget() {
     private fun Content(context: Context, data: WidgetData.TodayData) {
         val course = data.nextCourse
 
+        // 桌面网格行高普遍大于列宽，直接铺满会导致卡片高>宽。
+        // 取宽高较小值作为边长：卡片强制正方形并底部对齐（底边与图标行对齐），顶部剩余区域透明
+        val size = LocalSize.current
+        val side = minOf(size.width, size.height)
+
         Box(
-            modifier = GlanceModifier
-                .fillMaxSize()
-                .cornerRadius(20.dp)
-                .background(WidgetTheme.bgProvider())
-                .clickable(actionStartActivity<MainActivity>(
-                    context, Uri.parse("coursehub://widget/timetable")
-                ))
+            modifier = GlanceModifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
         ) {
-            if (course != null) {
+            Box(
+                modifier = GlanceModifier
+                    .size(side)
+                    .cornerRadius(20.dp)
+                    .background(WidgetTheme.bgProvider())
+                    .clickable(actionStartActivity<MainActivity>(
+                        context, Uri.parse("coursehub://widget/timetable")
+                    ))
+            ) {
+                if (course != null) {
                 // 层1：标题行（顶部对齐）
                 Box(
                     modifier = GlanceModifier.fillMaxSize().padding(10.dp),
@@ -251,6 +265,7 @@ class TodaySmallWidget : GlanceAppWidget() {
                         )
                     )
                 }
+            }
             }
         }
     }

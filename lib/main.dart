@@ -10,12 +10,14 @@ import 'screens/settings_screen.dart';
 import 'services/auth_service.dart';
 import 'services/glm_service.dart';
 import 'services/notification_service.dart';
+import 'services/wallpaper_storage_service.dart';
 import 'services/widget_service.dart';
 import 'utils/storage.dart';
+import 'widgets/glass_dialog.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
-const String appVersion = '1.0.5';
+const String appVersion = '1.0.6';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +53,9 @@ void main() async {
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     // 初始化桌面小组件数据
     WidgetService.updateAllWidgets();
+
+    // 壁纸维护：旧 cache 路径迁移到持久目录 + 孤儿文件清理
+    WallpaperStorageService.migrateAndCleanup();
 
     try {
       await NotificationService.instance.init();
@@ -155,37 +160,22 @@ class _MainScreenState extends State<MainScreen> {
   void _showWelcomeDialog() {
     final maxDialogHeight = MediaQuery.of(context).size.height - 48;
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '欢迎',
-      transitionDuration: const Duration(milliseconds: 400),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return Center(
-          child: Material(
-            color: Colors.transparent,
-            child: FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                ),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 32),
-                  padding: const EdgeInsets.all(28),
-                  constraints: BoxConstraints(maxHeight: maxDialogHeight),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.15),
-                        blurRadius: 30,
-                        offset: const Offset(0, 15),
-                      ),
-                    ],
-                  ),
-                  child: SingleChildScrollView(
+      margin: const EdgeInsets.symmetric(horizontal: 32),
+      shellPadding: const EdgeInsets.all(28),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.15),
+          blurRadius: 30,
+          offset: const Offset(0, 15),
+        ),
+      ],
+      backgroundAlpha: 1.0,
+      builder: (context) => ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxDialogHeight),
+        child: SingleChildScrollView(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,11 +233,6 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        );
-      },
     ).whenComplete(() {
       _showAIConsentPromptAfterWelcome();
     });

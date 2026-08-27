@@ -437,13 +437,21 @@ class _ImportScreenState extends State<ImportScreen> {
   void _showPasteJsonDialog(BuildContext context) {
     final controller = TextEditingController();
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '粘贴JSON',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      avoidKeyboard: true,
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）；
+      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
+      shellConstraintsBuilder: (context) {
         final mediaQuery = MediaQuery.of(context);
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
@@ -456,44 +464,10 @@ class _ImportScreenState extends State<ImportScreen> {
         }
         dialogMaxHeight =
             dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
-
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        margin: EdgeInsets.only(
-                          left: 24,
-                          right: 24,
-                          top: keyboardHeight > 0 ? topInset + 8 : 0,
-                          bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-                        ),
-                        padding: const EdgeInsets.all(24),
-                        constraints: BoxConstraints(
-                            maxWidth: 400, maxHeight: dialogMaxHeight),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
+        return BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight);
+      },
+      builder: (context) {
+        return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Opacity(
@@ -596,13 +570,6 @@ class _ImportScreenState extends State<ImportScreen> {
                               ],
                             ),
                           ],
-                        ),
-                      ),
-                  ),
-                ),
-              ),
-            ),
-          ),
         );
       },
     );
@@ -630,40 +597,23 @@ class _ImportScreenState extends State<ImportScreen> {
   void _showImportModeDialog(BuildContext context, Map<String, dynamic> data) {
     ImportMode selectedMode = ImportMode.merge;
 
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择导入模式',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 400,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 400),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                            child: Column(
+            return Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -760,19 +710,11 @@ class _ImportScreenState extends State<ImportScreen> {
                                   ],
                                 ),
                               ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
   }
 
   Widget _buildModeOption({
@@ -894,37 +836,21 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   void _showCloudDataManagerDialog() {
-    showGeneralDialog(
+    showBouncyDialog(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '云端数据管理',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) {
+        return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Opacity(
@@ -1018,15 +944,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
       },
     );
   }
@@ -1225,43 +1143,26 @@ class _ImportScreenState extends State<ImportScreen> {
 
   Future<List<String>?> _showCloudBackupTimetableMultiSelectDialog(
       List<TimetableInfo> timetables) {
-    return showGeneralDialog<List<String>>(
+    return showBouncyDialog<List<String>>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择备份课表',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellMaxHeight: 560,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) {
         final selectedIds = timetables.map((t) => t.id).toSet();
 
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                              maxWidth: 420, maxHeight: 560),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                            child: Column(
+            return Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -1408,19 +1309,11 @@ class _ImportScreenState extends State<ImportScreen> {
                                   ],
                                 ),
                               ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
   }
 
   Future<void> _syncFromCloud() async {
@@ -1550,43 +1443,26 @@ class _ImportScreenState extends State<ImportScreen> {
       return Future.value(<String>[]);
     }
 
-    return showGeneralDialog<List<String>>(
+    return showBouncyDialog<List<String>>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '管理云端课表',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellMaxHeight: 560,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) {
         final selectedNames = <String>{};
 
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-              child: Center(
-                child: Material(
-                  color: Colors.transparent,
-                  child: FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                        CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                              maxWidth: 420, maxHeight: 560),
-                          child: GlassDialogShell(
-                            padding: const EdgeInsets.all(24),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                            child: Column(
+            return Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -1730,19 +1606,11 @@ class _ImportScreenState extends State<ImportScreen> {
                                   ],
                                 ),
                               ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
   }
 
   Map<String, dynamic> _removeTimetablesFromCloudPayload(
@@ -1799,38 +1667,22 @@ class _ImportScreenState extends State<ImportScreen> {
     List<String> timetableNames, {
     DateTime? updatedAt,
   }) {
-    return showGeneralDialog<String>(
+    return showBouncyDialog<String>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择要同步的课表',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints:
-                          const BoxConstraints(maxWidth: 420, maxHeight: 520),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽/总高约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellMaxHeight: 520,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) {
+        return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Opacity(
@@ -1919,52 +1771,28 @@ class _ImportScreenState extends State<ImportScreen> {
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
       },
     );
   }
 
   Future<ImportMode?> _showCloudSyncModeDialog(
       DateTime? updatedAt, String timetableName) {
-    return showGeneralDialog<ImportMode>(
+    return showBouncyDialog<ImportMode>(
       context: context,
-      barrierDismissible: true,
       barrierLabel: '选择云端同步模式',
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Center(
-            child: Material(
-              color: Colors.transparent,
-              child: FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: GlassDialogShell(
-                        padding: const EdgeInsets.all(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        child: Column(
+      shellPadding: const EdgeInsets.all(24),
+      // 壳总宽约束含壳内边距（与旧版壳外 ConstrainedBox(constraints:) 一致）
+      shellMaxWidth: 420,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) {
+        return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Opacity(
@@ -2049,15 +1877,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
+          );
       },
     );
   }

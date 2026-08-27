@@ -41,32 +41,25 @@ class AIProcessingDialog extends StatefulWidget {
     required String imagePath,
     Function(List<CourseData>)? onCompleted,
   }) {
-    return showGeneralDialog(
+    // 关于式弹性对话框（孔洞遮罩 + 果冻开闭 + 内容聚焦动画）；
+    // 点击空白处可关闭（dispose 会取消流订阅与计时器，中断安全）
+    return showBouncyDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       barrierLabel: 'AI处理中',
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: AIProcessingDialog(
-            imagePath: imagePath,
-            onCompleted: onCompleted,
-          ),
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
-            child: child,
-          ),
-        );
-      },
+      avoidKeyboard: true,
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 30,
+          offset: const Offset(0, 15),
+        ),
+      ],
+      builder: (context) => AIProcessingDialog(
+        imagePath: imagePath,
+        onCompleted: onCompleted,
+      ),
     );
   }
 
@@ -101,6 +94,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   bool _isThinking = false;
   bool _isThinkingCollapsed = false;
   bool _isFirstChunkReceived = false;
+  /// 当前流式的占位正文（不含省略号，如"正在解析课表"）：
+  /// 气泡渲染时对其追加 0-3 个循环增多的动画省略号
+  String? _currentStreamingFallback;
   Timer? _noResponseTimer;
   StreamSubscription<String>? _streamSubscription;
   
@@ -160,17 +156,39 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     _streamingContent = '';
     _thinkingContent = '';
     _isThinking = false;
+    // 思考阶段默认展开（转圈 + 可滑动阅读），正文首个 chunk 到达时
+    // 自动折叠（见各流式 listen 中的 collapse 逻辑）
     _isThinkingCollapsed = false;
     _isFirstChunkReceived = false;
+    _currentStreamingFallback = null;
   }
 
-  void _updateLastAIStreamingMessage({String fallbackText = '正在思考...'}) {
+  void _updateLastAIStreamingMessage({String fallbackText = '正在思考'}) {
+    // 占位正文去省略号，渲染层追加 0-3 个循环动画点
+    _currentStreamingFallback = fallbackText;
     _updateLastAIMessage(
       _streamingContent.isNotEmpty ? _streamingContent : fallbackText,
       thinkingContent: _thinkingContent.isNotEmpty ? _thinkingContent : null,
       isThinkingCollapsed: _isThinkingCollapsed,
     );
-    _scrollThinkingToBottom();
+    // 思考输出中：贴近思考窗口底部时跟随滚动（同聊天区正文逻辑）
+    _autoScrollThinkingToBottom();
+  }
+
+  /// 思考窗口跟随滚动：用户已上滑阅读（远离底部）时不强制拉回，
+  /// 贴近底部时才跟随新内容（阈值与 _scrollToBottom 的 80px 一致）
+  void _autoScrollThinkingToBottom() {
+    // 同 _scrollToBottom：布局前捕获"贴近底部"，防止内容单帧增高超过
+    // 阈值被误判为用户上滑而停止跟随
+    final ctrl = _thinkingScrollController;
+    final wasNearBottom = !ctrl.hasClients ||
+        (ctrl.position.maxScrollExtent - ctrl.position.pixels) <= 80;
+    if (!wasNearBottom) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_isThinking || _isThinkingCollapsed) return;
+      if (!ctrl.hasClients) return;
+      ctrl.jumpTo(ctrl.position.maxScrollExtent);
+    });
   }
 
   void _scrollThinkingToBottom() {
@@ -207,8 +225,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         final secretKey = prefs.getString('tencent_secret_key');
         hasAIConfig = secretId != null && secretId.isNotEmpty && secretKey != null && secretKey.isNotEmpty;
       }
+      // AI 功能总开关关闭时（设置页可切换），即使已配置 API 也降级为
+      // 本地 OCR + 正则解析，与未配置 AI 的行为一致
+      final aiEnabled = prefs.getBool('ai_enabled') ?? false;
 
-      if (!hasAIConfig) {
+      if (!hasAIConfig || !aiEnabled) {
         _parseMode = ParseMode.regex;
         await _processWithOCRAndRegex();
       } else {
@@ -386,7 +407,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               }
             }
           });
-          _updateLastAIStreamingMessage(fallbackText: '正在解析课程表...');
+          _updateLastAIStreamingMessage(fallbackText: '正在解析课表');
           _scrollToBottom();
         },
         onError: (error) {
@@ -420,7 +441,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       _isStreaming = false;
       _isThinking = false;
       _thinkingContent = '';
-      _isThinkingCollapsed = false;
+      _isThinkingCollapsed = true;
     });
     
     try {
@@ -575,7 +596,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               }
             }
           });
-          _updateLastAIStreamingMessage(fallbackText: '正在解析课程表...');
+          _updateLastAIStreamingMessage(fallbackText: '正在解析课表');
           _scrollToBottom();
         },
         onError: (error) {
@@ -646,14 +667,20 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   }
 
   void _scrollToBottom() {
+    // 在新内容布局【前】同步捕获"是否贴近底部"：若在 post-frame 里才测量，
+    // 某个 chunk 使内容一帧内增高超过 80px 时会被误判为用户上滑，
+    // 自动回底从此永久停止（表现为跟随一会儿后突然失灵）
+    final ctrl = _scrollController;
+    final wasNearBottom = !ctrl.hasClients ||
+        (ctrl.position.maxScrollExtent - ctrl.position.pixels) <= 80;
+    if (!wasNearBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 100),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!ctrl.hasClients) return;
+      ctrl.animateTo(
+        ctrl.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeOut,
+      );
     });
   }
 
@@ -662,6 +689,10 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     if (index == -1 || _chatMessages[index].isUser) return;
 
     final current = _chatMessages[index];
+    // 流式输出中的消息：同步折叠状态到流式变量，否则下一个 chunk 会用
+    // 旧值覆盖用户的点击（表现为"输出过程中点不动/关不掉又自己展开"）
+    final isLiveMessage =
+        _isStreaming && _chatMessages.isNotEmpty && identical(message, _chatMessages.last);
     setState(() {
       _chatMessages[index] = ChatMessage(
         text: current.text,
@@ -670,6 +701,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         thinkingContent: current.thinkingContent,
         isThinkingCollapsed: !current.isThinkingCollapsed,
       );
+      if (isLiveMessage) {
+        _isThinkingCollapsed = !current.isThinkingCollapsed;
+      }
     });
 
     if (!current.isThinkingCollapsed) return;
@@ -687,13 +721,15 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
 
     _chatController.clear();
     _addUserMessage(text);
-    _addAIMessage('正在思考...');
-    
+    _addAIMessage('正在思考');
+
     setState(() {
       _isSending = true;
       _isStreaming = true;
       _resetStreamingState();
     });
+    // 在 _resetStreamingState 之后设置（其会清空占位正文标记）
+    _currentStreamingFallback = '正在思考';
 
     try {
       final history = _chatMessages
@@ -915,60 +951,33 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
     final screenHeight = MediaQuery.of(context).size.height;
     final topPadding = MediaQuery.of(context).padding.top;
-    
+
     final dialogMaxHeight = screenHeight - topPadding - keyboardHeight - 40;
     final actualMaxHeight = dialogMaxHeight.clamp(300.0, 600.0);
-    
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          margin: EdgeInsets.only(
-            left: 24,
-            right: 24,
-            bottom: keyboardHeight > 0 ? keyboardHeight + 8 : 0,
-          ),
-          constraints: BoxConstraints(maxWidth: 500, maxHeight: actualMaxHeight),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.2),
-                    blurRadius: 30,
-                    offset: const Offset(0, 15),
-                  ),
-                ],
+
+    // 壳/边距/键盘避让由 BouncyDialogHost 提供，这里只出内容
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: 500, maxHeight: actualMaxHeight),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildHeader(),
+          const Divider(height: 1),
+          Expanded(
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context).copyWith(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildHeader(),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: ScrollConfiguration(
-                      behavior: ScrollConfiguration.of(context).copyWith(
-                        physics: const BouncingScrollPhysics(
-                          parent: AlwaysScrollableScrollPhysics(),
-                        ),
-                      ),
-                      child: _isChatMode ? _buildChatView() : _buildProcessingView(),
-                    ),
-                  ),
-                  if (_currentStep == AIProcessingStep.completed) ...[
-                    const Divider(height: 1),
-                    _buildBottomActions(),
-                  ],
-                ],
-              ),
+              child: _isChatMode ? _buildChatView() : _buildProcessingView(),
             ),
           ),
-        ),
+          if (_currentStep == AIProcessingStep.completed) ...[
+            const Divider(height: 1),
+            _buildBottomActions(),
+          ],
+        ],
       ),
     );
   }
@@ -1034,7 +1043,12 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 ],
               ),
             ),
-            if (_currentStep == AIProcessingStep.completed && _parsedCourses != null && _parsedCourses!.isNotEmpty)
+            // AI 对话入口仅在 AI 解析模式提供（AI 功能关闭/未配置时为正则模式，
+            // 不展示对话切换，避免绕过 AI 开关）
+            if (_parseMode == ParseMode.ai &&
+                _currentStep == AIProcessingStep.completed &&
+                _parsedCourses != null &&
+                _parsedCourses!.isNotEmpty)
               IconButton(
                 onPressed: () {
                   setState(() {
@@ -1454,6 +1468,15 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     );
   }
 
+  /// 当前消息是否为流式占位正文（等待首个 chunk）：渲染为
+  /// 带循环动画省略号的文本（0-3 个点循环增多）
+  bool _isLiveStreamingFallback(ChatMessage message) =>
+      _isStreaming &&
+      _currentStreamingFallback != null &&
+      _chatMessages.isNotEmpty &&
+      identical(message, _chatMessages.last) &&
+      message.text == _currentStreamingFallback;
+
   Widget _buildChatBubble(ChatMessage message) {
     return Align(
       alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -1482,7 +1505,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                     if (message.text.isNotEmpty) const SizedBox(height: 10),
                   ],
                   if (message.text.isNotEmpty)
-                    MarkdownBody(
+                    _isLiveStreamingFallback(message)
+                        ? _StreamingDotsText(text: message.text)
+                        : MarkdownBody(
                       data: message.text,
                       styleSheet: MarkdownStyleSheet(
                         p: const TextStyle(fontSize: 14),
@@ -1525,7 +1550,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (isThinkingLive && message.text.isEmpty)
+                if (isThinkingLive)
                   SizedBox(
                     width: 12,
                     height: 12,
@@ -1542,7 +1567,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                   ),
                 const SizedBox(width: 6),
                 Text(
-                  isThinkingLive && message.text.isEmpty ? '思考中...' : '思考过程',
+                  isThinkingLive ? '思考中...' : '思考过程',
                   style: TextStyle(
                     color: Colors.grey.shade600,
                     fontSize: 12,
@@ -1635,6 +1660,43 @@ class ChatMessage {
     this.thinkingContent,
     this.isThinkingCollapsed = false,
   });
+}
+
+/// 流式占位正文：文本后追加 0-3 个循环增多的省略号
+class _StreamingDotsText extends StatefulWidget {
+  final String text;
+
+  const _StreamingDotsText({required this.text});
+
+  @override
+  State<_StreamingDotsText> createState() => _StreamingDotsTextState();
+}
+
+class _StreamingDotsTextState extends State<_StreamingDotsText> {
+  int _dotCount = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 450), (_) {
+      if (mounted) setState(() => _dotCount = (_dotCount + 1) % 4);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '${widget.text}${'.' * _dotCount}',
+      style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+    );
+  }
 }
 
 class _CourseEditDialog extends StatefulWidget {
