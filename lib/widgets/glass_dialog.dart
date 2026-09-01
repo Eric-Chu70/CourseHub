@@ -1,5 +1,13 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// 读取全局「减弱动态效果」开关（设置页个性化，默认关闭）。
+/// 对话框打开路径上读取（SharedPreferences 首次加载后有缓存，开销可忽略）
+Future<bool> readReduceMotionPref() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getBool('reduce_motion_enabled') ?? false;
+}
 
 /// 苹果 G2 风格对话框外壳：大圆角(24) + 半透明白色遮罩（无额外模糊）。
 ///
@@ -233,12 +241,21 @@ Widget _blurredMenuShell({
 /// 用法：将 `DropdownButtonHideUnderline(child: DropdownButton(...))`
 /// 替换为 `BlurredDropdown(...)`，外层 Container 保持不变。
 class BlurredDropdown<T> extends StatefulWidget {
-  final T value;
+  // 允许为 null：无匹配项时不显示对勾，按钮显示 hint（如内置模型"未使用"态）
+  final T? value;
   final List<DropdownMenuItem<T>>? items;
   final ValueChanged<T?>? onChanged;
   final bool isExpanded;
   final Widget? icon;
+  // 未展开时显示在当前项左侧的前缀图标（如节点图标）
+  final Widget? prefixIcon;
+  // 无匹配项时按钮内显示的占位内容
+  final Widget? hint;
+  // 菜单项文字右侧问号图标的提示文案（点击向菜单左侧弹出气泡）
+  final Map<T, String>? infoMessages;
   final double menuRadius;
+  // 弹出菜单宽度：默认与触发框同宽，触发框较窄时可单独指定更宽的菜单
+  final double? menuWidth;
 
   const BlurredDropdown({
     super.key,
@@ -247,7 +264,11 @@ class BlurredDropdown<T> extends StatefulWidget {
     this.onChanged,
     this.isExpanded = false,
     this.icon,
+    this.prefixIcon,
+    this.hint,
+    this.infoMessages,
     this.menuRadius = 16,
+    this.menuWidth,
   });
 
   @override
@@ -289,10 +310,14 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
           child: Row(
             mainAxisSize: widget.isExpanded ? MainAxisSize.max : MainAxisSize.min,
             children: [
+              if (widget.prefixIcon != null) ...[
+                widget.prefixIcon!,
+                const SizedBox(width: 6),
+              ],
               if (widget.isExpanded)
-                Expanded(child: currentItem?.child ?? const SizedBox())
+                Expanded(child: currentItem?.child ?? widget.hint ?? const SizedBox())
               else
-                currentItem?.child ?? const SizedBox(),
+                currentItem?.child ?? widget.hint ?? const SizedBox(),
               const SizedBox(width: 4),
               widget.icon ??
                   Icon(Icons.expand_more, size: 20, color: Colors.grey.shade600),
@@ -307,114 +332,348 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
     // 打开菜单前转移焦点到锚点：切断子路由 pop 后焦点恢复到输入框的链路，
     // 同时键盘随失焦自然收起（与系统下拉框行为一致）
     _anchorNode.requestFocus();
-    final renderBox = context.findRenderObject() as RenderBox;
-    final position = renderBox.localToGlobal(Offset.zero);
-    final size = renderBox.size;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
-
-    final spaceBelow = screenHeight - position.dy - size.height;
-    // 菜单最多同框显示 4 项（单项≈48px），超出滚动，避免长列表拉满整屏
-    var menuMaxHeight = spaceBelow > 50 ? spaceBelow : 250.0;
-    const maxMenuHeight = 192.0;
-    if (menuMaxHeight > maxMenuHeight) menuMaxHeight = maxMenuHeight;
-
-    // 选中项索引与各项 Key：打开后定位滚动到选中项
-    int selectedIndex = -1;
-    final itemCount = widget.items?.length ?? 0;
-    for (var i = 0; i < itemCount; i++) {
-      if (widget.items![i].value == widget.value) {
-        selectedIndex = i;
-        break;
-      }
-    }
-    final itemKeys = List<GlobalKey>.generate(itemCount, (_) => GlobalKey());
-
-    final result = await showGeneralDialog<T>(
+    final result = await showBlurredMenu<T>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Dropdown',
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 220),
-      // 菜单自身带弹出动画，外层不再叠加淡入淡出
-      transitionBuilder: (context, animation, secondaryAnimation, child) =>
-          child,
-      pageBuilder: (context, animation, secondaryAnimation) {
-        // 首帧布局完成后定位滚动：选中项滚到菜单顶部（同框最多 4 项）
-        if (selectedIndex >= 0) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            final itemContext = itemKeys[selectedIndex].currentContext;
-            if (itemContext != null) {
-              Scrollable.ensureVisible(
-                itemContext,
-                duration: Duration.zero,
-                alignment: 0.0,
-              );
-            }
-          });
-        }
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => Navigator.pop(context),
-              ),
-            ),
-            Positioned(
-              left: position.dx.clamp(0.0, screenWidth - size.width),
-              top: position.dy + size.height + 4,
-              width: size.width,
-              child: _MenuPopTransition(
-                animation: animation,
-                child: Material(
-                  color: Colors.transparent,
-                  child: _blurredMenuShell(
-                    radius: widget.menuRadius,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: menuMaxHeight),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        padding: EdgeInsets.zero,
-                        // 顶端/底端超出回弹（iOS 风格）
-                        physics: const BouncingScrollPhysics(),
-                        itemCount: itemCount,
-                        itemBuilder: (context, index) {
-                          final item = widget.items![index];
-                          final isSelected = item.value == widget.value;
-                          return InkWell(
-                            key: itemKeys[index],
-                            onTap: () => Navigator.pop(context, item.value),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 12),
-                              child: Row(
-                                children: [
-                                  Expanded(child: item.child),
-                                  if (isSelected) ...[
-                                    const SizedBox(width: 8),
-                                    const Icon(Icons.check,
-                                        size: 16, color: Color(0xFF4A90E2)),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+      items: widget.items,
+      value: widget.value,
+      menuRadius: widget.menuRadius,
+      menuWidth: widget.menuWidth,
+      infoMessages: widget.infoMessages,
     );
 
     if (result != null && widget.onChanged != null) {
       widget.onChanged!(result);
     }
+  }
+}
+
+/// 独立弹出统一样式下拉菜单（与 BlurredDropdown 同款菜单壳与动效）：
+/// 锚定 [context] 对应的控件，供顶部徽章等非下拉框场景复用。
+/// 返回用户选中的值（未选择/点击遮罩关闭返回 null）。
+Future<T?> showBlurredMenu<T>({
+  required BuildContext context,
+  required List<DropdownMenuItem<T>>? items,
+  T? value,
+  double menuRadius = 16,
+  double? menuWidth,
+  Map<T, String>? infoMessages,
+  double menuHorizontalShift = 0,
+}) async {
+  final renderBox = context.findRenderObject() as RenderBox;
+  final position = renderBox.localToGlobal(Offset.zero);
+  final size = renderBox.size;
+  final width = menuWidth ?? size.width;
+  final screenWidth = MediaQuery.of(context).size.width;
+  final screenHeight = MediaQuery.of(context).size.height;
+
+  final spaceBelow = screenHeight - position.dy - size.height;
+  final itemCount = items?.length ?? 0;
+  // 菜单最多同框显示 4 项（单项≈48px），超出滚动，避免长列表拉满整屏；
+  // ≤4 项时放宽高度上限（含文字缩放留量），保证全部同框显示、不出滚动条
+  var menuMaxHeight = spaceBelow > 50 ? spaceBelow : 250.0;
+  final maxMenuHeight = itemCount <= 4 ? 224.0 : 192.0;
+  if (menuMaxHeight > maxMenuHeight) menuMaxHeight = maxMenuHeight;
+
+  // 选中项索引与各项 Key：打开后定位滚动到选中项
+  int selectedIndex = -1;
+  for (var i = 0; i < itemCount; i++) {
+    if (items![i].value == value) {
+      selectedIndex = i;
+      break;
+    }
+  }
+  final itemKeys = List<GlobalKey>.generate(itemCount, (_) => GlobalKey());
+  // 问号图标锚点 key（仅带提示文案的项会挂到图标上）
+  final infoKeys = List<GlobalKey>.generate(itemCount, (_) => GlobalKey());
+  // 问号提示气泡状态：可见性 / 文案 / 垂直位置 / 触发的项索引
+  bool infoVisible = false;
+  String? infoText;
+  double? infoTop;
+  int? activeInfoIndex;
+  // 水平偏移（负值向左）：徽章等小型锚点的菜单比锚点宽时整体左移对齐。
+  // 右侧留 16px 屏幕边距：贴右缘的锚点（如对话页徽章）菜单右缘与锚点右缘对齐，
+  // 而不是被 clamp 推到紧贴屏幕边缘
+  final rightBound =
+      (screenWidth - width - 16).clamp(0.0, screenWidth - width);
+  final menuLeft =
+      (position.dx + menuHorizontalShift).clamp(0.0, rightBound);
+
+  final result = await showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Dropdown',
+    barrierColor: Colors.transparent,
+    transitionDuration: const Duration(milliseconds: 220),
+    // 菜单自身带弹出动画，外层不再叠加淡入淡出
+    transitionBuilder: (context, animation, secondaryAnimation, child) =>
+        child,
+    pageBuilder: (context, animation, secondaryAnimation) {
+      // 首帧布局完成后定位滚动：选中项滚到菜单顶部（同框最多 4 项）
+      if (selectedIndex >= 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final itemContext = itemKeys[selectedIndex].currentContext;
+          if (itemContext != null) {
+            Scrollable.ensureVisible(
+              itemContext,
+              duration: Duration.zero,
+              alignment: 0.0,
+            );
+          }
+        });
+      }
+      return StatefulBuilder(
+        builder: (context, setMenuState) {
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    // 关闭菜单时提示气泡同步收回（随菜单退出动画一起滑回）
+                    setMenuState(() => infoVisible = false);
+                    Navigator.pop(context);
+                  },
+                ),
+              ),
+              Positioned(
+                left: menuLeft,
+                top: position.dy + size.height + 4,
+                width: width,
+                child: _MenuPopTransition(
+                  animation: animation,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: _blurredMenuShell(
+                      radius: menuRadius,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: menuMaxHeight),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          // 顶端/底端超出回弹（iOS 风格）
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: itemCount,
+                          itemBuilder: (context, index) {
+                            final item = items![index];
+                            final isSelected = item.value == value;
+                            final hasInfo = infoMessages != null &&
+                                item.value != null &&
+                                infoMessages.containsKey(item.value);
+                            return InkWell(
+                              key: itemKeys[index],
+                              onTap: () {
+                                // 选中项关闭菜单时提示气泡同步收回
+                                setMenuState(() => infoVisible = false);
+                                Navigator.pop(context, item.value);
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    Expanded(child: item.child),
+                                    // 问号图标靠内（紧贴文字），不挤占右侧勾号槽位
+                                    if (hasInfo) ...[
+                                      const SizedBox(width: 6),
+                                      GestureDetector(
+                                        key: infoKeys[index],
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () {
+                                          final iconContext =
+                                              infoKeys[index].currentContext;
+                                          final iconBox = iconContext
+                                              ?.findRenderObject() as RenderBox?;
+                                          setMenuState(() {
+                                            if (infoVisible &&
+                                                activeInfoIndex == index) {
+                                              // 再次点击同一图标：收回气泡
+                                              infoVisible = false;
+                                            } else {
+                                              activeInfoIndex = index;
+                                              infoText =
+                                                  infoMessages![item.value];
+                                              if (iconBox != null) {
+                                                infoTop = iconBox
+                                                        .localToGlobal(
+                                                            Offset.zero)
+                                                        .dy -
+                                                    6;
+                                              }
+                                              infoVisible = true;
+                                            }
+                                          });
+                                        },
+                                        child: Icon(
+                                          Icons.help_outline,
+                                          size: 15,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ],
+                                    // 勾号固定槽位：位置恒定，未选中时留空占位
+                                    SizedBox(
+                                      width: 24,
+                                      child: isSelected
+                                          ? const Icon(Icons.check,
+                                              size: 16,
+                                              color: Color(0xFF4A90E2))
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // 问号提示气泡：向菜单左侧弹出（收回时向右滑回），与触发图标垂直对齐
+              if (infoText != null)
+                _MenuInfoTooltip(
+                  visible: infoVisible,
+                  text: infoText!,
+                  right: screenWidth - menuLeft + 8,
+                  top: infoTop ?? 0,
+                  onDismissed: () {
+                    setMenuState(() {
+                      infoText = null;
+                      activeInfoIndex = null;
+                    });
+                  },
+                ),
+            ],
+          );
+        },
+      );
+    },
+  );
+
+  return result;
+}
+
+/// 菜单项问号提示气泡：向菜单左侧弹出（自菜单侧向左滑出 + 淡入），
+/// 收回时向右滑回菜单侧并淡出；[visible] 翻转驱动进出场动画
+class _MenuInfoTooltip extends StatefulWidget {
+  final bool visible;
+  final String text;
+  final double right;
+  final double top;
+  final VoidCallback? onDismissed;
+
+  const _MenuInfoTooltip({
+    required this.visible,
+    required this.text,
+    required this.right,
+    required this.top,
+    this.onDismissed,
+  });
+
+  @override
+  State<_MenuInfoTooltip> createState() => _MenuInfoTooltipState();
+}
+
+class _MenuInfoTooltipState extends State<_MenuInfoTooltip>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+
+  // 与菜单弹出同款曲线：打开自锚点方向弹出（轻微回弹），收回缩回锚点处
+  late final CurvedAnimation _curved = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeInCubic,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.visible) {
+      _controller.forward();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _MenuInfoTooltip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible == oldWidget.visible) return;
+    if (widget.visible) {
+      _controller.forward();
+    } else {
+      _controller.reverse().whenCompleteOrCancel(() {
+        if (mounted) widget.onDismissed?.call();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _curved.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 智能换行：气泡自右缘定位向左展开，最大宽度不超过
+    // 屏幕宽度减去右侧偏移和 16px 左边距，窄屏时长文字自动折行
+    final maxTipWidth =
+        MediaQuery.of(context).size.width - widget.right - 16;
+    return Positioned(
+      right: widget.right,
+      top: widget.top,
+      child: AnimatedBuilder(
+        animation: _curved,
+        builder: (context, child) {
+          final t = _curved.value;
+          return Opacity(
+            // easeOutBack 会过冲超过 1.0，透明度需夹取
+            opacity: t.clamp(0.0, 1.0),
+            child: Transform.translate(
+              // 自菜单侧（右）向左滑出；收回时向右缩回菜单侧
+              offset: Offset(14 * (1 - t), 0),
+              child: Transform.scale(
+                // 右侧对齐缩放：视觉上自菜单侧向左展开/向右收起（同菜单动效）
+                scale: 0.85 + 0.15 * t,
+                alignment: Alignment.centerRight,
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            constraints: BoxConstraints(maxWidth: maxTipWidth),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.15),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Text(
+              widget.text,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -672,9 +931,14 @@ class BouncyDialogHost extends StatefulWidget {
     this.shellMaxWidth,
     this.shellMaxHeight,
     this.shellConstraintsBuilder,
+    this.reduceMotion = false,
   });
 
   final Animation<double> animation;
+
+  /// 减弱动态效果：壳背景仅保留半透明（去除 BackdropFilter 模糊），
+  /// 四周压暗遮罩/裁切与开闭动画不变，移除内容的模糊淡入淡出。
+  final bool reduceMotion;
 
   /// 对话框内容（壳由本组件提供；内容模糊动画仅作用于内容，壳保持清晰）
   final Widget child;
@@ -829,14 +1093,16 @@ class _BouncyDialogHostState extends State<BouncyDialogHost> {
         // ImageFiltered）导致内容子树 element 重新 mount——StatefulWidget
         // 重建会丢失滚动位置/选中态（时间选择器滚轮跳回 initialItem、
         // 日历页跳回首页等「关闭瞬间显示原值」bug）
-        Widget content = ImageFiltered(
-          imageFilter: ImageFilter.blur(
-            sigmaX: blurSigma,
-            sigmaY: blurSigma,
-            tileMode: TileMode.clamp,
-          ),
-          child: child ?? const SizedBox.shrink(),
-        );
+        Widget content = widget.reduceMotion
+            ? (child ?? const SizedBox.shrink())
+            : ImageFiltered(
+                imageFilter: ImageFilter.blur(
+                  sigmaX: blurSigma,
+                  sigmaY: blurSigma,
+                  tileMode: TileMode.clamp,
+                ),
+                child: child ?? const SizedBox.shrink(),
+              );
         return Stack(
           children: [
             // 自绘压暗遮罩（孔洞处不压暗；IgnorePointer 让点击穿透到路由遮罩以关闭）
@@ -904,8 +1170,9 @@ class _BouncyDialogHostState extends State<BouncyDialogHost> {
       key: _shellKey,
       padding: widget.shellPadding,
       boxShadow: widget.shellBoxShadow,
-      blurSigma: widget.backgroundBlurSigma,
-      backgroundAlpha: widget.backgroundAlpha,
+      // 减弱动态效果：壳背景仅半透明白（无模糊时提高不透明度避免过透）
+      blurSigma: widget.reduceMotion ? null : widget.backgroundBlurSigma,
+      backgroundAlpha: widget.reduceMotion ? 0.94 : widget.backgroundAlpha,
       radius: widget.radius,
       child: content,
     );
@@ -952,7 +1219,14 @@ Future<T?> showBouncyDialog<T>({
   double? shellMaxWidth,
   double? shellMaxHeight,
   BoxConstraints Function(BuildContext context)? shellConstraintsBuilder,
-}) {
+  bool? reduceMotion,
+}) async {
+  // 全局「减弱动态效果」：未显式指定时自动读取设置页开关——
+  // 全应用对话框（含 GlassDialog.show / CourseDialog.show 等封装）
+  // 经此入口统一生效：壳背景仅半透明无模糊、四周压暗裁切与开闭
+  // 动画不变、移除内容模糊淡入淡出
+  final bool effectiveReduceMotion =
+      reduceMotion ?? await readReduceMotionPref();
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
@@ -976,6 +1250,7 @@ Future<T?> showBouncyDialog<T>({
         shellMaxWidth: shellMaxWidth,
         shellMaxHeight: shellMaxHeight,
         shellConstraintsBuilder: shellConstraintsBuilder,
+        reduceMotion: effectiveReduceMotion,
         child: Builder(builder: builder),
       );
     },

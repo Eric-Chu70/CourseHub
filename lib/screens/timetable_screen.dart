@@ -19,6 +19,7 @@ import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/blur_selection_menu.dart';
 
 class TimetableScreen extends StatefulWidget {
   final Function(bool) onScrollDirectionChanged;
@@ -54,6 +55,14 @@ class TimetableScreenState extends State<TimetableScreen>
   bool _wallpaperEnabled = false;
   bool _wallpaperIsLight = true;
   bool _wallpaperBlurEnabled = false;
+
+  /// 减弱动态效果（设置页开关）：开启后课表页 morph 动画改走统一
+  /// 对话框淡入淡出（无背景/内容模糊），卡片模糊强制关闭
+  bool _reduceMotionEnabled = false;
+
+  /// 显示非本周课程（设置页开关，默认开启）：关闭后非本周课程
+  /// 不再以灰色卡片显示
+  bool _showInactiveCourses = true;
 
   /// morph 翻转动画期间由翻转卡片（课程块复刻）接管的源课程块所在格
   /// （day, period）：原课程块不再瞬隐/瞬现，而是随 _morphBlockFade
@@ -102,6 +111,26 @@ class TimetableScreenState extends State<TimetableScreen>
   /// 动画）。首次点空白格显示、取消添加 morph 归位后重新开始计时；
   /// 收起/再次点击/对话框接管时取消
   Timer? _emptySlotAutoHideTimer;
+
+  /// 「显示非本周课程」关闭时的原课程卡片短暂浮现：点击被隐藏的
+  /// 非本周课程原位后，原课程卡片以淡入动画短暂显示，满 5 秒自动
+  /// 淡出（动画参考添加/删除课程：淡入=由模糊变清晰+由内部伸展，
+  /// 淡出反向即删除样式）；左右滑动切换周页自动隐藏（同加号遮罩）
+  AnimationController? _inactivePeekController;
+  CurvedAnimation? _inactivePeekCurved;
+  String? _inactivePeekCourseId;
+  Timer? _inactivePeekTimer;
+
+  /// 浮现倒计时到期时刻（timer 挂着时有效）与暂停期间保存的剩余时长：
+  /// 详情对话框/长按菜单打开期间暂停（取消 timer 并记录剩余），关闭后
+  /// 按剩余时长续接——暂停期间不走表
+  DateTime? _inactivePeekDeadline;
+  Duration? _inactivePeekPausedRemaining;
+
+  /// 暂停嵌套计数：菜单→编辑/添加等对话框链式打开时，菜单关闭的续接
+  /// 可能晚于对话框的暂停（菜单收起动画异步回调）。计数保证只有最外
+  /// 层暂停源全部关闭后才真正续接计时
+  int _inactivePeekPauseCount = 0;
 
   /// 课程块 GlobalKey 注册表（course.id → key）：删除动画启动前测量
   /// 课程块的屏幕矩形（幽灵卡片按此矩形定位）
@@ -232,6 +261,8 @@ class TimetableScreenState extends State<TimetableScreen>
     // 遮罩滞留原位观感割裂。监听器在拖动首像素即触发；无选中时
     // _dismissEmptySlotMask 幂等直接返回，拖动中重复调用无副作用
     _dismissEmptySlotMask();
+    // 同理：非本周课程浮现卡片随页移走也割裂，滑动即隐藏
+    _dismissInactivePeek();
   }
 
   @override
@@ -241,6 +272,9 @@ class TimetableScreenState extends State<TimetableScreen>
     _courseBlockMenuOverlay = null;
     _emptySlotAutoHideTimer?.cancel();
     _emptySlotMaskController.dispose();
+    _inactivePeekTimer?.cancel();
+    _inactivePeekCurved?.dispose();
+    _inactivePeekController?.dispose();
     _morphBlockFade.dispose();
     _vanishOverlay?.remove();
     _vanishOverlay = null;
@@ -335,7 +369,11 @@ class TimetableScreenState extends State<TimetableScreen>
     final path = prefs.getString('wallpaper_path');
     final opacity = prefs.getInt('wallpaper_opacity') ?? 100;
     final enabled = prefs.getBool('wallpaper_enabled') ?? false;
-    final blur = prefs.getBool('wallpaper_blur_enabled') ?? false;
+    _reduceMotionEnabled = prefs.getBool('reduce_motion_enabled') ?? false;
+    _showInactiveCourses = prefs.getBool('show_inactive_courses') ?? true;
+    // 减弱动态效果开启时强制关闭卡片模糊（选项已在设置页隐藏）
+    final blur =
+        (prefs.getBool('wallpaper_blur_enabled') ?? false) && !_reduceMotionEnabled;
     final soundEnabled = prefs.getBool('wallpaper_video_sound') ?? false;
     _videoSoundEnabled = soundEnabled;
 
@@ -606,6 +644,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                 borderRadius: BorderRadius.circular(8),
                                               ),
                                               child: TextField(
+                                                contextMenuBuilder: styledEditableContextMenu,
                                                 controller: editController,
                                                 autofocus: true,
                                                 style: TextStyle(
@@ -893,6 +932,7 @@ class TimetableScreenState extends State<TimetableScreen>
                             ),
                             const SizedBox(height: 12),
                             TextField(
+                              contextMenuBuilder: styledEditableContextMenu,
                               controller: nameController,
                               focusNode: nameFocusNode,
                               autofocus: autoFocusNewField,
@@ -1918,6 +1958,8 @@ class TimetableScreenState extends State<TimetableScreen>
             c.day == dayIndex && c.time == period).toList();
           if (sameStartCourses.isEmpty) continue;
           final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
+          // 「显示非本周课程」关闭：非本周课程块不渲染，也不加模糊区域
+          if (activeCourses.isEmpty && !_showInactiveCourses) continue;
           final course = activeCourses.isEmpty
               ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
               : activeCourses.first;
@@ -2109,6 +2151,9 @@ class TimetableScreenState extends State<TimetableScreen>
     }
     // 任何点击交互都重置自动消失倒计时（下方各显示分支重新起算）
     _cancelEmptySlotAutoHideTimer();
+    // 点击其它空白格显示加号遮罩时，收起可能仍在显示的非本周课程
+    // 浮现卡片（避免两处提示同时存在）；无浮现时幂等直接返回
+    _dismissInactivePeek();
     if (_selectedEmptyDay == day && _selectedEmptyPeriod == period) {
       // 第二次点击：测量遮罩矩形后弹出添加课程对话框——遮罩不收起：
       // morph 从遮罩原位起飞（t=0 复刻与遮罩像素重合），取消时 morph
@@ -2172,6 +2217,183 @@ class TimetableScreenState extends State<TimetableScreen>
   void _cancelEmptySlotAutoHideTimer() {
     _emptySlotAutoHideTimer?.cancel();
     _emptySlotAutoHideTimer = null;
+  }
+
+  /// 非本周课程卡片开始浮现：淡入动画（240ms easeOutCubic）+ 5 秒
+  /// 自动淡出倒计时。重复点击同一格重置计时；点击另一格切换浮现对象
+  void _beginInactivePeek(Course course) {
+    if (!mounted) return;
+    _inactivePeekTimer?.cancel();
+    _inactivePeekCurved?.dispose();
+    _inactivePeekController?.dispose();
+    _inactivePeekController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    );
+    _inactivePeekCurved = CurvedAnimation(
+      parent: _inactivePeekController!,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    setState(() => _inactivePeekCourseId = course.id);
+    _inactivePeekController!.forward(from: 0);
+    _inactivePeekPauseCount = 0;
+    _inactivePeekPausedRemaining = null;
+    _startInactivePeekTimer(const Duration(seconds: 5));
+  }
+
+  /// 启动/续接浮现倒计时（记录到期时刻，暂停时用于计算剩余时长）
+  void _startInactivePeekTimer(Duration remaining) {
+    _inactivePeekTimer?.cancel();
+    _inactivePeekDeadline = DateTime.now().add(remaining);
+    _inactivePeekTimer = Timer(remaining, () {
+      if (!mounted) return;
+      _dismissInactivePeek();
+    });
+  }
+
+  /// 暂停浮现倒计时（卡片保持显示、暂停期间不走表）：点击浮现卡片
+  /// 打开课程详情/长按呼出菜单/打开编辑或添加对话框时调用，对应关闭
+  /// 回调配对调用 _resumeInactivePeek。可嵌套（菜单→编辑对话框链），
+  /// 仅当计数归零才真正续接计时。无浮现时幂等返回
+  void _pauseInactivePeek() {
+    if (_inactivePeekCourseId == null) return;
+    final timer = _inactivePeekTimer;
+    if (timer != null) {
+      var remaining =
+          _inactivePeekDeadline?.difference(DateTime.now()) ?? Duration.zero;
+      if (remaining < Duration.zero) remaining = Duration.zero;
+      _inactivePeekPausedRemaining = remaining;
+      timer.cancel();
+      _inactivePeekTimer = null;
+    }
+    _inactivePeekPauseCount++;
+  }
+
+  /// 续接浮现倒计时：详情对话框/长按菜单/编辑添加对话框关闭时调用。
+  /// 嵌套计数未归零（上层对话框仍开着）时不续接；无浮现或从未暂停时
+  /// 幂等返回；剩余时长耗尽则直接收起
+  void _resumeInactivePeek() {
+    if (_inactivePeekCourseId == null) return;
+    if (_inactivePeekPauseCount > 0) _inactivePeekPauseCount--;
+    if (_inactivePeekPauseCount > 0 || _inactivePeekTimer != null) return;
+    final remaining = _inactivePeekPausedRemaining;
+    _inactivePeekPausedRemaining = null;
+    if (remaining == null) return;
+    if (remaining <= Duration.zero) {
+      _dismissInactivePeek();
+      return;
+    }
+    _startInactivePeekTimer(remaining);
+  }
+
+  /// 以动画方式收起非本周课程浮现卡片（5 秒到期/滑动切周触发）
+  void _dismissInactivePeek() {
+    _inactivePeekTimer?.cancel();
+    _inactivePeekTimer = null;
+    _inactivePeekPauseCount = 0;
+    _inactivePeekPausedRemaining = null;
+    if (_inactivePeekCourseId == null) return;
+    if (_inactivePeekController != null &&
+        _inactivePeekController!.value > 0) {
+      final id = _inactivePeekCourseId;
+      _inactivePeekController!.reverse().whenComplete(() {
+        if (mounted && _inactivePeekCourseId == id) {
+          setState(() => _inactivePeekCourseId = null);
+        }
+      });
+    } else {
+      setState(() => _inactivePeekCourseId = null);
+    }
+  }
+
+  /// 被隐藏的非本周课程原位的透明点击区：点击触发原课程卡片短暂
+  /// 浮现；浮现期间以添加课程同款动画（淡入=由模糊变清晰+由内部
+  /// 伸展，反向收起即删除课程样式）显示灰色原课程卡片
+  Widget _buildInactivePeekSlot(
+    Course course,
+    int period,
+    double cellHeight, {
+    bool hasWallpaper = false,
+    double transparencyFactor = 1.0,
+    // morph 飞行中：浮现卡片由翻转卡片（复刻）接管，随 _morphBlockFade
+    // 渐隐/渐显。Opacity/IgnorePointer 必须包在 Positioned **内部**——
+    // Positioned 是 Stack 的直接子级，ParentData 才能正确落到 RenderStack
+    //（包在外部会触发 Incorrect use of ParentDataWidget，窄屏/任意屏上
+    // 展开该卡片时课表网格与其它课程卡片消失、所在列变灰）
+    double? morphOpacity,
+  }) {
+    Widget content = _inactivePeekCourseId == course.id && _inactivePeekCurved != null
+        ? Builder(
+              builder: (context) {
+                // 浮现期间可点按/长按（与正常课程块一致）：点击打开课程
+                // 详情（morph 从浮现卡片原位起飞，起飞前瞬时清除浮现，
+                // 复刻与浮现卡片像素重合无闪现）；长按弹出课程块菜单
+                final card = _buildCourseCellCard(
+                  course,
+                  isInactiveInCurrentWeek: true,
+                  hasWallpaper: hasWallpaper,
+                  transparencyFactor: transparencyFactor,
+                );
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    // 卡片保持显示、倒计时暂停（morph 复刻 t=0 与浮现
+                    // 卡片像素重合），详情关闭后续接剩余倒计时
+                    _pauseInactivePeek();
+                    _showCourseDetail(
+                      course,
+                      sourceContext: context,
+                      sourceWidget: card,
+                    );
+                  },
+                  onLongPress: () => _showCourseBlockMenu(course, context),
+                  child: AnimatedBuilder(
+                    animation: _inactivePeekCurved!,
+                    builder: (context, _) {
+                      final t = _inactivePeekCurved!.value;
+                      final blur = 12 * (1 - t);
+                      // t=0 完全不可见；blur≈0 时跳过 ImageFiltered
+                      //（sigma≈0 的 blur 在 Impeller 上渲染成空白）
+                      return Opacity(
+                        opacity: t,
+                        child: Transform.scale(
+                          scale: 0.55 + 0.45 * t,
+                          child: blur > 0.05
+                              ? ImageFiltered(
+                                  imageFilter: ImageFilter.blur(
+                                    sigmaX: blur,
+                                    sigmaY: blur,
+                                  ),
+                                  child: card,
+                                )
+                              : card,
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            )
+          : GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => _beginInactivePeek(course),
+              child: const SizedBox.expand(),
+            );
+    // morph 接管期：整个 Positioned 的内容随 _morphBlockFade 渐隐/渐显
+    //（包在 Positioned 内部，Positioned 仍是 Stack 的直接子级）
+    if (morphOpacity != null) {
+      content = IgnorePointer(
+        child: Opacity(opacity: morphOpacity, child: content),
+      );
+    }
+    return Positioned(
+      top: period * cellHeight + 2,
+      left: 2,
+      right: 2,
+      height: course.duration * cellHeight - 4,
+      child: content,
+    );
   }
 
   /// 空白课程块选中后的灰白色遮罩（与非本周课程样式一致，仅占一个小节），中部显示灰色加号
@@ -2258,6 +2480,26 @@ class TimetableScreenState extends State<TimetableScreen>
 
       final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
       final isInactiveInCurrentWeek = activeCourses.isEmpty;
+      // 设置页「显示非本周课程」关闭：非本周课程不再以灰色卡片显示，
+      // 原位改放透明点击区——点击后原课程卡片淡入短暂显示 5s（见
+      // _beginInactivePeek），左右滑动切换周页自动隐藏（同加号遮罩）
+      if (isInactiveInCurrentWeek && !_showInactiveCourses) {
+        final hiddenCourse =
+            sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b);
+        // morph 飞行中：浮现卡片与真课程块同样由翻转卡片（复刻）接管，
+        // 随 _morphBlockFade 渐隐/渐显（Opacity 包在 Positioned 内部，
+        // 避免将 Positioned 包进 IgnorePointer/Opacity 破坏 Stack 布局）
+        final cell = _buildInactivePeekSlot(
+          hiddenCourse,
+          period,
+          cellHeight,
+          hasWallpaper: hasWallpaper,
+          transparencyFactor: transparencyFactor,
+          morphOpacity: isMorphSourceCell ? _morphBlockFade.value : null,
+        );
+        widgets.add(cell);
+        continue;
+      }
         final course = isInactiveInCurrentWeek
           ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
           : activeCourses.first;
@@ -2631,33 +2873,10 @@ class TimetableScreenState extends State<TimetableScreen>
     final detailBackdropBlur =
         detailHasWallpaper && _wallpaperBlurEnabled ? 22.0 : null;
 
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: '课程详情',
-      // 压暗遮罩由 _MorphDialogHost 自绘（孔洞跟随 morph 矩形逐帧开合）：
-      // 对话框背后采样到未压暗的原始背景，壳内毛玻璃白净不发灰；四周仅压暗
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 600),
-      // 恒等过渡：RawDialogRoute 未传 transitionBuilder 时默认给整个
-      // 内容包一层 FadeTransition(opacity: animation)（线性）——关闭末段
-      // 卡片被线性淡出成半透明「幽灵」，落定的不是实心课程块形态，
-      // dismissed 时真块突然替换 → 闪现 + 颜色不一致（本次修复根源）。
-      // morph 卡片必须全程不透明：淡入白纱（翻转期）由 morph 内部自控，
-      // 落定帧与真课程块像素一致，路由移除与真块出现同帧无缝交接
-      transitionBuilder: (context, animation, secondaryAnimation, child) => child,
-      pageBuilder: (context, animation, secondaryAnimation) {
-        // morph 动画（打开先快后慢，关闭缩回课程块时减速）由 host 内部构建
-        return _MorphDialogHost(
-          animation: animation,
-          sourceRect: sourceRect,
-          sourceWidget: sourceWidget,
-          backdropBlurSigma: detailBackdropBlur,
-          shellKey: detailShellKey,
-          onSourceHidden: sourceRect != null ? hideSourceBlock : null,
-          onLanding: sourceRect != null ? landSourceBlock : null,
-          onDismissed: sourceRect != null ? restoreSourceBlock : null,
-          child: StatefulBuilder(
+    // 课程详情内容（morph 宿主与减弱动态的统一对话框共用）：
+    // 减弱动态时由 showBouncyDialog 的壳包裹（无模糊、高不透明度），
+    // 默认路径在 builder 内自行包 morph 专用壳
+    Widget buildDetailContent() => StatefulBuilder(
             builder: (context, setDialogState) {
             final currentCourse = slotCourses[currentPage];
             final courseColor = _parseColor(currentCourse.color);
@@ -2678,27 +2897,7 @@ class TimetableScreenState extends State<TimetableScreen>
                 .clamp(505.0, 590.0)
                 .toDouble();
 
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
-                // 壳换成 GlassDialogShell：孔洞内未压暗背景的毛玻璃（提亮层洗灰），
-                // key 供 morph/孔洞精确测量壳矩形
-                child: GlassDialogShell(
-                  key: detailShellKey,
-                  padding: EdgeInsets.zero,
-                  blurSigma: 5,
-                  backgroundAlpha: 0.7,
-                  // 紧凑阴影：阴影可见范围（约 16px+4 偏移）明显小于
-                  // 对话框本体，不再「阴影面积大于对话框」
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.15),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                  child: Column(
+            final Widget content = Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Opacity(
@@ -3080,17 +3279,106 @@ class TimetableScreenState extends State<TimetableScreen>
                               ),
                             ),
                           ],
-                        ),
-                      ),
+                        );
+            // 减弱动态效果：内容直接交给 showBouncyDialog 的壳
+            // （无模糊、高不透明度）；默认路径包 morph 专用壳
+            if (_reduceMotionEnabled) {
+              // 与默认路径同款高度约束：Flexible(PageView) 会填满可用高度，
+              // 必须按任务数收紧（dynamicMaxHeight），否则固定 590 上限
+              // 会把对话框拉长，与默认 morph 路径高度不一致
+              return ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
+                child: content,
+              );
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
+                // 壳换成 GlassDialogShell：孔洞内未压暗背景的毛玻璃（提亮层洗灰），
+                // key 供 morph/孔洞精确测量壳矩形
+                child: GlassDialogShell(
+                  key: detailShellKey,
+                  padding: EdgeInsets.zero,
+                  blurSigma: 5,
+                  backgroundAlpha: 0.7,
+                  // 紧凑阴影：阴影可见范围（约 16px+4 偏移）明显小于
+                  // 对话框本体，不再「阴影面积大于对话框」
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
                     ),
-                  );
-                },
+                  ],
+                  child: content,
+                ),
               ),
+            );
+                },
+              );
+
+    // 减弱动态效果：取消 morph 容器变换，改走统一对话框淡入淡出样式
+    // （改动同全局对话框：壳仅半透明无模糊、四周压暗裁切与开闭动画
+    // 不变、移除内容模糊淡入淡出）
+    if (_reduceMotionEnabled) {
+      showBouncyDialog(
+        context: context,
+        barrierLabel: '课程详情',
+        margin: const EdgeInsets.symmetric(horizontal: 24),
+        shellPadding: EdgeInsets.zero,
+        shellMaxWidth: 420,
+        shellMaxHeight: 590,
+        shellBoxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        reduceMotion: true,
+        builder: (context) => buildDetailContent(),
+      ).whenComplete(() {
+        clearRetainedCompletedTasks();
+        pageController.dispose();
+      });
+      return;
+    }
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '课程详情',
+      // 压暗遮罩由 _MorphDialogHost 自绘（孔洞跟随 morph 矩形逐帧开合）：
+      // 对话框背后采样到未压暗的原始背景，壳内毛玻璃白净不发灰；四周仅压暗
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 600),
+      // 恒等过渡：RawDialogRoute 未传 transitionBuilder 时默认给整个
+      // 内容包一层 FadeTransition(opacity: animation)（线性）——关闭末段
+      // 卡片被线性淡出成半透明「幽灵」，落定的不是实心课程块形态，
+      // dismissed 时真块突然替换 → 闪现 + 颜色不一致（本次修复根源）。
+      // morph 卡片必须全程不透明：淡入白纱（翻转期）由 morph 内部自控，
+      // 落定帧与真课程块像素一致，路由移除与真块出现同帧无缝交接
+      transitionBuilder: (context, animation, secondaryAnimation, child) => child,
+      pageBuilder: (context, animation, secondaryAnimation) {
+        // morph 动画（打开先快后慢，关闭缩回课程块时减速）由 host 内部构建
+        return _MorphDialogHost(
+          animation: animation,
+          sourceRect: sourceRect,
+          sourceWidget: sourceWidget,
+          backdropBlurSigma: detailBackdropBlur,
+          shellKey: detailShellKey,
+          onSourceHidden: sourceRect != null ? hideSourceBlock : null,
+          onLanding: sourceRect != null ? landSourceBlock : null,
+          onDismissed: sourceRect != null ? restoreSourceBlock : null,
+          child: buildDetailContent(),
         );
       },
     ).whenComplete(() {
       clearRetainedCompletedTasks();
       pageController.dispose();
+      // 详情关闭：续接非本周课程浮现卡片的剩余倒计时（若来自浮现入口）
+      _resumeInactivePeek();
       // 注意：此处**不得**恢复源课程块——popped future 在 pop() 调用瞬间
       // 即完成（先于退出动画，见 Route.didComplete 文档），此时恢复会让
       // 真课程块在关闭动画第 0 帧就暴露在网格上（「固定课程块提前出现」
@@ -3115,6 +3403,9 @@ class TimetableScreenState extends State<TimetableScreen>
     _courseBlockMenuOverlay = null;
 
     _dismissEmptySlotMask();
+    // 菜单显示期间暂停非本周课程浮现卡片的倒计时（无浮现时幂等），
+    // 菜单关闭（onClosed）时按剩余时长续接
+    _pauseInactivePeek();
 
     _courseBlockMenuOverlay = OverlayEntry(
       builder: (context) => _CourseBlockActionMenu(
@@ -3162,6 +3453,8 @@ class TimetableScreenState extends State<TimetableScreen>
   void _removeCourseBlockMenuOverlay() {
     _courseBlockMenuOverlay?.remove();
     _courseBlockMenuOverlay = null;
+    // 菜单关闭（含点外关闭/选择操作后收起）：续接浮现卡片剩余倒计时
+    _resumeInactivePeek();
   }
 
   /// 删除动画：数据删除后在原位以 Overlay 幽灵渲染课程卡片复刻，
@@ -3965,6 +4258,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     TextField(
+                                      contextMenuBuilder: styledEditableContextMenu,
                                       controller: nameController,
                                       decoration: InputDecoration(
                                         labelText: '任务名称',
@@ -4108,6 +4402,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                     const SizedBox(height: 16),
                                     TextField(
+                                      contextMenuBuilder: styledEditableContextMenu,
                                       controller: noteController,
                                       maxLines: 1,
                                       decoration: InputDecoration(
@@ -4297,6 +4592,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     TextField(
+                                      contextMenuBuilder: styledEditableContextMenu,
                                       controller: nameController,
                                       decoration: InputDecoration(
                                         labelText: '任务名称',
@@ -4455,6 +4751,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                     SizedBox(height: isSmallScreen ? 12 : 16),
                                     TextField(
+                                      contextMenuBuilder: styledEditableContextMenu,
                                       controller: noteController,
                                       maxLines: 1,
                                       decoration: InputDecoration(
@@ -5328,11 +5625,23 @@ class TimetableScreenState extends State<TimetableScreen>
     // 打开编辑对话框时以动画方式收起加号遮罩；加号遮罩来源保留遮罩：
     // morph 从遮罩原位起飞（t=0 复刻与遮罩像素重合），取消时 morph 翻回
     // 归位、遮罩保持显示（对话框期间仅取消自动消失倒计时）
-    if (plusMaskSource) {
+    // 减弱动态效果：无 morph，遮罩一律收起
+    if (plusMaskSource && !_reduceMotionEnabled) {
       _cancelEmptySlotAutoHideTimer();
     } else {
       _dismissEmptySlotMask();
     }
+
+    // 编辑/添加对话框打开期间暂停非本周课程浮现卡片倒计时（含菜单
+    // 「编辑/添加同时段」链式入口；计数嵌套，见 _pauseInactivePeek），
+    // 对话框关闭（then 回调）时续接
+    _pauseInactivePeek();
+
+    // 减弱动态效果：取消 morph 容器变换，改走下方无锚点统一对话框分支
+    // （showBouncyDialog + reduceMotion：壳仅半透明无模糊、四周压暗裁切
+    // 与开闭动画不变、移除内容模糊淡入淡出）。不直接置空 sourceRect——
+    // 参数重赋值会破坏下方 then 闭包里的空安全提升
+    final bool useReducedDialog = _reduceMotionEnabled;
 
     void afterClosed() {
       _loadData();
@@ -5348,8 +5657,9 @@ class TimetableScreenState extends State<TimetableScreen>
 
     // 无锚点（FAB 添加、详情页快捷编辑、编辑菜单等）：关于式弹性对话框
     // （果冻开闭 + 内容聚焦 + 孔洞遮罩），与其它对话框统一；
-    // 有锚点（课程块/加号遮罩）走下方的 morph 容器变换
-    if (sourceRect == null) {
+    // 有锚点（课程块/加号遮罩）走下方的 morph 容器变换；
+    // 减弱动态效果：忽略锚点，一律走统一对话框（reduceMotion 无模糊）
+    if (sourceRect == null || useReducedDialog) {
       final isSmallScreen = MediaQuery.of(context).size.height < 700;
       showBouncyDialog<Course>(
         context: context,
@@ -5372,8 +5682,10 @@ class TimetableScreenState extends State<TimetableScreen>
           initialFocusSection: initialFocusSection,
           hosted: true,
         ),
+        reduceMotion: _reduceMotionEnabled,
       ).then((saved) {
         afterClosed();
+        _resumeInactivePeek();
         // 统一添加入口保存成功：新课程块出现动画（由模糊小块伸展变
         // 清晰，删除动画的逆过程）。pop 瞬间先以隐藏态渲染新块（避免
         // 在对话框退出动画 400ms 期间以完整形态露出——「直接出现」），
@@ -5382,7 +5694,7 @@ class TimetableScreenState extends State<TimetableScreen>
         // 交接后再出现动画会重复。
         // id 注意：saved.id 未加课程表前缀，须解析为存储后的课程
         //（见 _resolveStoredCourse）
-        if (saved != null && course == null && sourceRect == null) {
+        if (saved != null && course == null && (sourceRect == null || useReducedDialog)) {
           final stored = _resolveStoredCourse(saved) ?? saved;
           _beginCourseAppearAnimation(stored);
           Future.delayed(const Duration(milliseconds: 420), () {
@@ -5531,6 +5843,7 @@ class TimetableScreenState extends State<TimetableScreen>
       transitionBuilder: (context, animation, secondaryAnimation, child) => child,
     );
     Navigator.of(context).push<Course?>(route).then((saved) {
+      _resumeInactivePeek();
       // 注意：此处**不得**恢复源课程块——popped future 在 pop() 调用瞬间
       // 即完成（先于 600ms 退出动画，见 Route.didComplete 文档），此刻
       // restoreSourceBlock 会让真课程块在关闭动画第 0 帧就出现在网格
@@ -5813,6 +6126,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             TextField(
+                              contextMenuBuilder: styledEditableContextMenu,
                               controller: widget.nameController,
                               decoration: InputDecoration(
                                 labelText: '任务名称',
@@ -5974,6 +6288,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                             ),
                             SizedBox(height: isSmallScreen ? 10 : 16),
                             TextField(
+                              contextMenuBuilder: styledEditableContextMenu,
                               controller: widget.noteController,
                               maxLines: 1,
                               decoration: InputDecoration(

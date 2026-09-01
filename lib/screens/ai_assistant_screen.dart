@@ -5,9 +5,11 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import '../widgets/toast_notification.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +21,7 @@ import '../models/task.dart';
 import '../dialogs/course_dialog.dart';
 import '../widgets/glass_dialog.dart';
 import 'settings_screen.dart';
+import '../widgets/blur_selection_menu.dart';
 
 class AIAssistantScreen extends StatefulWidget {
   final VoidCallback? onKeyboardShown;
@@ -61,6 +64,9 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   bool _showSlowResponseTip = false;
   bool _aiEnabled = false;
   bool _supportsImageUpload = false;
+  // 内置模型（限时免费）：当前节点 1-4，徽章锚点 key
+  int _builtinNode = 1;
+  final GlobalKey _builtinBadgeKey = GlobalKey();
   static bool _isSearching = false;
   static bool _isReasoningModel = false;
   bool _hasSentContext = false;
@@ -101,6 +107,14 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   String? _lastUserMessage;
   String? _lastImageBase64;
   List<Map<String, String>>? _lastHistory;
+  // 长按消息气泡弹出的操作菜单（Overlay 浮层）
+  OverlayEntry? _messageMenuOverlay;
+  /// 长按弹菜单的计时器与按下起点（Listener 方案，不占用手势竞技场）
+  Timer? _messageMenuTimer;
+  Offset? _messageMenuDragStart;
+  /// 长按弹出操作菜单后，本次手势内抑制正文 SelectionArea 的
+  /// 选中上下文菜单（松手时若未拖动选中文字则不弹选中菜单）
+  bool _suppressSelectionMenu = false;
   bool _stopRequested = false;
   late List<_ChatMessage> _messages;
   late String? _selectedModel;
@@ -223,11 +237,31 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     {'name': 'GLM-4.7-Flash', 'supportsImage': false, 'provider': 'glm', 'supportsWebSearch': false},
   ];
 
+  /// Agnes AI 可选模型：name 为界面显示名，modelId 为后台实际使用的模型名
+  static const List<Map<String, dynamic>> _agnesModels = [
+    {'name': 'Agnes 2.0 Flash', 'modelId': 'agnes-2.0-flash', 'supportsImage': true, 'provider': 'agnes', 'supportsWebSearch': false},
+    {'name': 'Agnes 2.5 Flash', 'modelId': 'agnes-2.5-flash', 'supportsImage': true, 'provider': 'agnes', 'supportsWebSearch': false},
+  ];
+
+  /// 后台实际模型名 → 界面显示名
+  static String _agnesDisplayNameOf(String modelId) =>
+      modelId == 'agnes-2.5-flash' ? 'Agnes 2.5 Flash' : 'Agnes 2.0 Flash';
+
+  /// 界面显示名 → 后台实际模型名
+  static String _agnesModelIdOf(String name) =>
+      name == 'Agnes 2.5 Flash' ? 'agnes-2.5-flash' : 'agnes-2.0-flash';
+
   List<Map<String, dynamic>> get _normalModels {
     if (_currentProvider == 'hunyuan') {
       return _hunyuanModels;
     } else if (_currentProvider == 'glm') {
       return _glmModels;
+    } else if (_currentProvider == 'agnes') {
+      return _agnesModels;
+    } else if (_currentProvider == 'builtin') {
+      return [
+        {'name': '节点 $_builtinNode', 'supportsImage': true, 'provider': 'builtin', 'supportsWebSearch': false},
+      ];
     } else if (_currentProvider == 'custom') {
       return [
         {
@@ -318,6 +352,15 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     } else if (provider == 'glm') {
       defaultModel = 'GLM-4.7-Flash';
       fastModeAvailable = false;
+    } else if (provider == 'agnes') {
+      final agnesModelId = prefs.getString('agnes_model') ?? 'agnes-2.0-flash';
+      defaultModel = _agnesDisplayNameOf(agnesModelId);
+      fastModeAvailable = false;
+    } else if (provider == 'builtin') {
+      // 内置模型：徽章显示"节点 X"，默认中度思考、支持视觉能力（仅前端）
+      _builtinNode = prefs.getInt('builtin_node') ?? 1;
+      defaultModel = '节点 $_builtinNode';
+      fastModeAvailable = false;
     } else if (provider == 'custom') {
       defaultModel = _customModelName;
       fastModeAvailable = false;
@@ -336,6 +379,12 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
       providerModels = _hunyuanModels;
     } else if (provider == 'glm') {
       providerModels = _glmModels;
+    } else if (provider == 'agnes') {
+      providerModels = _agnesModels;
+    } else if (provider == 'builtin') {
+      providerModels = [
+        {'name': '节点 $_builtinNode', 'supportsImage': true, 'provider': 'builtin', 'supportsWebSearch': false},
+      ];
     } else if (provider == 'custom') {
       providerModels = [
         {
@@ -427,6 +476,16 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     final random = Random();
     return models[random.nextInt(models.length)];
   }
+
+  String? get _requestModel {
+    if (_currentProvider == 'agnes' && _selectedModel != null) {
+      return _agnesModelIdOf(_selectedModel!);
+    }
+    return _selectedModel;
+  }
+
+  String? _displayForStreamedModel(String? model) =>
+      (_currentProvider == 'agnes' && model != null) ? _agnesDisplayNameOf(model) : model;
 
   /// 将当前键盘布局参数同步到 ValueNotifier，驱动输入区/内边距局部重建，避免 setState 触发主 build。
   void _publishKeyboardLayout() {
@@ -549,6 +608,15 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     } else if (provider == 'glm') {
       defaultModel = 'GLM-4.7-Flash';
       fastModeAvailable = false;
+    } else if (provider == 'agnes') {
+      final agnesModelId = prefs.getString('agnes_model') ?? 'agnes-2.0-flash';
+      defaultModel = _agnesDisplayNameOf(agnesModelId);
+      fastModeAvailable = false;
+    } else if (provider == 'builtin') {
+      // 内置模型：徽章显示"节点 X"，默认中度思考、支持视觉能力（仅前端）
+      _builtinNode = prefs.getInt('builtin_node') ?? 1;
+      defaultModel = '节点 $_builtinNode';
+      fastModeAvailable = false;
     } else if (provider == 'custom') {
       defaultModel = _customModelName;
       fastModeAvailable = false;
@@ -568,6 +636,12 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
       providerModels = _hunyuanModels;
     } else if (provider == 'glm') {
       providerModels = _glmModels;
+    } else if (provider == 'agnes') {
+      providerModels = _agnesModels;
+    } else if (provider == 'builtin') {
+      providerModels = [
+        {'name': '节点 $_builtinNode', 'supportsImage': true, 'provider': 'builtin', 'supportsWebSearch': false},
+      ];
     } else if (provider == 'custom') {
       providerModels = [
         {
@@ -663,9 +737,8 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   }
 
   Future<void> refreshRuntimeConfig() async {
-    if (!_needsRefresh) {
-      return;
-    }
+    // 路由感知：每次切回对话页都重新加载 AI 配置（provider/模型/思考强度/图片支持），
+    // 保证设置页或其他入口修改配置后立即生效
     _needsRefresh = false;
     await _loadFastModeSetting();
   }
@@ -787,6 +860,80 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     _scrollToBottom();
   }
 
+  /// 重新生成最后一条回复：删除当前回复并重发最近一次用户消息。
+  /// 不依赖 _lastUserMessage 等快照（成功回复后会被 _resetRetryState
+  /// 清空），而是直接从消息列表回溯重建：最近一条用户消息为重发内容，
+  /// 其之前的历史照常构建；图片消息从本地文件重新压缩编码。
+  Future<void> _regenerateLastMessage() async {
+    if (_isLoading) return;
+    if (_messages.isEmpty || _messages.last.role != 'assistant') return;
+
+    // 向前回溯最近一条用户消息
+    int userIdx = -1;
+    for (var i = _messages.length - 2; i >= 0; i--) {
+      if (_messages[i].role == 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx < 0) return;
+    final userMsg = _messages[userIdx];
+
+    // 图片消息：从本地文件重新读取压缩编码（请求用的 base64 不随消息保存）
+    String? imageBase64;
+    if (userMsg.imagePath != null) {
+      try {
+        var bytes = await File(userMsg.imagePath!).readAsBytes();
+        bytes = _compressImageBytes(bytes);
+        imageBase64 = base64Encode(bytes);
+      } catch (e) {
+        debugPrint('[AI Assistant] Regenerate: re-encode image failed: $e');
+      }
+    }
+
+    final text = userMsg.content;
+    if (text.isEmpty && imageBase64 == null) return;
+
+    // 历史 = 该用户消息之前的全部消息（纯图片消息用占位文本）
+    final history = _messages
+        .take(userIdx)
+        .map((msg) {
+          var content = msg.content;
+          if (content.isEmpty && msg.imagePath != null) {
+            content = '[图片]';
+          }
+          return {'role': msg.role, 'content': content};
+        })
+        .toList();
+
+    setState(() {
+      _stopRequested = false;
+      _isLoading = true;
+      _isFirstChunkReceived = false;
+      _streamingContent = '';
+      _statusMessage = '';
+      _isSearching = false;
+      _isThinking = false;
+      _isThinkingCollapsed = false;
+      _thinkingContent = '';
+      _showSlowResponseTip = false;
+      // 移除旧回复（正常/错误/中断均适用）
+      _messages.removeLast();
+    });
+    _persistentMessages = List.from(_messages);
+    _publishStreamUpdate();
+    _retryCount = 0;
+    _lastUserMessage = text;
+    _lastImageBase64 = imageBase64;
+    _lastHistory = history;
+    _scrollToBottom(force: true);
+
+    _executeSendMessage(
+      messageText: text,
+      imageBase64: imageBase64,
+      history: history,
+    );
+  }
   void _resetRetryState() {
     _cancelNoResponseTimer();
     _retryCount = 0;
@@ -988,11 +1135,11 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
           
           final stream = AIService.instance.chatWithModelStream(
             userMessage: prompt,
-            model: _selectedModel,
+            model: _requestModel,
             systemPrompt: '你是一个学习助手，帮助大学生管理课程和任务，解决学习问题。使用markdown格式。',
             fastMode: _fastModeEnabled,
             provider: _currentProvider,
-            reasoningEffort: _currentReasoningEffort,
+            reasoningEffort: _currentProvider == 'agnes' ? null : (_currentProvider == 'builtin' ? 'medium' : _currentReasoningEffort),
           );
 
           _streamSubscription = stream.listen(
@@ -1078,7 +1225,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
                 _isAnalyzing = false;
                 _isFirstChunkReceived = false;
                 _isThinking = false;
-                _selectedModel ??= AIService.instance.lastStreamedModel;
+                _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
                 _persistentSelectedModel = _selectedModel;
                 final thinkingToSave = _thinkingContent.isNotEmpty ? _thinkingContent : null;
                 _messages.add(_ChatMessage(
@@ -1175,11 +1322,11 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
       
       final stream = AIService.instance.chatWithModelStream(
         userMessage: prompt,
-        model: _selectedModel,
+        model: _requestModel,
         systemPrompt: '你是一个学习助手，帮助大学生管理课程和任务，解决学习问题。使用markdown格式。',
         fastMode: _fastModeEnabled,
         provider: _currentProvider,
-        reasoningEffort: _currentReasoningEffort,
+        reasoningEffort: _currentProvider == 'agnes' ? null : (_currentProvider == 'builtin' ? 'medium' : _currentReasoningEffort),
       );
 
       _streamSubscription = stream.listen(
@@ -1265,7 +1412,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
             _isAnalyzing = false;
             _isFirstChunkReceived = false;
             _isThinking = false;
-            _selectedModel ??= AIService.instance.lastStreamedModel;
+            _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
             _persistentSelectedModel = _selectedModel;
             final thinkingToSave = _thinkingContent.isNotEmpty ? _thinkingContent : null;
             _messages.add(_ChatMessage(
@@ -2020,9 +2167,31 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
     _scrollToBottom(force: true);
 
+    // 纯图片/带图消息：Image.file 异步解码，发送当帧 maxScrollExtent
+    // 不含图片高度，单次 postFrame 回底不够；图片解码完成后列表变高，
+    // 需延迟补偿回底（文字消息同步布局不受影响）
+    if (currentImageBase64 != null) {
+      for (final delay in const [150, 350, 600, 1000]) {
+        Future.delayed(Duration(milliseconds: delay), () {
+          if (!mounted || _stopRequested) return;
+          if (!_pauseAutoScrollDuringOutput) {
+            _scrollToBottom(animated: false, force: true);
+          }
+        });
+      }
+    }
+
     final history = _messages
         .take(_messages.length - 1)
-        .map((msg) => {'role': msg.role, 'content': msg.content})
+        .map((msg) {
+          // 纯图片消息 content 为空字符串，上游 API 会报
+          // "message content cannot be empty"，用占位文本代替
+          var content = msg.content;
+          if (content.isEmpty && msg.imagePath != null) {
+            content = '[图片]';
+          }
+          return {'role': msg.role, 'content': content};
+        })
         .toList();
 
     _lastUserMessage = messageText;
@@ -2095,14 +2264,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
       final stream = AIService.instance.chatWithModelStream(
         userMessage: actualMessage,
-        model: _selectedModel,
+        model: _requestModel,
         systemPrompt: _buildSystemPrompt(includeData: !_hasSentContext),
         history: history,
         fastMode: _fastModeEnabled,
         imageBase64: imageBase64,
         provider: provider,
         enableSearch: _webSearchEnabled && provider == 'doubao' && supportsWebSearch && !_isReasoningModel && imageBase64 == null,
-        reasoningEffort: provider == 'custom' ? _currentReasoningEffort : null,
+        reasoningEffort: provider == 'custom' ? _currentReasoningEffort : (provider == 'builtin' ? 'medium' : null),
       );
       
       if (!_hasSentContext) {
@@ -2211,7 +2380,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             _isFirstChunkReceived = false;
             _isThinking = false;
             _isThinkingCollapsed = true;
-            _selectedModel ??= AIService.instance.lastStreamedModel;
+            _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
             _persistentSelectedModel = _selectedModel;
             
             final processedContent = _processAIResponse(_streamingContent);
@@ -2272,7 +2441,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       }
       _isFirstChunkReceived = false;
       if (_streamingContent.isNotEmpty || _thinkingContent.isNotEmpty || _isSearching || _retryCount > 0) {
-        _selectedModel ??= AIService.instance.lastStreamedModel;
+        _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
         _persistentSelectedModel = _selectedModel;
         final interruptedText = _streamingContent.isNotEmpty ? _streamingContent : '⏹️ 已停止重试与生成';
         final interruptedThinking = _thinkingContent.isNotEmpty ? _thinkingContent : null;
@@ -2464,7 +2633,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
   void _showModelSelector() {
     _unfocusBeforeDialog();
-    if (_currentProvider == 'hunyuan' || _currentProvider == 'glm' || _currentProvider == 'custom') {
+    if (_currentProvider == 'hunyuan' || _currentProvider == 'glm' || _currentProvider == 'custom' || _currentProvider == 'agnes' || _currentProvider == 'builtin') {
       return;
     }
     final models = _fastModeEnabled ? _fastModels : _normalModels;
@@ -2646,7 +2815,272 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     ).then((_) => _unfocusAfterDialog());
   }
 
+  /// Agnes AI 配置弹窗：与设置页的 Agnes AI 配置对话框保持一致
+  void _showAgnesAIConfig() async {
+    _unfocusBeforeDialog();
+    final prefs = await SharedPreferences.getInstance();
+    final controller = TextEditingController(text: prefs.getString('agnes_api_key') ?? '');
+    const defaultModel = 'agnes-2.0-flash';
+    String selectedModel = prefs.getString('agnes_model') ?? defaultModel;
+    if (selectedModel != 'agnes-2.0-flash' && selectedModel != 'agnes-2.5-flash') {
+      selectedModel = defaultModel;
+    }
+    String reasoningEffort = prefs.getString('agnes_reasoning_effort') ?? '';
+
+    if (!mounted) return;
+
+    await showBouncyDialog(
+      context: context,
+      barrierLabel: 'Agnes AI 配置',
+      avoidKeyboard: true,
+      shellPadding: const EdgeInsets.all(24),
+      shellConstraintsBuilder: (context) {
+        final mediaQuery = MediaQuery.of(context);
+        final keyboardHeight = mediaQuery.viewInsets.bottom;
+        final topInset = mediaQuery.padding.top;
+        final screenHeight = mediaQuery.size.height;
+        const baseMaxHeight = 620.0;
+        double dialogMaxHeight = baseMaxHeight;
+        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+        if (availableHeight < dialogMaxHeight) {
+          dialogMaxHeight = availableHeight;
+        }
+        dialogMaxHeight = dialogMaxHeight.clamp(300.0, baseMaxHeight).toDouble();
+        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+      },
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Agnes AI 配置',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '免费密钥申请地址：https://www.agnes-ai.cn/',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    contextMenuBuilder: styledEditableContextMenu,
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: '请输入 Agnes AI API Key',
+                      filled: true,
+                      fillColor: Colors.white.withValues(alpha: 0.4),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFF4A90E2)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Text(
+                        '模型',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: BlurredDropdown<String>(
+                            value: selectedModel,
+                            isExpanded: true,
+                            icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'agnes-2.0-flash',
+                                child: Text(
+                                  'Agnes 2.0 Flash',
+                                  style: TextStyle(fontSize: 13),
+                                ),
+                              ),
+                              DropdownMenuItem(
+                                value: 'agnes-2.5-flash',
+                                child: Text(
+                                  'Agnes 2.5 Flash',
+                                  style: TextStyle(fontSize: 13),
+                                ),
+                              ),
+                            ],
+                            onChanged: (next) {
+                              if (next != null) {
+                                setDialogState(() {
+                                  selectedModel = next;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),                  const SizedBox(height: 16),
+                  // 思考强度：与自定义API同款滑动选项卡（1:1复刻）
+                  const Text('思考强度', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  const SizedBox(height: 8),
+                  SegmentedSelector<String>(
+                    items: const [
+                      SegmentItem(label: '直接回答', value: ''),
+                      SegmentItem(label: 'Low', value: 'low'),
+                      SegmentItem(label: 'Medium', value: 'medium'),
+                      SegmentItem(label: 'High', value: 'high'),
+                    ],
+                    activeValue: reasoningEffort.isEmpty ? '' : reasoningEffort,
+                    onChanged: (v) {
+                      setDialogState(() {
+                        reasoningEffort = v;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                            ),
+                          ),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final apiKey = controller.text.trim();
+
+                            if (apiKey.isEmpty) {
+                              Navigator.pop(context);
+                              return;
+                            }
+
+                            await prefs.setString('agnes_api_key', apiKey);
+                            await prefs.setString('agnes_model', selectedModel);
+                            await prefs.setString('agnes_reasoning_effort', reasoningEffort);
+                            await prefs.setString('ai_provider', 'agnes');
+                            await prefs.setBool('fast_mode_enabled', false);
+                            await prefs.setBool('ai_enabled', true);
+                            AIService.instance.setAgnesConfig(apiKey, selectedModel);
+
+                            if (mounted) {
+                              Navigator.pop(context);
+                              setState(() {
+                                _currentProvider = 'agnes';
+                                _selectedModel = _agnesDisplayNameOf(selectedModel);
+                                _persistentSelectedModel = _selectedModel;
+                                _fastModeEnabled = false;
+                                _aiEnabled = true;
+                                _supportsImageUpload = true;
+                                _isReasoningModel = false;
+                              });
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey.shade800,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text('保存'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+  }
+
+  /// 内置模型节点切换：顶部徽章点击弹出统一样式下拉菜单（AI配置页同款），
+  /// 选择节点 1-4 后立即更新徽章显示并持久化
+  void _showBuiltinNodeMenu() async {
+    _unfocusBeforeDialog();
+    final anchorContext = _builtinBadgeKey.currentContext ?? context;
+    final result = await showBlurredMenu<int>(
+      context: anchorContext,
+      value: _builtinNode,
+      menuWidth: 120,
+      // 徽章较窄：菜单整体左移，右缘与徽章右侧对齐方向平衡
+      menuHorizontalShift: -28,
+      // 节点 3/4 右侧问号图标的提示文案
+      infoMessages: const {
+        3: '节点3延迟较高，请优先使用节点1、2。',
+        4: '节点4延迟较高，请优先使用节点1、2。',
+      },
+      items: [
+        for (var i = 1; i <= 4; i++)
+          DropdownMenuItem<int>(
+            value: i,
+            child: Text('节点 $i', style: const TextStyle(fontSize: 13)),
+          ),
+      ],
+    );
+    if (result != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('builtin_node', result);
+      if (mounted) {
+        setState(() {
+          _builtinNode = result;
+          _selectedModel = '节点 $result';
+          _persistentSelectedModel = _selectedModel;
+        });
+      }
+    }
+  }
+
   void _showCustomAIConfig() async {
+
     _unfocusBeforeDialog();
     final prefs = await SharedPreferences.getInstance();
     final urlController = TextEditingController(text: prefs.getString('custom_api_url') ?? '');
@@ -2734,6 +3168,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           ),
                           const SizedBox(height: 20),
                           TextField(
+                            contextMenuBuilder: styledEditableContextMenu,
                             controller: urlController,
                             decoration: InputDecoration(
                               labelText: 'API 地址',
@@ -2745,6 +3180,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           ),
                           const SizedBox(height: 12),
                           TextField(
+                            contextMenuBuilder: styledEditableContextMenu,
                             controller: keyController,
                             decoration: InputDecoration(
                               labelText: 'API Key',
@@ -2756,6 +3192,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           ),
                           const SizedBox(height: 12),
                           TextField(
+                            contextMenuBuilder: styledEditableContextMenu,
                             controller: modelController,
                             decoration: InputDecoration(
                               labelText: '模型名称',
@@ -3147,6 +3584,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         barrierLabel: '图片预览',
         barrierColor: Colors.transparent,
         pageBuilder: (context, animation, secondaryAnimation) {
+          // 关闭按钮在页面内部 Stack 顶层，由 _routeSettled 控制可见性：
+          // Hero 飞行期间 shuttle 位于 Navigator overlay 顶层（所有路由之上），
+          // 按钮瞬时隐藏，飞行结束后再淡入（详见 _ImagePreviewPageState.build）
           return _ImagePreviewPage(
             imagePath: imagePath,
             heroTag: heroTag,
@@ -3161,6 +3601,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
   @override
   void dispose() {
+    _removeMessageMenuOverlay();
+    _messageMenuTimer?.cancel();
+    _messageMenuTimer = null;
     if (_scrollController.hasClients) {
       _persistentScrollOffset = _scrollController.offset;
     }
@@ -3548,8 +3991,13 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     ),
                                   )
                                 : GestureDetector(
-                                    onTap: _currentProvider == 'custom' ? _showCustomAIConfig : _showModelSelector,
+                                    onTap: _currentProvider == 'custom'
+                                        ? _showCustomAIConfig
+                                        : (_currentProvider == 'agnes'
+                                            ? _showAgnesAIConfig
+                                            : (_currentProvider == 'builtin' ? _showBuiltinNodeMenu : _showModelSelector)),
                                     child: Container(
+                                      key: _builtinBadgeKey,
                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
@@ -3756,13 +4204,107 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     return trailing;
   }
 
+  /// 长按消息气泡：弹出操作菜单（Overlay 浮层，样式复刻课表页
+  /// 长按课程二级菜单——毛玻璃圆角、easeOutBack 灵动弹出、
+  /// 点击空白处收起）。最后一条 AI 消息显示「重新生成+复制」两项，
+  /// 其余消息（含欢迎消息）仅「复制」。
+  void _showMessageActionMenu(_ChatMessage message, int messageIndex, Offset globalPos) {
+    _removeMessageMenuOverlay();
+
+    final isLast = _messages.isNotEmpty && identical(message, _messages.last);
+    final isAssistant = message.role == 'assistant';
+    final hasText = message.content.isNotEmpty;
+
+    // 无任何可用选项（如非最后一条的纯图片消息）时直接返回，避免插入空浮层
+    if (!(isAssistant && isLast && !_isLoading) && !hasText) return;
+
+    _messageMenuOverlay = OverlayEntry(
+      builder: (context) => _MessageActionMenu(
+        anchor: globalPos,
+        showRegenerate: isAssistant && isLast && !_isLoading,
+        onRegenerate: () {
+          _regenerateLastMessage();
+        },
+        onCopy: hasText ? () {
+          Clipboard.setData(ClipboardData(text: message.content));
+          toastNotification.show(context, '已复制');
+        } : null,
+        onDismissed: _removeMessageMenuOverlay,
+      ),
+    );
+    Overlay.of(context).insert(_messageMenuOverlay!);
+  }
+
+  void _removeMessageMenuOverlay() {
+    _messageMenuOverlay?.remove();
+    _messageMenuOverlay = null;
+  }
+
+
+  /// 正文 SelectionArea 的上下文菜单构建器：长按弹过操作菜单且本次
+  /// 手势未拖动选中文字时，吞掉松手触发的选中菜单（一次性，用后即清）；
+  /// 其余情况返回模糊动画样式的选中菜单
+  Widget _messageSelectionMenuBuilder(
+    BuildContext context,
+    SelectableRegionState selectableRegion,
+  ) {
+    if (_suppressSelectionMenu) {
+      // 持续抑制而非一次性：SelectionArea 可能在多个时机反复请求
+      // 选中菜单（长按选中时、收起操作菜单后），标志只在下一次
+      // 按下或拖动选中文字时才解除
+      return const SizedBox.shrink();
+    }
+    return styledSelectableRegionContextMenu(context, selectableRegion);
+  }
   Widget _buildMessageBubble(_ChatMessage message, int messageIndex) {
     final isUser = message.role == 'user';
     final hasCourses = message.courses != null && message.courses!.isNotEmpty;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Row(
+    // 长按气泡呼出操作菜单：最后一条 AI 消息显示「重新生成+复制」两项，
+    // 其余消息（含欢迎消息）仅「复制」；菜单样式参考课表页长按课程菜单。
+    // 用 Listener + 定时器实现（不加入手势竞技场，不与 SelectionArea
+    // 抢手势）：按下起 350ms 计时，按住不动即弹菜单；一旦拖动超过
+    // slop 则取消计时并收起已弹出的菜单，指针事件照常透传给正文，
+    // 拖动选中文字不受影响（含「按住后再拖动」的场景）
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (event) {
+        if (event.buttons != kPrimaryButton) return;
+        // 新手势开始：清除上一轮的选中菜单抑制标志
+        _suppressSelectionMenu = false;
+        _messageMenuDragStart = event.position;
+        _messageMenuTimer?.cancel();
+        _messageMenuTimer = Timer(const Duration(milliseconds: 350), () {
+          // 菜单弹出后，若本次手势一直未拖动选中文字，
+          // 松手时不再弹出 SelectionArea 的选中菜单
+          _suppressSelectionMenu = true;
+          _showMessageActionMenu(message, messageIndex, event.position);
+        });
+      },
+      onPointerMove: (event) {
+        if (_messageMenuDragStart == null) return;
+        if ((event.position - _messageMenuDragStart!).distance > kTouchSlop) {
+          // 拖动 = 用户在选中文字：恢复 SelectionArea 的正常行为
+          _messageMenuDragStart = null;
+          _messageMenuTimer?.cancel();
+          _messageMenuTimer = null;
+          _suppressSelectionMenu = false;
+          _removeMessageMenuOverlay();
+        }
+      },
+      onPointerUp: (event) {
+        _messageMenuDragStart = null;
+        _messageMenuTimer?.cancel();
+        _messageMenuTimer = null;
+      },
+      onPointerCancel: (event) {
+        _messageMenuDragStart = null;
+        _messageMenuTimer?.cancel();
+        _messageMenuTimer = null;
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Row(
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3816,6 +4358,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     : null,
               ),
               child: Stack(
+                clipBehavior: Clip.none,
                 children: [
                   Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -3853,6 +4396,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                   ],
                   if (isUser && message.content.isNotEmpty)
                     SelectionArea(
+                      contextMenuBuilder: _messageSelectionMenuBuilder,
                       child: Text(
                         message.content,
                         style: TextStyle(
@@ -3868,6 +4412,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         maxWidth: MediaQuery.of(context).size.width * 0.8,
                       ),
                       child: SelectionArea(
+                        contextMenuBuilder: _messageSelectionMenuBuilder,
                         child: _buildMarkdownContent(
                           message.content,
                           style: TextStyle(
@@ -3891,6 +4436,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       ),
                     ),
                   ],
+
                     ],
                   ),
                   // 重新生成按钮（欢迎消息右上角）：悬浮叠加在内容之上，
@@ -3924,6 +4470,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -4055,6 +4602,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                   // 正文内容
                   if (_streamingContent.isNotEmpty)
                     SelectionArea(
+                      contextMenuBuilder: _messageSelectionMenuBuilder,
                       child: _buildMarkdownContent(
                         _streamingContent,
                         style: TextStyle(
@@ -4136,6 +4684,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         child: SingleChildScrollView(
                           controller: _thinkingScrollController,
                           child: SelectionArea(
+                            contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
                               _thinkingContent,
                               style: const TextStyle(
@@ -4255,6 +4804,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         constraints: const BoxConstraints(maxHeight: 120),
                         child: SingleChildScrollView(
                           child: SelectionArea(
+                            contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
                               message.thinkingContent!,
                               style: const TextStyle(
@@ -4283,7 +4833,20 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          ClipRRect(
+          // shadow must sit outside ClipRRect: clipping eats shadows drawn inside
+          // (same thin shadow as home-screen bottom nav)
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(28),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: ClipRRect(
             borderRadius: BorderRadius.circular(28),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
@@ -4296,13 +4859,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     color: Colors.white.withValues(alpha: 0.6),
                     width: 1.5,
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -4407,6 +4963,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                             child: TextField(
+                              contextMenuBuilder: styledEditableContextMenu,
                               controller: _messageController,
                               focusNode: _focusNode,
                               style: const TextStyle(
@@ -4476,6 +5033,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                   ],
                 ),
               ),
+            ),
             ),
           ),
         ],
@@ -4597,7 +5155,7 @@ class _ImagePreviewPage extends StatefulWidget {
   State<_ImagePreviewPage> createState() => _ImagePreviewPageState();
 }
 
-class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerProviderStateMixin {
+class _ImagePreviewPageState extends State<_ImagePreviewPage> with TickerProviderStateMixin {
   final TransformationController _transformController = TransformationController();
   double _dismissProgress = 0.0;
   late final AnimationController _snapController;
@@ -4608,8 +5166,13 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
   bool _isClamping = false;
   bool _isInteracting = false;
   double _dragOriginalScale = 1.0;
-  bool _isDismissing = false;
   double _prevScaleForCheck = 1.0;
+  double _snapStartDismissProgress = 0.0;
+  bool _isDismissing = false;
+  // 路由进场动画（含 Hero 飞行）是否已完全结束：
+  // 飞行期间 shuttle 覆盖整屏且位于 Navigator overlay 顶层（所有路由之上），
+  // 任何路由页内元素都会被盖住，按钮必须等飞行结束后再淡入
+  bool _routeSettled = false;
 
   @override
   void initState() {
@@ -4620,18 +5183,36 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
     );
     _snapController.addListener(_onSnapTick);
     _transformController.addListener(_clampTransform);
+    widget.animation.addStatusListener(_onRouteStatusChanged);
+    if (widget.animation.status == AnimationStatus.completed) {
+      _routeSettled = true;
+    }
   }
 
   @override
   void dispose() {
+    widget.animation.removeStatusListener(_onRouteStatusChanged);
     _snapController.dispose();
     _transformController.dispose();
     super.dispose();
   }
 
+  void _onRouteStatusChanged(AnimationStatus status) {
+    if (!mounted) return;
+    final settled = status == AnimationStatus.completed;
+    if (settled != _routeSettled) {
+      setState(() => _routeSettled = settled);
+    }
+  }
+
   void _onSnapTick() {
     final t = _snapCurve.transform(_snapController.value);
 
+    final targetProgress = _snapStartDismissProgress * (1.0 - t);
+    if (_dismissProgress != targetProgress) {
+      _dismissProgress = targetProgress;
+      if (mounted) setState(() {});
+    }
     final fromScale = _snapFrom.getMaxScaleOnAxis();
     final toScale = _snapTarget.getMaxScaleOnAxis();
     final curScale = fromScale + (toScale - fromScale) * t;
@@ -4753,13 +5334,14 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
     _snapCurve = Curves.easeOutCubic;
     _snapFrom = Matrix4.copy(_transformController.value);
     _snapTarget = target;
+    _snapStartDismissProgress = _dismissProgress;
     _snapController.reset();
     await _snapController.forward();
     _isSnapping = false;
   }
 
   void _dismiss() {
-    if (!mounted) return;
+    if (!mounted || _isDismissing) return;
     _isInteracting = false;
 
     if (!widget.useHero) {
@@ -4779,6 +5361,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
         _isSnapping = true;
         _snapFrom = Matrix4.copy(currentMatrix);
         _snapTarget = target;
+        _snapStartDismissProgress = _dismissProgress;
         _snapController.reset();
         _snapController.forward().then((_) {
           _isSnapping = false;
@@ -4797,33 +5380,47 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
     Navigator.of(context).pop();
   }
 
-  void _animatedDismiss() {
+  void _animatedDismiss({Offset velocity = Offset.zero}) {
+    if (_isDismissing) return;
     _isInteracting = false;
     if (!widget.useHero) {
       _isDismissing = true;
-      setState(() {});
       final screenSize = MediaQuery.of(context).size;
-      final currentMatrix = _transformController.value;
+      final currentMatrix = Matrix4.copy(_transformController.value);
+      final cur = currentMatrix.getTranslation();
 
-      final target = Matrix4.identity();
-      target.setEntry(0, 0, 0.01);
-      target.setEntry(1, 1, 0.01);
-      target.setEntry(2, 2, 0.01);
-      target.setEntry(0, 3, screenSize.width * (1 - 0.01) / 2);
-      target.setEntry(1, 3, screenSize.height * (1 - 0.01) / 2);
-      target.setEntry(3, 3, 1.0);
+      // 跟随手指：沿实际滑动方向继续位移；立即 pop，
+      // 整体淡出（含缩小）交给路由反向动画（250ms），与点击退出结构一致
+      var dirX = velocity.dx;
+      var dirY = velocity.dy;
+      final speedSq = dirX * dirX + dirY * dirY;
+      if (speedSq < 100.0) {
+        dirX = 0.0; // 纯位移触发（无速度）时默认沿向下方向退出
+        dirY = 1.0;
+      } else {
+        final mag = sqrt(speedSq);
+        dirX /= mag;
+        dirY /= mag;
+      }
+      final travel = screenSize.height * 0.35;
 
-      _snapController.duration = const Duration(milliseconds: 280);
+      final target = Matrix4.copy(currentMatrix);
+      target.setEntry(0, 3, cur.x + dirX * travel);
+      target.setEntry(1, 3, cur.y + dirY * travel);
+
+      // 位移动画与路由反向动画（250ms）同步进行、同步结束
+      _snapController.duration = const Duration(milliseconds: 250);
       _snapCurve = Curves.easeOutCubic;
       _isSnapping = true;
-      _snapFrom = Matrix4.copy(currentMatrix);
+      _snapFrom = currentMatrix;
       _snapTarget = target;
+      _snapStartDismissProgress = _dismissProgress;
       _snapController.reset();
-      _snapController.forward().then((_) {
+      _snapController.forward().whenComplete(() {
         _isSnapping = false;
-        setState(() { _dismissProgress = 0.0; });
-        if (mounted) Navigator.of(context).pop();
       });
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) setState(() {});
       return;
     }
 
@@ -4832,7 +5429,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
   }
 
   void _onDoubleTap() {
-    if (_isSnapping) return;
+    if (_isSnapping || _isDismissing) return;
     final matrix = _transformController.value;
     final scale = matrix.getMaxScaleOnAxis();
     final screenSize = MediaQuery.of(context).size;
@@ -4867,6 +5464,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
   }
 
   void _onInteractionUpdate(ScaleUpdateDetails details) {
+    if (_isDismissing) return;
     if (_isSnapping) {
       _snapController.stop();
       _isSnapping = false;
@@ -4895,7 +5493,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
 
     final effectiveTranslation = ty / _dragOriginalScale;
     if (effectiveTranslation > screenSize.height * 0.2 || details.velocity.pixelsPerSecond.dy > 800) {
-      _animatedDismiss();
+      _animatedDismiss(velocity: details.velocity.pixelsPerSecond);
       return;
     }
 
@@ -4946,7 +5544,6 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
-
     return AnimatedBuilder(
       animation: widget.animation,
       builder: (context, child) {
@@ -4966,28 +5563,40 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
                 child: _buildAnimatedImage(screenSize),
               ),
             ),
+            // 关闭按钮：Hero 飞行期间 shuttle 位于 Navigator overlay 顶层，
+            // 会盖住任何路由页内元素。飞行期间（路由动画未 completed）用外层
+            // Opacity 瞬时隐藏（不跟 150ms 渐隐拖尾），飞行结束后再由内层
+            // AnimatedOpacity 淡入；退出时同样瞬时隐藏，避免反向飞行遮挡闪现
             Positioned(
               top: 0,
               right: 0,
               child: SafeArea(
-                child: AnimatedOpacity(
-                  opacity: 1.0 - _dismissProgress,
-                  duration: const Duration(milliseconds: 150),
-                  child: Container(
-                    margin: const EdgeInsets.all(12),
-                    child: ClipOval(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white, size: 22),
-                            onPressed: _dismiss,
-                            padding: const EdgeInsets.all(8),
-                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                child: IgnorePointer(
+                  ignoring: !_routeSettled,
+                  child: Opacity(
+                    opacity: _routeSettled ? 1.0 : 0.0,
+                    child: AnimatedOpacity(
+                      opacity: _routeSettled
+                          ? (1.0 - _dismissProgress)
+                          : 0.0,
+                      duration: const Duration(milliseconds: 150),
+                      child: Container(
+                        margin: const EdgeInsets.all(12),
+                        child: ClipOval(
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.close, color: Colors.white, size: 22),
+                                onPressed: _dismiss,
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -5040,9 +5649,6 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with SingleTickerP
     );
 
     if (!widget.useHero) {
-      if (_isDismissing) {
-        return viewer;
-      }
       return ScaleTransition(
         scale: Tween<double>(begin: 0.0, end: 1.0).animate(
           CurvedAnimation(
@@ -5407,6 +6013,235 @@ class _DragSegmentedState extends State<_DragSegmented> {
           child: Text(label, style: TextStyle(fontSize: 13, fontWeight: weight, color: color)),
         ),
       )).toList(),
+    );
+  }
+}
+
+/// 长按消息气泡弹出的操作菜单（Overlay 浮层）。
+/// 样式复刻课表页长按课程二级菜单：毛玻璃圆角外壳、easeOutBack
+/// 灵动弹出、easeInCubic 收回、点击空白处收起。
+/// 最后一条 AI 消息显示「重新生成（上）+ 复制（下）」两项，
+/// 其余消息仅「复制」。
+class _MessageActionMenu extends StatefulWidget {
+  const _MessageActionMenu({
+    required this.anchor,
+    required this.showRegenerate,
+    required this.onRegenerate,
+    required this.onCopy,
+    this.onDismissed,
+  });
+
+  /// 长按位置（全局坐标），菜单在其附近弹出
+  final Offset anchor;
+  /// 是否显示重新生成项（仅最后一条 AI 消息且不在生成中）
+  final bool showRegenerate;
+  final VoidCallback? onRegenerate;
+  final VoidCallback? onCopy;
+  /// 菜单收起（点外/选择操作后）由父级移除浮层
+  final VoidCallback? onDismissed;
+
+  @override
+  State<_MessageActionMenu> createState() => _MessageActionMenuState();
+}
+
+class _MessageActionMenuState extends State<_MessageActionMenu>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  static const double _menuWidth = 170.0;
+  static const double _itemHeight = 44.0;
+  static const double _edgeMargin = 8.0;
+
+  bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void close() {
+    if (_closing) return;
+    _closing = true;
+    setState(() {});
+    _controller.reverse().whenComplete(() {
+      if (mounted) widget.onDismissed?.call();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final itemCount = (widget.showRegenerate ? 1 : 0) + (widget.onCopy != null ? 1 : 0);
+    if (itemCount == 0) return const SizedBox.shrink();
+    final menuHeight = _itemHeight * itemCount + 12.0;
+
+    // 菜单弹出于长按点下方（不足则上方），水平居中于长按点并夹在屏幕内
+    double top = widget.anchor.dy + 12;
+    if (top + menuHeight > screenSize.height - _edgeMargin) {
+      top = widget.anchor.dy - menuHeight - 12;
+    }
+    top = top.clamp(_edgeMargin, screenSize.height - menuHeight - _edgeMargin);
+    final double left = (widget.anchor.dx - _menuWidth / 2)
+        .clamp(_edgeMargin, screenSize.width - _menuWidth - _edgeMargin);
+
+    return Stack(
+      children: [
+        // 全屏透明屏障：点击空白处收起菜单
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _dismiss,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: _menuWidth,
+          child: IgnorePointer(
+            ignoring: _closing,
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                final t = CurvedAnimation(
+                  parent: _controller,
+                  curve: Curves.easeOutBack,
+                  reverseCurve: Curves.easeInCubic,
+                ).value;
+                final tFade = CurvedAnimation(
+                  parent: _controller,
+                  curve: Curves.easeOut,
+                  reverseCurve: Curves.easeIn,
+                ).value;
+                final double slide = (1.0 - tFade) * 14.0;
+                return Opacity(
+                  opacity: tFade,
+                  child: Transform.translate(
+                    offset: Offset(0, slide),
+                    child: Transform.scale(
+                      scale: 0.82 + 0.18 * t,
+                      alignment: Alignment.topCenter,
+                      child: child,
+                    ),
+                  ),
+                );
+              },
+              child: _buildMenu(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _dismiss() {
+    close();
+  }
+
+  Widget _buildMenu() {
+    return Material(
+      type: MaterialType.transparency,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.72),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.showRegenerate)
+                      _menuItem(
+                        icon: Icons.refresh,
+                        label: '重新生成',
+                        onTap: widget.onRegenerate,
+                      ),
+                    if (widget.onCopy != null)
+                      _menuItem(
+                        icon: Icons.copy_outlined,
+                        label: '复制',
+                        onTap: widget.onCopy,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _menuItem({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        if (_closing) return;
+        _closing = true;
+        setState(() {});
+        _controller.reverse().whenComplete(() {
+          // 必须先移除 OverlayEntry（连同全屏屏障），再执行动作，
+          // 否则屏障残留在界面上会挡住所有后续点击（整 App 假死）
+          widget.onDismissed?.call();
+          onTap?.call();
+        });
+      },
+      behavior: HitTestBehavior.opaque,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: SizedBox(
+          height: _itemHeight,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: const Color(0xFF4A90E2)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

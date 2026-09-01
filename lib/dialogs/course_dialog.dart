@@ -8,6 +8,7 @@ import '../utils/course_color_palette.dart';
 import '../utils/storage.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
+import '../widgets/blur_selection_menu.dart';
 
 enum CourseEditFocusSection {
   basicInfo,
@@ -573,6 +574,7 @@ class _CourseDialogState extends State<CourseDialog> {
     bool isSmallScreen = false,
   }) {
     return TextFormField(
+      contextMenuBuilder: styledEditableContextMenu,
       controller: controller,
       style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
       decoration: InputDecoration(

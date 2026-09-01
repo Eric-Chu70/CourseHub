@@ -10,6 +10,7 @@ import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
 import '../widgets/ddl_ai_insight_card.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/blur_selection_menu.dart';
 
 class HeatmapScreen extends StatefulWidget {
   const HeatmapScreen({super.key});
@@ -769,6 +770,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         TextField(
+                                          contextMenuBuilder: styledEditableContextMenu,
                                           decoration: InputDecoration(
                                             labelText: '任务名称',
                                             prefixIcon: Icon(Icons.task,
@@ -1046,6 +1048,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                         SizedBox(
                                             height: isSmallScreen ? 12 : 16),
                                         TextField(
+                                          contextMenuBuilder: styledEditableContextMenu,
                                           maxLines: 1,
                                           decoration: InputDecoration(
                                             labelText: '备注',
@@ -1910,6 +1913,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         TextField(
+                                          contextMenuBuilder: styledEditableContextMenu,
                                           controller: nameController,
                                           decoration: InputDecoration(
                                             labelText: '任务名称',
@@ -2187,6 +2191,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                         SizedBox(
                                             height: isSmallScreen ? 12 : 16),
                                         TextField(
+                                          contextMenuBuilder: styledEditableContextMenu,
                                           controller: noteController,
                                           maxLines: 1,
                                           decoration: InputDecoration(

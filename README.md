@@ -6,9 +6,9 @@
 
 ## 关于 AI 功能
 
-**由于目前资金短缺，已移除所有内建模型支持。** 使用者需要自行解决 API 接入问题。接入 API 后即可体验满血 AI 功能，包括 AI 对话、图片识别导入课程表等。AI 功能的质量优劣完全取决于使用者自己所提供的模型能力强弱。
+应用**内置限时免费模型，无需任何配置即可开箱即用**，直接体验 AI 对话、图片识别导入课程表等完整 AI 功能。此外也可选择推荐的 **Agnes AI**（部分模型免费，注册即可申请密钥），或接入**自定义 OpenAI 兼容 API**。AI 功能的质量优劣取决于所使用模型的能力强弱。
 
-**如果选择不接入 API，依然可以正常使用应用的其它全部功能**（课表管理、DDL 追踪、数据导入导出、云端同步等）。
+**如果选择不使用 AI 功能，依然可以正常使用应用的其它全部功能**（课表管理、DDL 追踪、数据导入导出、云端同步等）。
 
 ---
 
@@ -74,8 +74,8 @@
 
 | 提供商 | 说明 | 所需信息 |
 |--------|------|----------|
-| 混元 Lite | 腾讯云提供，速度快，完全免费 | Secret ID + Secret Key |
-| GLM-4.7-Flash | 智谱 AI 提供，完全免费 | API Key |
+| 内置模型 | 限时免费，开箱即用，无需密钥（多节点可选） | 无 |
+| Agnes AI（推荐） | 部分模型免费，注册即可申请密钥：[agnes-ai.cn](https://www.agnes-ai.cn/) | API Key |
 | 自定义 OpenAI 兼容 API | 任意兼容 OpenAI 格式的接口 | API 地址 + API Key + 模型名称 |
 
 ### 第二步：配置 API
@@ -148,9 +148,9 @@ flutter build apk --release
 
 ## About AI Features
 
-**Due to funding constraints, all built-in model support has been removed.** Users need to provide their own API access. Once an API is configured, you can enjoy full AI capabilities including AI chat, image-based timetable recognition, and more. The quality of AI features depends entirely on the capability of the model you provide.
+The app **includes a built-in model available for free for a limited time — no configuration required**. You can immediately enjoy full AI capabilities including AI chat and image-based timetable recognition. Alternatively, choose the recommended **Agnes AI** (some models are free; register to obtain a key) or connect a **custom OpenAI-compatible API**. The quality of AI features depends on the capability of the model in use.
 
-**If you choose not to configure an API, all other features of the app remain fully functional** (timetable management, DDL tracking, data import/export, cloud sync, etc.).
+**If you choose not to use AI features, all other features of the app remain fully functional** (timetable management, DDL tracking, data import/export, cloud sync, etc.).
 
 ---
 
@@ -210,8 +210,8 @@ The app supports the following AI providers — choose any one:
 
 | Provider | Description | Required Info |
 |----------|-------------|---------------|
-| Hunyuan Lite | By Tencent Cloud, fast and completely free | Secret ID + Secret Key |
-| GLM-4.7-Flash | By Zhipu AI, completely free | API Key |
+| Built-in Model | Free for a limited time, works out of the box, no key needed (multiple nodes) | None |
+| Agnes AI (Recommended) | Some models are free; register at [agnes-ai.cn](https://www.agnes-ai.cn/) to get a key | API Key |
 | Custom OpenAI-compatible API | Any OpenAI-format compatible endpoint | API URL + API Key + Model Name |
 
 ### Step 2: Configure the API

@@ -29,6 +29,9 @@ void main() async {
   
   await StorageService.init();
 
+  // 旧版拼写迁移（Anges → Agnes）：同步旧 prefs 键与 provider 值
+  await AIService.migrateLegacyAgnesKeys();
+
   // 先 runApp，让 UI 尽快显示，避免从小组件进入时白屏卡死
   SystemChrome.setEnabledSystemUIMode(
     SystemUiMode.edgeToEdge,

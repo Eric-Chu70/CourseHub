@@ -85,6 +85,8 @@ enum AIProvider {
   hunyuan,
   doubao,
   custom,
+  agnes,
+  builtin,
 }
 
 class AIService {
@@ -97,10 +99,21 @@ class AIService {
   static const String _glmBaseUrl = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
   static const String _glmModel = 'glm-4.7-flash';
   static const String _defaultCustomModel = 'gpt-4o-mini';
-  
+
+  // Agnes AI：OpenAI 兼容接口，直接以 Bearer 密钥调用
+  static const String _agnesBaseUrl = 'https://api.agnes-ai.cn/v1/chat/completions';
+  static const String _defaultAgnesModel = 'agnes-2.0-flash';
+
   static const String _defaultSupabaseUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/hunyuan';
   static const String _doubaoEdgeFunctionUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/HuoshanAPI';
   static const String _nonDoubaoEdgeFunctionUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/NonDoubaoAPI';
+
+  // 内置模型（限时免费）：单一 Supabase Edge Function，请求体带 node 字段（1-4）
+  // 区分节点，函数内部按节点查表选择模型与密钥。请求/响应协议与 NonDoubaoAPI
+  // 完全一致（流式 SSE：content/status/thinking），客户端无需携带任何密钥
+  static const String _builtinEndpointUrl =
+      'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/BuiltinModel';
+  int _builtinNode = 1;
 
   String? _apiKey;
   String? _secretId;
@@ -109,12 +122,22 @@ class AIService {
   String? _customApiUrl;
   String? _customApiKey;
   String? _customModel;
+  String? _agnesApiKey;
+  String _agnesModel = _defaultAgnesModel;
   String _currentProviderStr = 'hunyuan';
   
   AIProvider _provider = AIProvider.hunyuan;
 
   void setApiKey(String apiKey) {
     _apiKey = apiKey;
+  }
+
+  /// 内置模型：切换节点（1-4），并立即持久化
+  Future<void> setBuiltinNode(int node) async {
+    if (node < 1 || node > 4) return;
+    _builtinNode = node;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('builtin_node', node);
   }
 
   void setCustomApiConfig({
@@ -346,6 +369,12 @@ class AIService {
     _provider = AIProvider.glm;
   }
 
+  void setAgnesConfig(String apiKey, String model) {
+    _agnesApiKey = apiKey;
+    _agnesModel = (model.trim().isNotEmpty) ? model.trim() : _defaultAgnesModel;
+    _provider = AIProvider.agnes;
+  }
+
   void setDoubaoProvider() {
     _provider = AIProvider.doubao;
   }
@@ -355,6 +384,29 @@ class AIService {
   }
 
   AIProvider get provider => _provider;
+
+  /// 旧版拼写迁移：Agnes 曾误拼为 Anges，将旧 prefs 键（anges_*）
+  /// 与旧 provider 值（'anges'）一次性迁移为正确拼写，避免老用户配置丢失
+  static Future<void> migrateLegacyAgnesKeys() async {
+    final prefs = await SharedPreferences.getInstance();
+    const keyPairs = [
+      ('anges_api_key', 'agnes_api_key'),
+      ('anges_model', 'agnes_model'),
+      ('anges_reasoning_effort', 'agnes_reasoning_effort'),
+    ];
+    for (final (oldKey, newKey) in keyPairs) {
+      final oldValue = prefs.getString(oldKey);
+      if (oldValue != null && prefs.getString(newKey) == null) {
+        await prefs.setString(newKey, oldValue);
+      }
+      if (oldValue != null) {
+        await prefs.remove(oldKey);
+      }
+    }
+    if (prefs.getString('ai_provider') == 'anges') {
+      await prefs.setString('ai_provider', 'agnes');
+    }
+  }
 
   Future<void> loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
@@ -367,8 +419,25 @@ class AIService {
       _customApiUrl = null;
       _customApiKey = null;
       _customModel = null;
+    } else if (providerStr == 'agnes') {
+      _provider = AIProvider.agnes;
+      _agnesApiKey = prefs.getString('agnes_api_key');
+      final savedModel = prefs.getString('agnes_model');
+      _agnesModel = (savedModel != null && savedModel.trim().isNotEmpty)
+          ? savedModel.trim()
+          : _defaultAgnesModel;
+      _customApiUrl = null;
+      _customApiKey = null;
+      _customModel = null;
     } else if (providerStr == 'doubao') {
       _provider = AIProvider.doubao;
+      _customApiUrl = null;
+      _customApiKey = null;
+      _customModel = null;
+    } else if (providerStr == 'builtin') {
+      _provider = AIProvider.builtin;
+      _builtinNode = prefs.getInt('builtin_node') ?? 1;
+      if (_builtinNode < 1 || _builtinNode > 4) _builtinNode = 1;
       _customApiUrl = null;
       _customApiKey = null;
       _customModel = null;
@@ -398,10 +467,19 @@ class AIService {
       providerStr = 'doubao';
     } else if (_provider == AIProvider.custom) {
       providerStr = 'custom';
+    } else if (_provider == AIProvider.agnes) {
+      providerStr = 'agnes';
+    } else if (_provider == AIProvider.builtin) {
+      providerStr = 'builtin';
     }
     await prefs.setString('ai_provider', providerStr);
-    
-    if (_provider == AIProvider.glm) {
+
+    if (_provider == AIProvider.agnes) {
+      if (_agnesApiKey != null) await prefs.setString('agnes_api_key', _agnesApiKey!);
+      await prefs.setString('agnes_model', _agnesModel);
+    } else if (_provider == AIProvider.builtin) {
+      await prefs.setInt('builtin_node', _builtinNode);
+    } else if (_provider == AIProvider.glm) {
       if (_apiKey != null) await prefs.setString('glm_api_key', _apiKey!);
     } else if (_provider == AIProvider.hunyuan) {
       if (_secretId != null) await prefs.setString('tencent_secret_id', _secretId!);
@@ -433,6 +511,15 @@ class AIService {
       );
     }
 
+    if (_currentProviderStr == 'agnes') {
+      return _parseWithAgnes(ocrText);
+    }
+
+    if (_currentProviderStr == 'builtin') {
+      // 内置模型：文本解析经当前节点中转（无客户端密钥）
+      return _parseWithBuiltin(ocrText);
+    }
+
     if (_currentProviderStr == 'glm') {
       return _parseWithNonDoubao(
         ocrText,
@@ -454,12 +541,18 @@ class AIService {
     if (resolvedProvider != 'doubao' &&
         resolvedProvider != 'hunyuan' &&
         resolvedProvider != 'glm' &&
-        resolvedProvider != 'custom') {
+        resolvedProvider != 'custom' &&
+        resolvedProvider != 'agnes' &&
+        resolvedProvider != 'builtin') {
       resolvedProvider = _provider == AIProvider.custom
           ? 'custom'
-          : (_provider == AIProvider.glm
-              ? 'glm'
-              : (_provider == AIProvider.doubao ? 'doubao' : 'hunyuan'));
+          : (_provider == AIProvider.agnes
+              ? 'agnes'
+              : (_provider == AIProvider.builtin
+                  ? 'builtin'
+                  : (_provider == AIProvider.glm
+                      ? 'glm'
+                      : (_provider == AIProvider.doubao ? 'doubao' : 'hunyuan'))));
     }
 
     String? resolvedModel = model;
@@ -482,6 +575,14 @@ class AIService {
     } else if (resolvedProvider == 'glm' &&
         (resolvedModel == null || resolvedModel.isEmpty)) {
       resolvedModel = _glmModel;
+    } else if (resolvedProvider == 'agnes') {
+      await _ensureAgnesConfigLoaded();
+      if ((_agnesApiKey ?? '').trim().isEmpty) {
+        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+      }
+      if (resolvedModel == null || resolvedModel.isEmpty) {
+        resolvedModel = _agnesModel;
+      }
     }
 
     final prompt = _buildPrompt(ocrText);
@@ -1081,6 +1182,131 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     }
   }
 
+  /// 内置模型流式对话：经当前节点的 Supabase Edge Function 中转。
+  /// 协议与 NonDoubaoAPI 一致（流式 SSE：content/status/thinking/model），无需客户端密钥
+  Stream<String> _chatWithBuiltinStream({
+    required List<Map<String, dynamic>> messages,
+    String? model,
+    String? reasoningEffort,
+  }) async* {
+    debugPrint('[AI Service] Builtin stream route node=$_builtinNode model=${model ?? ''} endpoint=$_builtinEndpointUrl');
+
+    final httpClient = HttpClient();
+    try {
+      final request = await httpClient.postUrl(Uri.parse(_builtinEndpointUrl));
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode({
+        'provider': 'builtin',
+        'node': _builtinNode,
+        'stream': true,
+        // 内置模型不透传客户端模型名（对话页的"节点 X"为展示名），
+        // 由 Edge Function 内部决定实际使用的模型
+        if (reasoningEffort != null &&
+            reasoningEffort.isNotEmpty &&
+            const {'low', 'medium', 'high'}.contains(reasoningEffort))
+          'reasoning_effort': reasoningEffort,
+        'messages': messages,
+      }));
+
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        final errorBody = await response.transform(utf8.decoder).join();
+        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
+      }
+
+      String buffer = '';
+      String? returnedModel;
+
+      await for (final chunk in response.transform(utf8.decoder)) {
+        buffer += chunk;
+        final lines = buffer.split('\n');
+        buffer = lines.removeLast();
+
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
+
+          final data = trimmed.substring(5).trim();
+          if (data == '[DONE]') continue;
+
+          try {
+            final parsed = jsonDecode(data);
+            final error = parsed['error'] as String?;
+            if (error != null && error.isNotEmpty) {
+              throw GLMException('流式响应异常: $error');
+            }
+            final content = parsed['content'] as String?;
+            final status = parsed['status'] as String?;
+            final thinking = parsed['thinking'] as String?;
+            returnedModel ??= parsed['model'] as String?;
+
+            if (thinking != null && thinking.isNotEmpty) {
+              yield '【思考】$thinking';
+            }
+            if (status != null && status.isNotEmpty) {
+              yield '【状态】$status';
+            }
+            if (content != null && content.isNotEmpty) {
+              yield content;
+            }
+          } catch (_) {
+            // Skip invalid JSON payloads.
+          }
+        }
+      }
+
+      if (returnedModel != null) {
+        _lastStreamedModel = returnedModel;
+      }
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('对话失败: $e');
+    } finally {
+      httpClient.close();
+    }
+  }
+
+  /// 内置模型非流式对话：经当前节点的 Supabase Edge Function 中转
+  Future<Map<String, dynamic>> _chatWithModelBuiltin({
+    required List<Map<String, dynamic>> messages,
+    String? model,
+  }) async {
+    debugPrint('[AI Service] Builtin non-stream route node=$_builtinNode model=${model ?? ''} endpoint=$_builtinEndpointUrl');
+
+    try {
+      final response = await http.post(
+        Uri.parse(_builtinEndpointUrl),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'provider': 'builtin',
+          'node': _builtinNode,
+          'stream': false,
+          'messages': messages,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
+      }
+
+      final data = jsonDecode(response.body);
+      final content = data['choices']?[0]?['message']?['content'] as String? ??
+          data['content'] as String?;
+      if (content == null || content.isEmpty) {
+        throw GLMException('内置模型返回内容为空');
+      }
+      return {
+        'content': content,
+        'model': data['model'] as String? ?? 'builtin-node-$_builtinNode',
+      };
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('对话失败: $e');
+    }
+  }
+
   Future<Map<String, dynamic>> _chatWithModelNonDoubao({
     required List<Map<String, dynamic>> messages,
     required String provider,
@@ -1199,6 +1425,70 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     throw GLMException('请求超时，请检查网络连接');
   }
 
+  /// 内置模型：课程表文本解析（非流式，经当前节点 Supabase Edge Function 中转）
+  Future<GLMParseResult> _parseWithBuiltin(String ocrText) async {
+    final prompt = _buildPrompt(ocrText);
+
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries) {
+      try {
+        final response = await http.post(
+          Uri.parse(_builtinEndpointUrl),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'provider': 'builtin',
+            'node': _builtinNode,
+            'stream': false,
+            'messages': [
+              {
+                'role': 'system',
+                'content': _systemPrompt,
+              },
+              {
+                'role': 'user',
+                'content': prompt,
+              },
+            ],
+          }),
+        ).timeout(const Duration(seconds: 60));
+
+        if (response.statusCode != 200) {
+          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
+        }
+
+        final data = jsonDecode(response.body);
+
+        if (data['error'] != null) {
+          throw GLMException('API错误: ${data['error']}');
+        }
+
+        final content = data['choices']?[0]?['message']?['content'] as String? ??
+            data['content'] as String? ?? '';
+
+        if (content.isEmpty) {
+          throw GLMException('AI返回内容为空');
+        }
+
+        return _parseResponse(content);
+      } on http.ClientException catch (e) {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          throw GLMException('网络连接失败，请检查网络\n错误: $e');
+        }
+        await Future.delayed(Duration(seconds: retryCount * 2));
+      } catch (e) {
+        if (e is GLMException) rethrow;
+        throw GLMException('解析失败: $e');
+      }
+    }
+
+    throw GLMException('请求超时，请检查网络连接');
+  }
+
   Future<GLMParseResult> _parseWithGLM(String ocrText) async {
     if (_apiKey == null || _apiKey!.isEmpty) {
       throw GLMException('请先设置 GLM API Key');
@@ -1264,6 +1554,288 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     }
 
     throw GLMException('请求超时，请检查网络连接');
+  }
+
+  /// 懒加载 Agnes 配置：内存缺失时从 SharedPreferences 读取
+  Future<void> _ensureAgnesConfigLoaded() async {
+    if (_agnesApiKey != null && _agnesApiKey!.trim().isNotEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    _agnesApiKey = prefs.getString('agnes_api_key');
+    final savedModel = prefs.getString('agnes_model');
+    if (savedModel != null && savedModel.trim().isNotEmpty) {
+      _agnesModel = savedModel.trim();
+    }
+  }
+
+  /// Agnes AI：直连 OpenAI 兼容接口解析课程表（非流式）
+  Future<GLMParseResult> _parseWithAgnes(String ocrText) async {
+    await _ensureAgnesConfigLoaded();
+    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
+      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+    }
+
+    final prompt = _buildPrompt(ocrText);
+
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries) {
+      try {
+        final response = await http.post(
+          Uri.parse(_agnesBaseUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
+          },
+          body: jsonEncode({
+            'model': _agnesModel,
+            'messages': [
+              {
+                'role': 'system',
+                'content': _systemPrompt,
+              },
+              {
+                'role': 'user',
+                'content': prompt,
+              },
+            ],
+            'temperature': 0.1,
+            'max_tokens': 4096,
+          }),
+        );
+
+        if (response.statusCode != 200) {
+          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
+        }
+
+        final data = jsonDecode(response.body);
+
+        if (data['error'] != null) {
+          throw GLMException('API错误: ${data['error']['message'] ?? data['error']}');
+        }
+
+        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
+        final selectedModel = data['model'] as String?;
+
+        if (content.isEmpty) {
+          throw GLMException('AI返回内容为空');
+        }
+
+        return _parseResponse(content, selectedModel: selectedModel);
+      } on http.ClientException catch (e) {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          throw GLMException('网络连接失败，请检查网络后重试\n错误: $e');
+        }
+        await Future.delayed(Duration(seconds: retryCount * 2));
+      } catch (e) {
+        if (e is GLMException) rethrow;
+        throw GLMException('解析失败: $e');
+      }
+    }
+
+    throw GLMException('请求超时，请检查网络连接');
+  }
+
+  /// Agnes AI：直连连接测试
+  Future<String> _testAgnesConnection() async {
+    await _ensureAgnesConfigLoaded();
+    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
+      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse(_agnesBaseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
+        },
+        body: jsonEncode({
+          'model': _agnesModel,
+          'messages': [
+            {'role': 'user', 'content': '你好'}
+          ],
+          'max_tokens': 50,
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        return 'Agnes AI连接成功';
+      } else {
+        throw GLMException('连接失败: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('连接测试失败: $e');
+    }
+  }
+
+  /// Agnes AI：直连对话（非流式），系统提示与 _chatWithNonDoubao 保持一致
+  Future<String> _chatWithAgnes(
+    String userMessage,
+    String? context,
+    List<CourseData>? courses,
+  ) async {
+    await _ensureAgnesConfigLoaded();
+    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
+      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+    }
+
+    String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
+
+当用户询问课程表相关问题时，以下是当前识别到的课程数据：
+${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
+
+当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
+1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
+2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
+3. 删除课程：返回 {"action": "delete", "index": 课程索引}
+
+课程信息字段说明：
+- name: 课程名称（必填）
+- teacher: 教师姓名（可选）
+- location: 上课地点（可选）
+- dayOfWeek: 星期几，1=周一，7=周日（必填）
+- period: 第几节课，从1开始（必填）
+- duration: 课程持续节数，默认为2（可选）
+- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
+
+注意：
+- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
+- 其他情况下请用自然语言回答用户的问题''';
+
+    if (context != null && context.isNotEmpty) {
+      systemContent += '\n\n原始OCR识别内容：\n$context';
+    }
+
+    try {
+      final effort = await _resolvedAgnesReasoningEffort(null);
+      final response = await http.post(
+        Uri.parse(_agnesBaseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
+        },
+        body: jsonEncode({
+          'model': _agnesModel,
+          'messages': [
+            {'role': 'system', 'content': systemContent},
+            {'role': 'user', 'content': userMessage},
+          ],
+          if (effort != null) 'reasoning_effort': effort,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
+      }
+
+      final data = jsonDecode(response.body);
+      return data['choices'][0]['message']['content'] as String;
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('对话失败: $e');
+    }
+  }
+
+  /// Agnes AI：解析思考强度（显式传入优先，否则读取配置）
+  Future<String?> _resolvedAgnesReasoningEffort(String? passed) async {
+    if (passed != null && passed.trim().isNotEmpty) {
+      return passed.trim();
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('agnes_reasoning_effort') ?? '';
+    return saved.isEmpty ? null : saved;
+  }
+
+  /// Agnes AI：直连流式对话（OpenAI 兼容 SSE）
+  Stream<String> _chatWithAgnesStream({
+    required List<Map<String, dynamic>> messages,
+    String? model,
+    String? reasoningEffort,
+  }) async* {
+    await _ensureAgnesConfigLoaded();
+    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
+      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+    }
+
+    final requestModel = (model != null && model.trim().isNotEmpty)
+        ? model.trim()
+        : _agnesModel;
+    final effort = await _resolvedAgnesReasoningEffort(reasoningEffort);
+
+    final httpClient = HttpClient();
+
+    try {
+      final request = await httpClient.postUrl(Uri.parse(_agnesBaseUrl));
+      request.headers.contentType = ContentType.json;
+      request.headers.set('Authorization', 'Bearer ${_agnesApiKey!.trim()}');
+      request.write(jsonEncode({
+        'model': requestModel,
+        'messages': messages,
+        'stream': true,
+        if (effort != null) 'reasoning_effort': effort,
+      }));
+
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        final errorBody = await response.transform(utf8.decoder).join();
+        throw GLMException('Agnes AI请求失败: ${response.statusCode} - $errorBody');
+      }
+
+      String buffer = '';
+      String? returnedModel;
+
+      await for (final chunk in response.transform(utf8.decoder)) {
+        buffer += chunk;
+        final lines = buffer.split('\n');
+        buffer = lines.removeLast();
+
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
+
+          final data = trimmed.substring(5).trim();
+          if (data == '[DONE]') continue;
+
+          try {
+            final parsed = jsonDecode(data);
+            returnedModel ??= parsed['model'] as String?;
+            // 思考输出（OpenAI 兼容 reasoning_content，兼容 reasoning/thinking 变体）
+            final dynamic deltaReasoning =
+                parsed['choices']?[0]?['delta']?['reasoning_content'] ??
+                parsed['choices']?[0]?['delta']?['reasoning'] ??
+                parsed['choices']?[0]?['delta']?['thinking'];
+            final dynamic messageReasoning =
+                parsed['choices']?[0]?['message']?['reasoning_content'] ??
+                parsed['choices']?[0]?['message']?['reasoning'] ??
+                parsed['choices']?[0]?['message']?['thinking'];
+            final reasoning =
+                (deltaReasoning ?? messageReasoning)?.toString();
+            if (reasoning != null && reasoning.isNotEmpty && reasoning != 'null') {
+              yield '【思考】$reasoning';
+            }
+            final content = parsed['choices']?[0]?['delta']?['content'] as String?;
+            if (content != null && content.isNotEmpty) {
+              yield content;
+            }
+          } catch (_) {
+            // Skip invalid JSON
+          }
+        }
+      }
+
+      _lastStreamedModel = returnedModel ?? requestModel;
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('Agnes AI对话失败: $e');
+    } finally {
+      httpClient.close();
+    }
   }
 
   static const String _systemPrompt = '''你是一个课程表解析助手。你的任务是将OCR识别的课程表文字转换为结构化的JSON数据。
@@ -1391,7 +1963,32 @@ $ocrText
         successMessage: 'GLM连接成功',
       );
     }
+    if (_provider == AIProvider.agnes) {
+      return _testAgnesConnection();
+    }
+    if (_provider == AIProvider.builtin) {
+      return _testBuiltinConnection();
+    }
     return _testDoubaoConnection();
+  }
+
+  /// 内置模型：连接测试（经当前节点发一条最小消息验证链路）
+  Future<String> _testBuiltinConnection() async {
+    try {
+      final result = await _chatWithModelBuiltin(
+        messages: [
+          {'role': 'user', 'content': '你好'}
+        ],
+        model: null,
+      ).timeout(const Duration(seconds: 30));
+      if ((result['content'] as String).trim().isNotEmpty) {
+        return '内置模型节点$_builtinNode连接成功';
+      }
+      throw GLMException('连接失败: 返回内容为空');
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('连接测试失败: $e');
+    }
   }
 
   Future<String> _testDoubaoConnection({String? model, String successMessage = '火山引擎连接成功'}) async {
@@ -1512,6 +2109,49 @@ $ocrText
       return _chatWithDoubao(userMessage, context, courses);
     }
 
+    if (_provider == AIProvider.agnes) {
+      return _chatWithAgnes(userMessage, context, courses);
+    }
+
+    if (_provider == AIProvider.builtin) {
+      // 内置模型：经当前节点 Supabase Edge Function 中转（非流式）
+      String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
+
+当用户询问课程表相关问题时，以下是当前识别到的课程数据：
+${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
+
+当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
+1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
+2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
+3. 删除课程：返回 {"action": "delete", "index": 课程索引}
+
+课程信息字段说明：
+- name: 课程名称（必填）
+- teacher: 教师姓名（可选）
+- location: 上课地点（可选）
+- dayOfWeek: 星期几，1=周一，7=周日（必填）
+- period: 第几节课，从1开始（必填）
+- duration: 课程持续节数，默认为2（可选）
+- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
+
+注意：
+- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
+- 其他情况下请用自然语言回答用户的问题''';
+
+      if (context != null && context.isNotEmpty) {
+        systemContent += '\n\n原始OCR识别内容：\n$context';
+      }
+
+      final result = await _chatWithModelBuiltin(
+        messages: [
+          {'role': 'system', 'content': systemContent},
+          {'role': 'user', 'content': userMessage},
+        ],
+        model: null,
+      );
+      return result['content'] as String;
+    }
+
     if (_provider == AIProvider.hunyuan) {
       return _chatWithNonDoubao(
         userMessage,
@@ -1601,21 +2241,33 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     final resolvedProvider = provider ??
       (_provider == AIProvider.hunyuan
         ? 'hunyuan'
-        : (_provider == AIProvider.glm
-          ? 'glm'
-          : (_provider == AIProvider.custom ? 'custom' : 'doubao')));
+        : (_provider == AIProvider.agnes
+          ? 'agnes'
+          : (_provider == AIProvider.builtin
+            ? 'builtin'
+            : (_provider == AIProvider.glm
+              ? 'glm'
+              : (_provider == AIProvider.custom ? 'custom' : 'doubao')))));
     String? resolvedModel = model;
     if (resolvedProvider == 'hunyuan' && (resolvedModel == null || resolvedModel.isEmpty)) {
       resolvedModel = 'hunyuan-lite';
     } else if (resolvedProvider == 'glm' && (resolvedModel == null || resolvedModel.isEmpty)) {
       resolvedModel = _glmModel;
+    } else if (resolvedProvider == 'agnes') {
+      await _ensureAgnesConfigLoaded();
+      if ((_agnesApiKey ?? '').trim().isEmpty) {
+        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+      }
+      if (resolvedModel == null || resolvedModel.isEmpty) {
+        resolvedModel = _agnesModel;
+      }
     } else if (resolvedProvider == 'custom' && (resolvedModel == null || resolvedModel.isEmpty)) {
       resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
           ? _customModel!.trim()
           : _defaultCustomModel;
     }
 
-    if (resolvedProvider != 'doubao' && resolvedProvider != 'hunyuan' && resolvedProvider != 'glm' && resolvedProvider != 'custom') {
+    if (resolvedProvider != 'doubao' && resolvedProvider != 'hunyuan' && resolvedProvider != 'glm' && resolvedProvider != 'custom' && resolvedProvider != 'agnes' && resolvedProvider != 'builtin') {
       throw GLMException('当前provider不支持此功能: $resolvedProvider');
     }
 
@@ -1656,6 +2308,24 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
 
     if (resolvedProvider != 'doubao') {
       debugPrint('[AI Service] chatWithModelStream route provider=$resolvedProvider model=${resolvedModel ?? ''} hasImage=${imageBase64 != null && imageBase64.isNotEmpty}');
+      if (resolvedProvider == 'agnes') {
+        // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
+        yield* _chatWithAgnesStream(
+          messages: messages,
+          model: resolvedModel,
+          reasoningEffort: reasoningEffort,
+        );
+        return;
+      }
+      if (resolvedProvider == 'builtin') {
+        // 内置模型：经当前节点的 Supabase Edge Function 中转（协议同 NonDoubao）
+        yield* _chatWithBuiltinStream(
+          messages: messages,
+          model: resolvedModel,
+          reasoningEffort: reasoningEffort,
+        );
+        return;
+      }
       yield* _chatWithNonDoubaoStream(
         messages: messages,
         provider: resolvedProvider,
@@ -2100,6 +2770,11 @@ ${jsonEncode(coursesJson)}
     } else if (_provider == AIProvider.glm) {
       provider = 'glm';
       model = _glmModel;
+    } else if (_provider == AIProvider.agnes) {
+      provider = 'agnes';
+      model = _agnesModel;
+    } else if (_provider == AIProvider.builtin) {
+      provider = 'builtin';
     } else if (_provider == AIProvider.custom) {
       provider = 'custom';
       model = (_customModel != null && _customModel!.trim().isNotEmpty)
@@ -2108,6 +2783,16 @@ ${jsonEncode(coursesJson)}
     }
     if (provider == 'doubao') {
       yield* _chatScheduleDoubaoStream(messages, model: model);
+      return;
+    }
+    if (provider == 'agnes') {
+      // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
+      yield* _chatWithAgnesStream(messages: messages, model: model, reasoningEffort: reasoningEffort);
+      return;
+    }
+    if (provider == 'builtin') {
+      // 内置模型：经当前节点的 Supabase Edge Function 中转
+      yield* _chatWithBuiltinStream(messages: messages, model: model, reasoningEffort: reasoningEffort);
       return;
     }
     yield* _chatWithNonDoubaoStream(
@@ -2300,6 +2985,8 @@ ${jsonEncode(coursesJson)}
         resolvedModel = 'hunyuan-lite';
       } else if (_provider == AIProvider.glm) {
         resolvedModel = _glmModel;
+      } else if (_provider == AIProvider.agnes) {
+        resolvedModel = _agnesModel;
       } else if (_provider == AIProvider.custom) {
         resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
             ? _customModel!.trim()
@@ -2359,6 +3046,50 @@ ${jsonEncode(coursesJson)}
         provider: 'custom',
         model: resolvedModel,
       );
+    }
+
+    if (_provider == AIProvider.builtin) {
+      // 内置模型：经当前节点的 Supabase Edge Function 中转（非流式）
+      return _chatWithModelBuiltin(messages: messages, model: resolvedModel);
+    }
+
+    if (_provider == AIProvider.agnes) {
+      // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
+      await _ensureAgnesConfigLoaded();
+      if ((_agnesApiKey ?? '').trim().isEmpty) {
+        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+      }
+      final requestModel = (resolvedModel != null && resolvedModel.trim().isNotEmpty)
+          ? resolvedModel.trim()
+          : _agnesModel;
+      try {
+        final effort = await _resolvedAgnesReasoningEffort(null);
+        final response = await http.post(
+          Uri.parse(_agnesBaseUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $_agnesApiKey',
+          },
+          body: jsonEncode({
+            'model': requestModel,
+            'messages': messages,
+            if (effort != null) 'reasoning_effort': effort,
+          }),
+        );
+
+        if (response.statusCode != 200) {
+          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
+        }
+
+        final data = jsonDecode(response.body);
+        return {
+          'content': data['choices'][0]['message']['content'] as String,
+          'model': data['model'] as String? ?? requestModel,
+        };
+      } catch (e) {
+        if (e is GLMException) rethrow;
+        throw GLMException('对话失败: $e');
+      }
     }
 
     return _chatWithModelNonDoubao(

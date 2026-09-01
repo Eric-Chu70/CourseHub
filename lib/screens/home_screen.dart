@@ -417,6 +417,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: _navPadding),
+        // 阴影须放在 ClipRRect 外层：裁剪会吃掉内部绘制的阴影，
+        // 之前阴影在内部容器上实际从未显示
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(32),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(32),
           child: BackdropFilter(
@@ -430,13 +442,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   color: Colors.white.withValues(alpha: 0.6),
                   width: 1.5,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
               ),
               child: Stack(
                 alignment: Alignment.center,

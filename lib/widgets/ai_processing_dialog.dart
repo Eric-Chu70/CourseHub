@@ -13,6 +13,7 @@ import '../models/course.dart';
 import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
 import 'glass_dialog.dart';
+import 'blur_selection_menu.dart';
 
 enum AIProcessingStep {
   ocr,
@@ -225,6 +226,12 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         hasAIConfig = true;
       } else if (providerStr == 'custom') {
         hasAIConfig = true;
+      } else if (providerStr == 'agnes') {
+        final agnesKey = prefs.getString('agnes_api_key');
+        hasAIConfig = agnesKey != null && agnesKey.isNotEmpty;
+      } else if (providerStr == 'builtin') {
+        // 内置模型（限时免费）：无需密钥
+        hasAIConfig = true;
       } else {
         final secretId = prefs.getString('tencent_secret_id');
         final secretKey = prefs.getString('tencent_secret_key');
@@ -281,6 +288,27 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             debugPrint('[AI Processing] custom image import route: ocr+ai');
             await _processWithOCRAndAI();
           }
+        } else if (providerStr == 'agnes') {
+          // Agnes 两个模型均支持视觉能力：直接走视觉识别路由（不经 OCR）
+          debugPrint('[AI Processing] agnes image import route: vision');
+          final savedAgnesModel = prefs.getString('agnes_model');
+          final agnesModel = (savedAgnesModel != null && savedAgnesModel.trim().isNotEmpty)
+              ? savedAgnesModel.trim()
+              : 'agnes-2.0-flash';
+          await _parseWithVisionModelStream(
+            provider: 'agnes',
+            model: agnesModel,
+            modelLabel: 'Agnes AI',
+          );
+        } else if (providerStr == 'builtin') {
+          // 内置模型：支持视觉能力，直接走视觉识别路由（默认中度思考）
+          debugPrint('[AI Processing] builtin image import route: vision');
+          final savedNode = prefs.getInt('builtin_node') ?? 1;
+          await _parseWithVisionModelStream(
+            provider: 'builtin',
+            model: 'agnes-2.0-flash',
+            modelLabel: '节点 $savedNode',
+          );
         } else {
           await _processWithOCRAndAI();
         }
@@ -395,7 +423,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         imageBase64: imageBase64,
         provider: provider,
         enableSearch: false,
-        reasoningEffort: _runtimeReasoningEffort,
+        reasoningEffort: (provider == 'agnes' || provider == 'builtin') ? 'medium' : _runtimeReasoningEffort,
       );
       
       _streamSubscription = stream.listen(
@@ -1485,7 +1513,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             itemCount: _chatMessages.length,
             itemBuilder: (context, index) {
               final message = _chatMessages[index];
-              return _buildChatBubble(message);
+              return _buildChatBubble(message, isLast: index == _chatMessages.length - 1);
             },
           ),
         ),
@@ -1499,6 +1527,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             children: [
               Expanded(
                 child: TextField(
+                  contextMenuBuilder: styledEditableContextMenu,
                   controller: _chatController,
                   decoration: InputDecoration(
                     hintText: '问我任何关于课程表的问题...',
@@ -1546,7 +1575,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       identical(message, _chatMessages.last) &&
       message.text == _currentStreamingFallback;
 
-  Widget _buildChatBubble(ChatMessage message) {
+  Widget _buildChatBubble(ChatMessage message, {bool isLast = false}) {
     return Align(
       alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -1873,6 +1902,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
           ),
           const SizedBox(height: 20),
           TextField(
+            contextMenuBuilder: styledEditableContextMenu,
             controller: _nameController,
             decoration: InputDecoration(
               labelText: '课程名称',
@@ -1893,6 +1923,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
           ),
           const SizedBox(height: 12),
           TextField(
+            contextMenuBuilder: styledEditableContextMenu,
             controller: _teacherController,
             decoration: InputDecoration(
               labelText: '教师',
@@ -1913,6 +1944,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
           ),
           const SizedBox(height: 12),
           TextField(
+            contextMenuBuilder: styledEditableContextMenu,
             controller: _locationController,
             decoration: InputDecoration(
               labelText: '地点',
