@@ -357,7 +357,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            '已选：${selectedDays}天${selectedHours}小时${selectedMinutes}分钟',
+                            '已选：$selectedDays天$selectedHours小时$selectedMinutes分钟',
                             style: TextStyle(
                               fontSize: 13,
                               color: Colors.grey.shade600,

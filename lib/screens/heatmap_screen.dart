@@ -497,14 +497,14 @@ class HeatmapScreenState extends State<HeatmapScreen>
                             opacity: 0.82,
                             child: Container(
                               padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
+                              decoration: const BoxDecoration(
                                 gradient: LinearGradient(
                                   colors: [
-                                    const Color(0xFF4A90E2),
-                                    const Color(0xFF5BA0F2)
+                                    Color(0xFF4A90E2),
+                                    Color(0xFF5BA0F2)
                                   ],
                                 ),
-                                borderRadius: const BorderRadius.vertical(
+                                borderRadius: BorderRadius.vertical(
                                     top: Radius.circular(24)),
                               ),
                               child: Row(
@@ -877,6 +877,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                   const Duration(days: 365)),
                                             );
                                             if (date != null) {
+                                              if (!context.mounted) return;
                                               final time =
                                                   await show3DTimePicker(
                                                 context: context,
@@ -1155,7 +1156,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               note: description,
                                             );
                                             await StorageService.addTask(task);
-                                            Navigator.pop(context);
+                                            if (context.mounted) {
+                                              Navigator.pop(context);
+                                            }
                                             _loadData();
                                             setState(() {});
                                             WidgetsBinding.instance
@@ -1746,14 +1749,14 @@ class HeatmapScreenState extends State<HeatmapScreen>
                 child: BlurredPopupMenuButton<String>(
                   icon: Icon(Icons.more_vert,
                       color: Colors.grey.shade400, size: 20),
-                  items: [
-                    const BlurredPopupMenuItem(
+                  items: const [
+                    BlurredPopupMenuItem(
                       value: 'edit',
                       icon: Icons.edit_outlined,
                       label: '编辑',
                       iconColor: Color(0xFF4A90E2),
                     ),
-                    const BlurredPopupMenuItem(
+                    BlurredPopupMenuItem(
                       value: 'delete',
                       icon: Icons.delete_outline,
                       label: '删除',
@@ -2021,6 +2024,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                       days: 365 * 2)),
                                             );
                                             if (date != null) {
+                                              if (!context.mounted) return;
                                               final time =
                                                   await show3DTimePicker(
                                                 context: context,
@@ -2270,8 +2274,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                         flex: 2,
                                         child: ElevatedButton(
                                           onPressed: () async {
-                                            if (nameController.text.isEmpty)
+                                            if (nameController.text.isEmpty) {
                                               return;
+                                            }
                                             final updatedTask = Task(
                                               id: task.id,
                                               courseId: task.courseId,
@@ -2286,7 +2291,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                             );
                                             await StorageService.updateTask(
                                                 updatedTask);
-                                            Navigator.pop(context);
+                                            if (context.mounted) {
+                                              Navigator.pop(context);
+                                            }
                                             _loadData();
                                             if (mounted) setState(() {});
                                             WidgetsBinding.instance

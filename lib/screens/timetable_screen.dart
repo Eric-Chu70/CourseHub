@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:ui' show ImageFilter, ImageByteFormat, instantiateImageCodec, lerpDouble;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -440,7 +438,9 @@ class TimetableScreenState extends State<TimetableScreen>
         _videoController?.dispose();
         _videoController = null;
         _wallpaperBytes = await File(path).readAsBytes();
-        precacheImage(FileImage(File(path)), context);
+        if (mounted) {
+          precacheImage(FileImage(File(path)), context);
+        }
       }
     } else {
       _isVideoWallpaper = false;
@@ -724,14 +724,14 @@ class TimetableScreenState extends State<TimetableScreen>
                                                         onPointerDown: (_) => HapticFeedback.selectionClick(),
                                                         child: BlurredPopupMenuButton<String>(
                                                           icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-                                                          items: [
-                                                            const BlurredPopupMenuItem(
+                                                          items: const [
+                                                            BlurredPopupMenuItem(
                                                               value: 'rename',
                                                               icon: Icons.edit_outlined,
                                                               label: '重命名',
                                                               iconColor: Color(0xFF4A90E2),
                                                             ),
-                                                            const BlurredPopupMenuItem(
+                                                            BlurredPopupMenuItem(
                                                               value: 'delete',
                                                               icon: Icons.delete_outline,
                                                               label: '删除课表',
@@ -2082,7 +2082,7 @@ class TimetableScreenState extends State<TimetableScreen>
                               2,
                               cellHeight * appearingCourse!.time + 2,
                               columnConstraints.maxWidth - 4,
-                              appearingCourse!.duration * cellHeight - 4,
+                              appearingCourse.duration * cellHeight - 4,
                             ),
                             const Radius.circular(5),
                           ),
@@ -4123,14 +4123,14 @@ class TimetableScreenState extends State<TimetableScreen>
               onPointerDown: (_) => HapticFeedback.selectionClick(),
               child: BlurredPopupMenuButton<String>(
                 icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
-                items: [
-                  const BlurredPopupMenuItem(
+                items: const [
+                  BlurredPopupMenuItem(
                     value: 'edit',
                     icon: Icons.edit_outlined,
                     label: '编辑',
                     iconColor: Color(0xFF4A90E2),
                   ),
-                  const BlurredPopupMenuItem(
+                  BlurredPopupMenuItem(
                     value: 'delete',
                     icon: Icons.delete_outline,
                     label: '删除',
@@ -4147,7 +4147,9 @@ class TimetableScreenState extends State<TimetableScreen>
                     setDialogState(() {});
                     _loadData();
                     setState(() {});
-                    toastNotification.show(context, '任务已删除', type: ToastType.error);
+                    if (context.mounted) {
+                      toastNotification.show(context, '任务已删除', type: ToastType.error);
+                    }
                   }
                 },
               ),
@@ -4316,6 +4318,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                           lastDate: DateTime.now().add(const Duration(days: 365)),
                                         );
                                         if (date != null) {
+                                          if (!context.mounted) return;
                                           final time = await show3DTimePicker(
                                             context: context,
                                             initialHour: dueDate.hour,
@@ -4658,6 +4661,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                           lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
                                         );
                                         if (date != null) {
+                                          if (!context.mounted) return;
                                           final time = await show3DTimePicker(
                                             context: context,
                                             initialHour: dueDate.hour,
@@ -4811,7 +4815,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                           completed: task.completed,
                                         );
                                         await StorageService.updateTask(updatedTask);
-                                        Navigator.pop(context);
+                                        if (context.mounted) {
+                                          Navigator.pop(context);
+                                        }
                                         setDialogState(() {});
                                         _loadData();
                                         setState(() {});
@@ -5464,11 +5470,11 @@ class TimetableScreenState extends State<TimetableScreen>
                               opacity: 0.82,
                               child: Container(
                                 padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
+                                decoration: const BoxDecoration(
                                   gradient: LinearGradient(
-                                    colors: [const Color(0xFF4A90E2), const Color(0xFF5BA0F2)],
+                                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
                                   ),
-                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                                 ),
                                 child: Row(
                             children: [
@@ -5813,9 +5819,9 @@ class TimetableScreenState extends State<TimetableScreen>
           sourceRectListenable: sourceRectNotifier,
           backdropBlurSigma: dialogBackdropBlur,
           shellKey: courseShellKey,
-          onSourceHidden: sourceRect != null ? hideSourceBlock : null,
-          onLanding: sourceRect != null ? landSourceBlock : null,
-          onDismissed: sourceRect != null ? restoreSourceBlock : null,
+          onSourceHidden: hideSourceBlock,
+          onLanding: landSourceBlock,
+          onDismissed: restoreSourceBlock,
           child: CourseDialog(
             course: course,
             selectedDay: selectedDay ?? course?.day ?? DateTime.now().weekday - 1,
@@ -5969,13 +5975,13 @@ class _TaskDialog extends StatefulWidget {
   final Course course;
   final Color courseColor;
   final TextEditingController nameController;
-  DateTime dueDate;
-  String type;
-  String priority;
+  final DateTime dueDate;
+  final String type;
+  final String priority;
   final TextEditingController noteController;
   final Function(Task) onSave;
 
-  _TaskDialog({
+  const _TaskDialog({
     required this.course,
     required this.courseColor,
     required this.nameController,
@@ -5994,10 +6000,17 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
+  // 对话框内可编辑的临时值，初值取自 widget（widget 本身保持不可变）
+  late DateTime dueDate;
+  late String type;
+  late String priority;
 
   @override
   void initState() {
     super.initState();
+    dueDate = widget.dueDate;
+    type = widget.type;
+    priority = widget.priority;
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -6175,14 +6188,14 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               // 显示，收起时路由焦点恢复会钻回同对话框内的任务名称输入框，
                               // 导致键盘反复弹出；BlurredDropdown 打开前已做焦点锚点转移
                               child: BlurredDropdown<String>(
-                                value: widget.type,
+                                value: type,
                                 isExpanded: true,
                                 icon: Icon(Icons.expand_more, color: widget.courseColor, size: isSmallScreen ? 16 : 20),
                                 items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
                                   value: e,
                                   child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
                                 )).toList(),
-                                onChanged: (v) => setState(() => widget.type = v!),
+                                onChanged: (v) => setState(() => type = v!),
                               ),
                             ),
                             SizedBox(height: isSmallScreen ? 10 : 16),
@@ -6190,20 +6203,21 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               onTap: () async {
                                 final date = await showAnimatedDatePicker(
                                   context: context,
-                                  initialDate: widget.dueDate,
+                                  initialDate: dueDate,
                                   firstDate: DateTime.now(),
                                   lastDate: DateTime.now().add(const Duration(days: 365)),
                                 );
                                 if (date != null) {
+                                  if (!context.mounted) return;
                                   final time = await show3DTimePicker(
                                     context: context,
-                                    initialHour: widget.dueDate.hour,
-                                    initialMinute: widget.dueDate.minute,
+                                    initialHour: dueDate.hour,
+                                    initialMinute: dueDate.minute,
                                     title: '选择截止时间',
                                   );
                                   if (time != null) {
                                     setState(() {
-                                      widget.dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                                      dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
                                     });
                                   }
                                 }
@@ -6225,7 +6239,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey.shade600)),
-                                          Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(widget.dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 13 : 16)),
+                                          Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 13 : 16)),
                                         ],
                                       ),
                                     ),
@@ -6251,7 +6265,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                             SizedBox(height: isSmallScreen ? 4 : 8),
                             Row(
                               children: ['高', '中', '低'].map((p) {
-                                final isSelected = widget.priority == p;
+                                final isSelected = priority == p;
                                 Color priorityColor;
                                 if (p == '高') {
                                   priorityColor = Colors.red;
@@ -6260,7 +6274,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                 
                                 return Expanded(
                                   child: GestureDetector(
-                                    onTap: () => setState(() => widget.priority = p),
+                                    onTap: () => setState(() => priority = p),
                                     child: Container(
                                       margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
                                       padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
@@ -6341,9 +6355,9 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                   id: DateTime.now().millisecondsSinceEpoch.toString(),
                                   courseId: widget.course.id,
                                   name: widget.nameController.text,
-                                  type: widget.type,
-                                  dueDate: widget.dueDate,
-                                  priority: widget.priority,
+                                  type: type,
+                                  dueDate: dueDate,
+                                  priority: priority,
                                   note: widget.noteController.text.isEmpty ? null : widget.noteController.text,
                                 );
                                 await widget.onSave(task);

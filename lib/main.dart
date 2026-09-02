@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -13,15 +14,22 @@ import 'services/notification_service.dart';
 import 'services/wallpaper_storage_service.dart';
 import 'services/widget_service.dart';
 import 'utils/storage.dart';
+import 'widgets/toast_notification.dart';
 import 'widgets/glass_dialog.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
-const String appVersion = '1.0.6';
+const String appVersion = '1.0.7';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // release 包关闭全部 debugPrint 输出（debug 包不受影响）；
+  // 诊断用 CrashLog 落盘，不依赖控制台
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
+
   await Hive.initFlutter();
   
   Hive.registerAdapter(CourseAdapter());
@@ -140,6 +148,12 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  /// 上次按系统返回的时间戳：2 秒内连按两次才退出应用
+  int _lastBackPressTime = 0;
+
+  /// 原生退出通道：走 MainActivity 自绘固定时长关闭动画，动画播完立即杀进程
+  static const MethodChannel _exitChannel = MethodChannel('coursehub/app');
+
   @override
   void initState() {
     super.initState();
@@ -149,18 +163,21 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _checkAndShowWelcome() async {
     final prefs = await SharedPreferences.getInstance();
     final lastVersion = prefs.getString('last_app_version');
-    
+
     if (lastVersion != appVersion) {
       await prefs.setString('last_app_version', appVersion);
       if (mounted) {
+        // 首次进入（无历史版本记录）显示完整欢迎对话框；
+        // 版本更新（有历史版本）显示轻量更新完成对话框
+        final isFirstLaunch = lastVersion == null;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showWelcomeDialog();
+          _showWelcomeDialog(isUpdate: !isFirstLaunch);
         });
       }
     }
   }
 
-  void _showWelcomeDialog() {
+  void _showWelcomeDialog({bool isUpdate = false}) {
     final maxDialogHeight = MediaQuery.of(context).size.height - 48;
 
     showBouncyDialog(
@@ -183,9 +200,9 @@ class _MainScreenState extends State<MainScreen> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          '👋 欢迎使用 CourseHub',
-                          style: TextStyle(
+                        Text(
+                          isUpdate ? '✅ 更新已完成！v$appVersion' : '👋 欢迎使用 CourseHub',
+                          style: const TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
                             color: Color(0xFF1A1A2E),
@@ -193,30 +210,33 @@ class _MainScreenState extends State<MainScreen> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'v$appVersion',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey[400],
+                        if (!isUpdate) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'v$appVersion',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[400],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 24),
-                        _buildFeatureItemRich(
-                          '📅 智能化的课程及任务管理',
-                          '一句话搞定课程和任务编辑，省心省事',
-                        ),
-                        const SizedBox(height: 16),
-                        _buildFeatureItemRich(
-                          '🤖 你的知心学习搭子',
-                          '提供课程分析与学习建议，支持接入主流AI平台',
-                        ),
-                        const SizedBox(height: 16),
-                        _buildFeatureItemRich(
-                          '☁️ 登陆账号数据云端同步',
-                          '支持多课表备份、同步与云端数据管理',
-                        ),
-                        const SizedBox(height: 28),
+                          const SizedBox(height: 24),
+                          _buildFeatureItemRich(
+                            '📅 智能化的课程及任务管理',
+                            '一句话搞定课程和任务编辑，省心省事',
+                          ),
+                          const SizedBox(height: 16),
+                          _buildFeatureItemRich(
+                            '🤖 你的知心学习搭子',
+                            '提供课程分析与学习建议，支持接入主流AI平台',
+                          ),
+                          const SizedBox(height: 16),
+                          _buildFeatureItemRich(
+                            '☁️ 登陆账号数据云端同步',
+                            '支持多课表备份、同步与云端数据管理',
+                          ),
+                          const SizedBox(height: 28),
+                        ],
+                        if (isUpdate) const SizedBox(height: 28),
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
@@ -229,7 +249,10 @@ class _MainScreenState extends State<MainScreen> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                            child: const Text('开始使用', style: TextStyle(fontSize: 16)),
+                            child: Text(
+                              isUpdate ? '继续' : '开始使用',
+                              style: const TextStyle(fontSize: 16),
+                            ),
                           ),
                         ),
                       ],
@@ -298,6 +321,25 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const HomeScreen();
+    // 双击返回退出：页面切换不依赖 Navigator 路由，系统返回默认直接退出。
+    // 拦截第一次返回，顶部蓝色 info toast 提示「再按一次退出程序」，
+    // 2 秒内再按才真正退出
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastBackPressTime < 2000) {
+          // 正常 finish 播放自绘固定时长关闭动画（图标归位）；进程终止由
+          // MainActivity 按「动画时长 × 系统缩放」精确延迟执行（等效
+          // force-stop 的干净状态，但动画播完立即杀，兼容各品牌动画时长）
+          _exitChannel.invokeMethod('exitApp');
+        } else {
+          _lastBackPressTime = now;
+          toastNotification.show(context, '再按一次退出程序', type: ToastType.info);
+        }
+      },
+      child: const HomeScreen(),
+    );
   }
 }

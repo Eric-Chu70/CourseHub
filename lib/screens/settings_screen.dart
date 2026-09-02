@@ -3,7 +3,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../main.dart' show appVersion;
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
@@ -22,7 +21,6 @@ import '../services/cloud_sync_service.dart';
 import '../services/glm_service.dart';
 import '../services/notification_service.dart';
 import '../services/update_service.dart';
-import '../widgets/glass_dialog.dart';
 import '../widgets/blur_selection_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -62,7 +60,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late DateTime _semesterStartDate;
   late int _semesterWeeks;
   late int _dailyPeriods;
-  AIProvider _aiProvider = AIProvider.hunyuan;
   bool _aiEnabled = false;
   // AI配置项小字：按当前提供商显示具体模型（节点/模型名）
   String _aiConfigDetail = '开启AI后可用';
@@ -215,6 +212,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _selectWallpaperImage() async {
     final prefs = await SharedPreferences.getInstance();
     final recentPaths = prefs.getStringList('wallpaper_recent_paths') ?? [];
+    if (!mounted) return;
     bool localEnabled = _wallpaperEnabled;
 
     final dialogPaths = List<String>.from(recentPaths);
@@ -235,10 +233,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Row(
+                            const Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                const Text(
+                                Text(
                                   '课表壁纸',
                                   style: TextStyle(
                                     fontSize: 18,
@@ -246,9 +244,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     color: Color(0xFF1A1A2E),
                                   ),
                                 ),
-                                const SizedBox(width: 6),
+                                SizedBox(width: 6),
                                 // 带圈问号：点击向下弹出编辑操作说明气泡
-                                const _TitleHelpIcon(text: '长按壁纸可编辑，再次点按退出编辑。'),
+                                _TitleHelpIcon(text: '长按壁纸可编辑，再次点按退出编辑。'),
                               ],
                             ),
                             const SizedBox(height: 16),
@@ -272,7 +270,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                   Switch(
                                     value: localEnabled,
-                                    activeColor: const Color(0xFF4A90E2),
+                                    activeThumbColor: const Color(0xFF4A90E2),
                                     onChanged: (v) async {
                                       HapticFeedback.selectionClick();
                                       await prefs.setBool('wallpaper_enabled', v);
@@ -500,14 +498,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                   children: [
                                                     Icon(Icons.add, color: Colors.grey.shade500, size: 32),
                                                     const SizedBox(height: 4),
-                                                    Text('添加图片', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                                                    Text('添加图片/视频', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                                                   ],
                                                 ),
                                               ),
                                               Container(
                                                 decoration: BoxDecoration(
                                                   borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                                  // 减弱动态效果壳为不透明白底，白色描边不可见，
+                                                  // 改用浅灰细边（与其他磁贴同款）
+                                                  border: Border.all(
+                                                    color: _reduceMotionEnabled
+                                                        ? Colors.grey.shade300
+                                                        : Colors.white.withValues(alpha: 0.4),
+                                                  ),
                                                 ),
                                               ),
                                               if (!localEnabled)
@@ -642,7 +646,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ),
                                     Switch(
                                       value: localBlur,
-                                      activeColor: const Color(0xFF4A90E2),
+                                      activeThumbColor: const Color(0xFF4A90E2),
                                       onChanged: (v) {
                                         HapticFeedback.selectionClick();
                                         setDialogState(() {
@@ -748,22 +752,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _providerConfigured = providerStr != null && providerStr.isNotEmpty;
       _isAgnesProvider = providerStr == 'agnes';
       _isBuiltinProvider = providerStr == 'builtin';
-      if (providerStr == 'glm') {
-        _aiProvider = AIProvider.glm;
-        _isCustomProvider = false;
-      } else if (providerStr == 'agnes') {
-        _aiProvider = AIProvider.agnes;
-        _isCustomProvider = false;
-      } else if (providerStr == 'doubao') {
-        _aiProvider = AIProvider.hunyuan;
-        _isCustomProvider = false;
-      } else if (providerStr == 'custom') {
-        _aiProvider = AIProvider.custom;
-        _isCustomProvider = true;
-      } else {
-        _aiProvider = AIProvider.hunyuan;
-        _isCustomProvider = false;
-      }
+      _isCustomProvider = providerStr == 'custom';
     });
   }
 
@@ -876,7 +865,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: '显示非本周课程',
                             trailing: Switch(
                               value: _showInactiveCourses,
-                              activeColor: const Color(0xFF4A90E2),
+                              activeThumbColor: const Color(0xFF4A90E2),
                               onChanged: (v) async {
                                 HapticFeedback.selectionClick();
                                 final prefs = await SharedPreferences.getInstance();
@@ -961,7 +950,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   }
                                 }
                               },
-                              activeColor: const Color(0xFF4A90E2),
+                              activeThumbColor: const Color(0xFF4A90E2),
                             ),
                           ),
                           AnimatedSwitcher(
@@ -1042,7 +1031,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   if (mounted) setState(() { _aiEnabled = false; });
                                 }
                               },
-                              activeColor: const Color(0xFF4A90E2),
+                              activeThumbColor: const Color(0xFF4A90E2),
                             ),
                           ),
                           _buildDivider(),
@@ -1082,9 +1071,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             titleWidget: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(
+                                const Text(
                                   '减弱动态效果',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -1104,7 +1093,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             trailing: Switch(
                               value: _reduceMotionEnabled,
-                              activeColor: const Color(0xFF4A90E2),
+                              activeThumbColor: const Color(0xFF4A90E2),
                               onChanged: (v) async {
                                 HapticFeedback.selectionClick();
                                 final prefs = await SharedPreferences.getInstance();
@@ -1353,15 +1342,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (provider == 'builtin') {
       return true;
     }
-    if (provider == 'hunyuan') {
-      final id = prefs.getString('tencent_secret_id') ?? '';
-      final key = prefs.getString('tencent_secret_key') ?? '';
-      return id.isNotEmpty && key.isNotEmpty;
-    }
-    if (provider == 'glm') {
-      final key = prefs.getString('glm_api_key') ?? '';
-      return key.isNotEmpty;
-    }
     if (provider == 'custom') {
       final url = prefs.getString('custom_api_url') ?? '';
       final key = prefs.getString('custom_api_key') ?? '';
@@ -1372,6 +1352,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _showDeveloperOptionsDialog() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     int agnesNode = prefs.getInt('agnes_node') ?? 1;
     int builtinNode = prefs.getInt('builtin_node') ?? 1;
     return showBouncyDialog(
@@ -1838,6 +1819,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Agnes AI 配置弹窗：密钥输入 + 模型下拉（Agnes 2.0 Flash / Agnes 2.5 Flash）
   Future<void> _showAgnesConfigDialog() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     final controller = TextEditingController(text: prefs.getString('agnes_api_key') ?? '');
     // 显示名 → 实际模型名映射（后台实际使用的模型标识）
     const defaultModel = 'agnes-2.0-flash';
@@ -2040,7 +2022,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             if (mounted) {
                               Navigator.pop(context);
                               setState(() {
-                                _aiProvider = AIProvider.agnes;
                                 _isAgnesProvider = true;
                                 _isCustomProvider = false;
                                 _isBuiltinProvider = false;
@@ -2075,6 +2056,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _showCustomAPIDialog() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     final urlController = TextEditingController(text: prefs.getString('custom_api_url') ?? '');
     final keyController = TextEditingController(text: prefs.getString('custom_api_key') ?? '');
     final modelController = TextEditingController(text: prefs.getString('custom_api_model') ?? 'gpt-4o-mini');
@@ -2137,7 +2119,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) {
           Navigator.pop(context);
           setState(() {
-            _aiProvider = AIProvider.custom;
             _isCustomProvider = true;
             _isAgnesProvider = false;
             _isBuiltinProvider = false;
@@ -2355,367 +2336,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     );
   }
-
-  Future<void> _showHunyuanConfigDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final secretIdController = TextEditingController(
-      text: prefs.getString('tencent_secret_id') ?? '',
-    );
-    final secretKeyController = TextEditingController(
-      text: prefs.getString('tencent_secret_key') ?? '',
-    );
-
-    await showBouncyDialog(
-      context: context,
-      barrierLabel: '混元配置',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 620.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
-      },
-      builder: (context) {
-        return SingleChildScrollView(
-            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Opacity(
-                                  opacity: 0.82,
-                                  child: Container(
-                                    width: 64,
-                                    height: 64,
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        colors: [Color(0xFF00C853), Color(0xFF69F0AE)],
-                                      ),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: const Icon(
-                                      Icons.cloud_outlined,
-                                      size: 32,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            '混元 Secret 配置',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '腾讯云密钥获取地址：\nhttps://console.cloud.tencent.com',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          TextField(
-                            contextMenuBuilder: styledEditableContextMenu,
-                            controller: secretIdController,
-                            decoration: InputDecoration(
-                              labelText: 'SecretId',
-                              hintText: '请输入腾讯云 SecretId',
-                              filled: true,
-                              fillColor: Colors.white.withValues(alpha: 0.4),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            contextMenuBuilder: styledEditableContextMenu,
-                            controller: secretKeyController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'SecretKey',
-                              hintText: '请输入腾讯云 SecretKey',
-                              filled: true,
-                              fillColor: Colors.white.withValues(alpha: 0.4),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
-                                    ),
-                                  ),
-                                  child: const Text('取消'),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () async {
-                                    final secretId = secretIdController.text.trim();
-                                    final secretKey = secretKeyController.text.trim();
-
-                                    if (secretId.isEmpty || secretKey.isEmpty) {
-                                      toastNotification.show(context, '请填写 SecretId 和 SecretKey', type: ToastType.error);
-                                      return;
-                                    }
-
-                                    await prefs.setString('tencent_secret_id', secretId);
-                                    await prefs.setString('tencent_secret_key', secretKey);
-                                    await prefs.remove('hunyuan_api_key');
-                                    await prefs.setString('ai_provider', 'hunyuan');
-                            AIAssistantScreenState.markNeedsRefresh();
-                                    await prefs.setBool('fast_mode_enabled', false);
-                                    await prefs.setBool('ai_enabled', true);
-
-                                    AIService.instance.setHunyuanCredentials(secretId, secretKey);
-
-                                    if (mounted) {
-                                      Navigator.pop(context);
-                                      setState(() {
-                                        _aiProvider = AIProvider.hunyuan;
-                                        _isCustomProvider = false;
-                                        _isBuiltinProvider = false;
-                                        _fastModeEnabled = false;
-                                        _providerConfigured = true;
-                                        _aiEnabled = true;
-                                      });
-                                      toastNotification.show(context, '已切换到混元模型', type: ToastType.success);
-                                    }
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: const Text('保存'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-          );
-      },
-    );
-  }
-
-  Future<void> _selectDoubaoProvider() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ai_provider', 'doubao');
-    AIService.instance.setDoubaoProvider();
-    
-    final random = DateTime.now().millisecondsSinceEpoch % 6;
-    final models = ['GLM-4.7', 'DeepSeek-V3.2', 'Doubao-Seed-v2.0-lite', 'DeepSeek-v3', 'Doubao-Seed-2.0-mini', 'DeepSeek-v3.1'];
-    final selectedModel = models[random];
-    await prefs.setString('selected_model', selectedModel);
-    
-    setState(() {
-      _aiProvider = AIProvider.doubao;
-      _isCustomProvider = false;
-      _isBuiltinProvider = false;
-    });
-    if (mounted) {
-      Navigator.pop(context);
-      toastNotification.show(context, '已选择火山引擎模型库', type: ToastType.info);
-    }
-  }
-
-  Future<void> _showGLMApiDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    final controller = TextEditingController(text: prefs.getString('glm_api_key') ?? '');
-
-    await showBouncyDialog(
-      context: context,
-      barrierLabel: 'GLM API Key',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 560.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(300.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
-      },
-      builder: (context) {
-        return SingleChildScrollView(
-            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                        Opacity(
-                          opacity: 0.82,
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.auto_awesome,
-                              size: 32,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'GLM-4.7-Flash 配置',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'GLM API Key 获取地址：\nhttps://open.bigmodel.cn',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TextField(
-                          contextMenuBuilder: styledEditableContextMenu,
-                          controller: controller,
-                          decoration: InputDecoration(
-                            hintText: '请输入API Key',
-                            filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.4),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Color(0xFF9C27B0)),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
-                                  ),
-                                ),
-                                child: const Text('取消'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () async {
-                                  final apiKey = controller.text.trim();
-
-                                  if (apiKey.isEmpty) {
-                                    toastNotification.show(context, '请填写 GLM API Key', type: ToastType.error);
-                                    return;
-                                  }
-
-                                  await prefs.setString('glm_api_key', apiKey);
-                                  await prefs.setString('ai_provider', 'glm');
-                            AIAssistantScreenState.markNeedsRefresh();
-                                  await prefs.setBool('fast_mode_enabled', false);
-                                  await prefs.setBool('ai_enabled', true);
-                                  AIService.instance.setGLMApiKey(apiKey);
-
-                                  if (mounted) {
-                                      Navigator.pop(context);
-                                      setState(() {
-                                        _aiProvider = AIProvider.glm;
-                                        _isCustomProvider = false;
-                                        _isBuiltinProvider = false;
-                                        _fastModeEnabled = false;
-                                        _providerConfigured = true;
-                                        _aiEnabled = true;
-                                      });
-                                      toastNotification.show(context, '已切换到GLM模型', type: ToastType.success);
-                                    }
-                                  },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF9C27B0),
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text('保存'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        ],
-                      ),
-          );
-      },
-    );
-  }
-
   Future<void> _selectSemesterStartDate() async {
     await showBouncyDialog(
       context: context,
@@ -2733,6 +2353,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             lastDate: DateTime(2030),
             onDateChanged: (date) async {
               await StorageService.setSemesterStartDate(date);
+              if (!context.mounted) return;
               setState(() {
                 _semesterStartDate = date;
               });
@@ -3524,6 +3145,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
       } catch (_) {}
     }
 
+    // 阶段切换过渡（与登录对话框副标题同款动效）：旧内容模糊淡出，
+    // 新内容自模糊中清晰淡入，交叉过渡不跳变；
+    // 「减弱动态效果」开启时退化为单纯淡入淡出（无模糊、无缩放）
+    Widget blurSwitch(Widget child) => AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          transitionBuilder: (child, animation) {
+            if (_reduceMotionEnabled) {
+              return FadeTransition(opacity: animation, child: child);
+            }
+            return FadeTransition(
+              opacity: animation,
+              child: AnimatedBuilder(
+                animation: animation,
+                builder: (context, grandChild) => ImageFiltered(
+                  imageFilter: ImageFilter.blur(
+                    sigmaX: 6 * (1.0 - animation.value),
+                    sigmaY: 6 * (1.0 - animation.value),
+                  ),
+                  child: Transform.scale(
+                    scale: 0.92 + 0.08 * animation.value,
+                    child: grandChild,
+                  ),
+                ),
+                child: child,
+              ),
+            );
+          },
+          // Stack 尺寸只由新内容决定（旧内容仅水平约束、垂直居中悬浮，
+          // 不参与定尺寸）：新内容一进来整块布局就落到最终位置，图标/
+          // 标题不会因旧的高内容淡出期间还撑着布局而先高后低地跳动
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              for (final Widget child in previousChildren)
+                Positioned(left: 0, right: 0, child: child),
+              if (currentChild != null) currentChild,
+            ],
+          ),
+          child: child,
+        );
+
     Future<void> startCheck() async {
       if (isChecking) return;
       isChecking = true;
@@ -3546,6 +3211,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Future<void> startDownload() async {
       final info = updateInfo;
       if (info == null) return;
+      // 本地已有该版本的完整安装包（上次下载/安装残留）：跳过下载，
+      // 直接进入「下载完成」
+      final String? localPath = await UpdateService.findLocalInstaller(info);
+      if (localPath != null) {
+        safeSetState(() {
+          apkPath = localPath;
+          phase = _UpdatePhase.downloaded;
+        });
+        return;
+      }
       downloadToken = CancelToken();
       safeSetState(() {
         phase = _UpdatePhase.downloading;
@@ -3587,10 +3262,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     Future<void> install() async {
       if (apkPath == null) return;
-      final ok = await UpdateService.installApk(apkPath!);
+      final String path = apkPath!;
+      // Android 拉起系统 APK 安装器；桌面平台按扩展名直接运行安装包
+      final bool ok = Platform.isAndroid
+          ? await UpdateService.installApk(path)
+          : await UpdateService.launchInstaller(path);
       if (!ok && mounted) {
         toastNotification.show(context, '无法启动安装器，请手动安装',
             type: ToastType.error);
+        return;
+      }
+      // 安装器已成功拉起：自动清理本地安装包（Android 的安装包正被系统
+      // 安装器读取，不删；桌面安装包可能仍被安装进程占用，由服务端
+      // 延迟重试删除）。不 await，后台静默清理。
+      if (!Platform.isAndroid) {
+        UpdateService.deleteInstallerLater(path);
       }
     }
 
@@ -3949,11 +3635,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ];
                 actions = [
                   buildSecondaryButton('关闭', () => Navigator.pop(context)),
-                  buildPrimaryButton('打开所在文件夹', () {
-                    if (apkPath != null) {
-                      UpdateService.revealInFileManager(apkPath!);
-                    }
-                  }),
+                  buildPrimaryButton('安装', install),
                 ];
               }
 
@@ -3989,7 +3671,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           }
 
           // 固定尺寸：各阶段共用同一壳尺寸，不随内容变化。
-          // 内容区居中，按钮固定在底部（与内容多寡无关，位置恒定）
+          // 内容区居中，按钮固定在底部（与内容多寡无关，位置恒定）。
+          // 图标/标题/正文/按钮四类元素均以阶段为 key 走模糊淡出淡入；
+          // 布局尺寸由 layoutBuilder 固定跟随新内容，动画全程在最终位置
+          // 进行，不会因新旧内容高度差产生位移
           return SizedBox(
             width: double.infinity,
             height: 300,
@@ -4000,28 +3685,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      icon,
+                      blurSwitch(
+                        KeyedSubtree(
+                          key: ValueKey<_UpdatePhase>(phase),
+                          child: icon,
+                        ),
+                      ),
                       const SizedBox(height: 16),
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
+                      blurSwitch(
+                        KeyedSubtree(
+                          key: ValueKey<_UpdatePhase>(phase),
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 12),
-                      ...body,
+                      blurSwitch(
+                        KeyedSubtree(
+                          key: ValueKey<_UpdatePhase>(phase),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: body,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
                 // 按钮区：固定在底部
-                Row(
-                  children: [
-                    for (int i = 0; i < actions.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 12),
-                      actions[i],
-                    ],
-                  ],
+                blurSwitch(
+                  KeyedSubtree(
+                    key: ValueKey<_UpdatePhase>(phase),
+                    child: Row(
+                      children: [
+                        for (int i = 0; i < actions.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 12),
+                          actions[i],
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -4142,7 +3850,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final keyboardHeight = mediaQuery.viewInsets.bottom;
         final topInset = mediaQuery.padding.top;
         final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 500.0;
+        // 注册模式比登录多一个确认密码字段，取消按钮必须完整露出、无需
+        // 翻页：基础最大高度按注册模式内容取值（壳实际尺寸仍随内容收缩）
+        const baseMaxHeight = 620.0;
         double dialogMaxHeight = baseMaxHeight;
         final availableHeight = screenHeight - topInset - keyboardHeight - 24;
         if (availableHeight < dialogMaxHeight) {
@@ -4199,6 +3909,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
             }
 
+            // 登录/注册切换的高度过渡由确认密码框的占位展开动画驱动
+            // （_FieldSlotAppear，下方元素与对话框高度逐帧同步），错误
+            // 文案出现/消失的高度变化由各输入框自身的 AnimatedSize 平滑
             return SingleChildScrollView(
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -4228,93 +3941,139 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              Text(
-                                isRegisterMode
-                                    ? '使用邮箱和密码创建账号'
-                                    : '使用邮箱和密码登录',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey.shade600,
+                              // 登录/注册副标题切换：模糊淡出淡入（与确认密码框的
+                              // 模糊动效呼应），新旧文案交叉过渡不跳变
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 220),
+                                switchInCurve: Curves.easeOut,
+                                switchOutCurve: Curves.easeIn,
+                                transitionBuilder: (child, animation) => FadeTransition(
+                                  opacity: animation,
+                                  child: AnimatedBuilder(
+                                    animation: animation,
+                                    builder: (context, grandChild) => ImageFiltered(
+                                      imageFilter: ImageFilter.blur(
+                                        sigmaX: 6 * (1.0 - animation.value),
+                                        sigmaY: 6 * (1.0 - animation.value),
+                                      ),
+                                      child: Transform.scale(
+                                        scale: 0.92 + 0.08 * animation.value,
+                                        child: grandChild,
+                                      ),
+                                    ),
+                                    child: child,
+                                  ),
+                                ),
+                                child: Text(
+                                  isRegisterMode
+                                      ? '使用邮箱和密码创建账号'
+                                      : '使用邮箱和密码登录',
+                                  key: ValueKey<bool>(isRegisterMode),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey.shade600,
+                                  ),
                                 ),
                               ),
                               const SizedBox(height: 20),
-                              TextField(
-                                contextMenuBuilder: styledEditableContextMenu,
-                                controller: emailController,
-                                keyboardType: TextInputType.emailAddress,
-                                enabled: !isSubmitting,
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: InputDecoration(
-                                  hintText: '请输入邮箱地址',
-                                  errorText: email.isEmpty || isEmailValid ? null : '邮箱格式不正确',
-                                  prefixIcon: const Icon(Icons.email_outlined),
-                                  filled: true,
-                                  fillColor: Colors.white.withValues(alpha: 0.4),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                contextMenuBuilder: styledEditableContextMenu,
-                                controller: passwordController,
-                                keyboardType: TextInputType.visiblePassword,
-                                obscureText: obscurePassword,
-                                enabled: !isSubmitting,
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: InputDecoration(
-                                  hintText: '请输入密码',
-                                  errorText: password.isEmpty || isPasswordValid ? null : '密码需至少8位，且包含字母和数字',
-                                  prefixIcon: const Icon(Icons.lock_outline_rounded),
-                                  suffixIcon: IconButton(
-                                    onPressed: () {
-                                      setDialogState(() {
-                                        obscurePassword = !obscurePassword;
-                                      });
-                                    },
-                                    icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white.withValues(alpha: 0.4),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                ),
-                              ),
-                              if (isRegisterMode) ...[
-                                const SizedBox(height: 12),
-                                TextField(
+                              // AnimatedSize：错误文案出现/消失时输入框高度平滑过渡
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 180),
+                                curve: Curves.easeOut,
+                                alignment: Alignment.topCenter,
+                                child: TextField(
                                   contextMenuBuilder: styledEditableContextMenu,
-                                  controller: confirmPasswordController,
-                                  keyboardType: TextInputType.visiblePassword,
-                                  obscureText: obscureConfirmPassword,
+                                  controller: emailController,
+                                  keyboardType: TextInputType.emailAddress,
                                   enabled: !isSubmitting,
                                   onChanged: (_) => setDialogState(() {}),
                                   decoration: InputDecoration(
-                                      hintText: '请再次输入密码',
-                                      errorText: confirmPassword.isEmpty || confirmPassword == password ? null : '两次密码输入不一致',
-                                      prefixIcon: const Icon(Icons.lock_reset_rounded),
-                                      suffixIcon: IconButton(
-                                        onPressed: () {
-                                          setDialogState(() {
-                                            obscureConfirmPassword = !obscureConfirmPassword;
-                                          });
-                                        },
-                                        icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
-                                      ),
-                                      filled: true,
-                                      fillColor: Colors.white.withValues(alpha: 0.4),
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                    hintText: '请输入邮箱地址',
+                                    errorText: email.isEmpty || isEmailValid ? null : '邮箱格式不正确',
+                                    prefixIcon: const Icon(Icons.email_outlined),
+                                    filled: true,
+                                    fillColor: Colors.white.withValues(alpha: 0.4),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
                                     ),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                  ),
                                 ),
-                              ],
+                              ),
+                              const SizedBox(height: 12),
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 180),
+                                curve: Curves.easeOut,
+                                alignment: Alignment.topCenter,
+                                child: TextField(
+                                  contextMenuBuilder: styledEditableContextMenu,
+                                  controller: passwordController,
+                                  keyboardType: TextInputType.visiblePassword,
+                                  obscureText: obscurePassword,
+                                  enabled: !isSubmitting,
+                                  onChanged: (_) => setDialogState(() {}),
+                                  decoration: InputDecoration(
+                                    hintText: '请输入密码',
+                                    errorText: password.isEmpty || isPasswordValid ? null : '密码需至少8位，且包含字母和数字',
+                                    prefixIcon: const Icon(Icons.lock_outline_rounded),
+                                    suffixIcon: IconButton(
+                                      onPressed: () {
+                                        setDialogState(() {
+                                          obscurePassword = !obscurePassword;
+                                        });
+                                      },
+                                      icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
+                                    ),
+                                    filled: true,
+                                    fillColor: Colors.white.withValues(alpha: 0.4),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                  ),
+                                ),
+                              ),
+                              // 确认密码框常驻树内，由占位展开+模糊淡入动画
+                              // 控制显隐（动画组件复刻课表切换对话框新增课表）
+                              _FieldSlotAppear(
+                                visible: isRegisterMode,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: AnimatedSize(
+                                    duration: const Duration(milliseconds: 180),
+                                    curve: Curves.easeOut,
+                                    alignment: Alignment.topCenter,
+                                    child: TextField(
+                                    contextMenuBuilder: styledEditableContextMenu,
+                                    controller: confirmPasswordController,
+                                    keyboardType: TextInputType.visiblePassword,
+                                    obscureText: obscureConfirmPassword,
+                                    enabled: !isSubmitting,
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: InputDecoration(
+                                        hintText: '请再次输入密码',
+                                        errorText: confirmPassword.isEmpty || confirmPassword == password ? null : '两次密码输入不一致',
+                                        prefixIcon: const Icon(Icons.lock_reset_rounded),
+                                        suffixIcon: IconButton(
+                                          onPressed: () {
+                                            setDialogState(() {
+                                              obscureConfirmPassword = !obscureConfirmPassword;
+                                            });
+                                          },
+                                          icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
+                                        ),
+                                        filled: true,
+                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
                               const SizedBox(height: 20),
                               SizedBox(
                                 width: double.infinity,
@@ -5293,7 +5052,7 @@ class SegmentedSelector<T> extends StatefulWidget {
   final T activeValue;
   final ValueChanged<T> onChanged;
 
-  const SegmentedSelector({
+  const SegmentedSelector({super.key, 
     required this.items,
     required this.activeValue,
     required this.onChanged,
@@ -5434,7 +5193,7 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
                       child: ShaderMask(
                         shaderCallback: (bounds) {
                           final relLeft = (left / bounds.width).clamp(0.0, 1.0);
-                          final edge = 0.015;
+                          const edge = 0.015;
                           final relStart = (relLeft - edge).clamp(0.0, 1.0);
                           final relEnd = ((left + segmentW - 4) / bounds.width).clamp(0.0, 1.0);
                           final relStop = (relEnd + edge).clamp(0.0, 1.0);
@@ -5623,7 +5382,6 @@ class _SettingsInfoTip extends StatefulWidget {
   final VoidCallback? onDismissed;
 
   const _SettingsInfoTip({
-    super.key,
     required this.visible,
     required this.text,
     required this.left,
@@ -5736,12 +5494,94 @@ class _SettingsInfoTipState extends State<_SettingsInfoTip>
   }
 }
 
-/// Agnes AI 配置对话框标题问号：点击向右弹出推荐说明气泡
+/// 登录对话框确认密码框的两段式出现动画（复刻课表切换对话框「新增课表」）：
+/// 1) 占位展开 200ms easeInCubic：内容不可见，占位高度逐帧展开，下方
+///    元素连贯位移、对话框高度同步增长；
+/// 2) 出现 220ms easeOutCubic：由中心模糊扩大淡入
+///    （sigma 14→0 + scale 0.55→1 + 淡入）。
+/// 收起（注册切回登录）时逆序播放。单个控制器用 Interval 切分两阶段，
+/// expand 到 200/420 后保持 1，appear 在 200/420 前恒为 0。
+class _FieldSlotAppear extends StatefulWidget {
+  final bool visible;
+  final Widget child;
+
+  const _FieldSlotAppear({required this.visible, required this.child});
+
+  @override
+  State<_FieldSlotAppear> createState() => _FieldSlotAppearState();
+}
+
+class _FieldSlotAppearState extends State<_FieldSlotAppear>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+    value: widget.visible ? 1.0 : 0.0,
+  );
+
+  static const double _expandFraction = 200 / 420;
+
+  // 阶段一：占位展开（0 ~ 200/420）；阶段二：出现（200/420 ~ 1）
+  late final Animatable<double> _expandChain = CurveTween(
+    curve: const Interval(0.0, _expandFraction, curve: Curves.easeInCubic),
+  );
+  late final Animatable<double> _appearChain = CurveTween(
+    curve: const Interval(_expandFraction, 1.0, curve: Curves.easeOutCubic),
+  );
+
+  @override
+  void didUpdateWidget(covariant _FieldSlotAppear oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible == oldWidget.visible) return;
+    if (widget.visible) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final expand = _expandChain.transform(_controller.value);
+        final appear = _appearChain.transform(_controller.value);
+        return SizeTransition(
+          sizeFactor: AlwaysStoppedAnimation(expand.clamp(0.0, 1.0)),
+          axisAlignment: -1.0,
+          child: Opacity(
+            opacity: appear.clamp(0.0, 1.0),
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(
+                sigmaX: 14 * (1.0 - appear),
+                sigmaY: 14 * (1.0 - appear),
+              ),
+              child: Transform.scale(
+                scale: 0.55 + 0.45 * appear,
+                child: child,
+              ),
+            ),
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// Agnes AI 配置对话框标题问号：点击向下弹出推荐说明气泡
 /// （样式与动画同问号提示框），点击空白处收回
 class _AgnesHelpIcon extends StatefulWidget {
   final bool reduceMotion;
 
-  const _AgnesHelpIcon({super.key, required this.reduceMotion});
+  const _AgnesHelpIcon({required this.reduceMotion});
 
   @override
   State<_AgnesHelpIcon> createState() => _AgnesHelpIconState();
@@ -5760,14 +5600,16 @@ class _AgnesHelpIconState extends State<_AgnesHelpIcon> {
     final iconBox = _iconKey.currentContext?.findRenderObject() as RenderBox?;
     if (iconBox == null) return;
     final iconPos = iconBox.localToGlobal(Offset.zero);
-    final screenSize = MediaQuery.of(context).size;
-    // 气泡自问号处向右展开，最大宽度不超过屏幕宽度减左边距与 16px 右边距
-    final maxTipWidth = (screenSize.width - iconPos.dx - 16)
-        .clamp(200.0, 300.0)
+    final iconSize = iconBox.size;
+    final screenWidth = MediaQuery.of(context).size.width;
+    // 气泡固定 300 宽（窄屏收缩至屏幕宽减 32），左缘对齐问号左侧并
+    // 夹在屏幕内（左右各留 16px 边距）
+    final tipWidth = (screenWidth - 32).clamp(120.0, 300.0).toDouble();
+    final left = (iconPos.dx - 12)
+        .clamp(16.0, (screenWidth - tipWidth - 16).clamp(16.0, double.infinity))
         .toDouble();
-    final left = iconPos.dx + 12;
-    // 气泡顶边大致对齐标题行
-    final top = iconPos.dy - 8;
+    // 气泡顶边位于问号图标下方 6px（向下弹出）
+    final top = iconPos.dy + iconSize.height + 6;
     _tipVisible = true;
     _tipEntry = OverlayEntry(
       builder: (context) => Stack(
@@ -5783,7 +5625,7 @@ class _AgnesHelpIconState extends State<_AgnesHelpIcon> {
             visible: _tipVisible,
             left: left,
             top: top,
-            width: maxTipWidth,
+            width: tipWidth,
             reduceMotion: widget.reduceMotion,
             onDismissed: () {
               _tipEntry?.remove();
@@ -5831,7 +5673,7 @@ class _AgnesHelpIconState extends State<_AgnesHelpIcon> {
 class _TitleHelpIcon extends StatefulWidget {
   final String text;
 
-  const _TitleHelpIcon({super.key, required this.text});
+  const _TitleHelpIcon({required this.text});
 
   @override
   State<_TitleHelpIcon> createState() => _TitleHelpIconState();
@@ -5914,7 +5756,7 @@ class _TitleHelpIconState extends State<_TitleHelpIcon> {
   }
 }
 
-/// Agnes AI 推荐说明气泡：自问号处向右弹出，收回时向左缩回
+/// Agnes AI 推荐说明气泡：自问号下方向下弹出，收回时向上缩回
 class _AgnesHelpTip extends StatefulWidget {
   final bool visible;
   final double left;
@@ -5924,7 +5766,6 @@ class _AgnesHelpTip extends StatefulWidget {
   final VoidCallback? onDismissed;
 
   const _AgnesHelpTip({
-    super.key,
     required this.visible,
     required this.left,
     required this.top,
@@ -5999,12 +5840,12 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
             // easeOutBack 会过冲超过 1.0，透明度需夹取
             opacity: t.clamp(0.0, 1.0),
             child: Transform.translate(
-              // 自问号图标处（左侧）向右弹出；收回时向左缩回图标处
-              offset: Offset(-12 * (1 - t), 0),
+              // 自问号图标处（上方）向下滑出；收回时向上缩回图标处
+              offset: Offset(0, -14 * (1 - t)),
               child: Transform.scale(
-                // 左侧对齐缩放：视觉上自问号处向右展开/向左收起
+                // 顶部对齐缩放：视觉上自问号处向下展开/向上收起
                 scale: 0.85 + 0.15 * t,
-                alignment: Alignment.centerLeft,
+                alignment: Alignment.topCenter,
                 child: child,
               ),
             ),
@@ -6083,7 +5924,7 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
 /// 关于对话框「联系开发者」链接：点击后向上弹出联系提示气泡
 /// （样式与动画参考减弱动态效果问号提示框），点击空白处收回
 class _AboutContactLink extends StatefulWidget {
-  const _AboutContactLink({super.key});
+  const _AboutContactLink();
 
   @override
   State<_AboutContactLink> createState() => _AboutContactLinkState();
@@ -6186,7 +6027,6 @@ class _AboutContactTip extends StatefulWidget {
   final VoidCallback? onDismissed;
 
   const _AboutContactTip({
-    super.key,
     required this.visible,
     required this.left,
     required this.bottom,

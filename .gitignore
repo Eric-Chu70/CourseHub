@@ -10,6 +10,27 @@
 .svn/
 migrate_working_dir/
 
+# 本地开发临时产物（截图、调试脚本、热重载辅助文件），不入库
+local.properties
+check*.png
+shot*.png
+narrow_check*.png
+windows_debug_log.txt
+hot_reload*.txt
+device_input.txt
+.flutter_reload
+.hot_reload_trigger
+apply_*.ps1
+vm_probe.ps1
+tool_dump.dart
+tool_modify.dart
+__write_test.txt
+_edit_probe.txt
+.imgfix_tmp/
+
+# OCR 已移除，PaddleOCR 模型不再随仓库分发（如需可从 PaddleOCR 官方重新下载）
+assets/paddleocr/
+
 # IntelliJ related
 *.iml
 *.ipr

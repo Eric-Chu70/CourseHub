@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/ocr_service.dart';
 import '../services/glm_service.dart';
-import '../services/regex_parser_service.dart';
 import '../models/course.dart';
 import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
@@ -16,15 +13,9 @@ import 'glass_dialog.dart';
 import 'blur_selection_menu.dart';
 
 enum AIProcessingStep {
-  ocr,
   parsing,
   completed,
   error,
-}
-
-enum ParseMode {
-  ai,
-  regex,
 }
 
 class AIProcessingDialog extends StatefulWidget {
@@ -70,14 +61,12 @@ class AIProcessingDialog extends StatefulWidget {
 
 class _AIProcessingDialogState extends State<AIProcessingDialog>
     with SingleTickerProviderStateMixin {
-  AIProcessingStep _currentStep = AIProcessingStep.ocr;
-  String _statusText = '正在识别图片中的文字...';
-  String? _ocrText;
+  AIProcessingStep _currentStep = AIProcessingStep.parsing;
+  String _statusText = '正在识别课程表...';
   List<CourseData>? _parsedCourses;
   String? _errorMessage;
   String? _selectedModel;
-  ParseMode _parseMode = ParseMode.ai;
-  String _runtimeProvider = 'hunyuan';
+  String _runtimeProvider = 'builtin';
   String? _runtimeReasoningEffort;
   bool _runtimeWebSearchEnabled = false;
   
@@ -211,7 +200,11 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   Future<void> _startProcessing() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final providerStr = prefs.getString('ai_provider') ?? 'hunyuan';
+      // 与 AIService.loadConfig 一致：只认内置/Agnes/自定义，历史遗留值回落内置
+      String providerStr = prefs.getString('ai_provider') ?? 'builtin';
+      if (providerStr != 'builtin' && providerStr != 'agnes' && providerStr != 'custom') {
+        providerStr = 'builtin';
+      }
       _runtimeProvider = providerStr;
       final customModelName = (prefs.getString('custom_api_model')?.trim().isNotEmpty ?? false)
           ? prefs.getString('custom_api_model')!.trim()
@@ -220,104 +213,100 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       const validEfforts = {'low', 'medium', 'high'};
       _runtimeReasoningEffort = validEfforts.contains(reasoningEffortStr) ? reasoningEffortStr : null;
       _runtimeWebSearchEnabled = prefs.getBool('web_search_enabled') ?? false;
-      
+
       bool hasAIConfig = false;
-      if (providerStr == 'doubao' || providerStr == 'hunyuan' || providerStr == 'glm') {
-        hasAIConfig = true;
-      } else if (providerStr == 'custom') {
+      if (providerStr == 'custom') {
         hasAIConfig = true;
       } else if (providerStr == 'agnes') {
         final agnesKey = prefs.getString('agnes_api_key');
         hasAIConfig = agnesKey != null && agnesKey.isNotEmpty;
-      } else if (providerStr == 'builtin') {
+      } else {
         // 内置模型（限时免费）：无需密钥
         hasAIConfig = true;
-      } else {
-        final secretId = prefs.getString('tencent_secret_id');
-        final secretKey = prefs.getString('tencent_secret_key');
-        hasAIConfig = secretId != null && secretId.isNotEmpty && secretKey != null && secretKey.isNotEmpty;
       }
-      // AI 功能总开关关闭时（设置页可切换），即使已配置 API 也降级为
-      // 本地 OCR + 正则解析，与未配置 AI 的行为一致
+      // AI 功能总开关关闭时（设置页可切换），即使已配置 API 也无法识别：
+      // 离线识别（本地 OCR + 正则解析）已随正则模式一并移除
       final aiEnabled = prefs.getBool('ai_enabled') ?? false;
 
       if (!hasAIConfig || !aiEnabled) {
-        _parseMode = ParseMode.regex;
-        await _processWithOCRAndRegex();
-      } else {
-        _parseMode = ParseMode.ai;
-        await AIService.instance.loadConfig();
+        setState(() {
+          _currentStep = AIProcessingStep.error;
+          _errorMessage = '暂不支持离线识别课表\n\n请在设置中开启 AI 后使用图片导入';
+        });
+        return;
+      }
 
-        if (providerStr == 'doubao') {
-          await _processWithOCRAndAI();
-        } else if (providerStr == 'custom') {
-          final manualOverride = prefs.getBool('custom_api_vision_manual_override') ?? false;
-          final manualVisionEnabled = prefs.getBool('custom_api_vision_manual_value') ?? false;
+      await AIService.instance.loadConfig();
 
-          bool useCustomVision;
-          String visionDecisionSource;
-          if (manualOverride) {
-            useCustomVision = manualVisionEnabled;
-            visionDecisionSource = 'manual';
+      if (providerStr == 'doubao') {
+        _setVisionUnsupported('豆包');
+      } else if (providerStr == 'custom') {
+        final manualOverride = prefs.getBool('custom_api_vision_manual_override') ?? false;
+        final manualVisionEnabled = prefs.getBool('custom_api_vision_manual_value') ?? false;
+
+        bool useCustomVision;
+        String visionDecisionSource;
+        if (manualOverride) {
+          useCustomVision = manualVisionEnabled;
+          visionDecisionSource = 'manual';
+        } else {
+          final cachedVisionSupport = await AIService.instance.getCustomVisionSupport(model: customModelName);
+          if (cachedVisionSupport != null) {
+            useCustomVision = cachedVisionSupport;
+            visionDecisionSource = 'cache';
           } else {
-            final cachedVisionSupport = await AIService.instance.getCustomVisionSupport(model: customModelName);
-            if (cachedVisionSupport != null) {
-              useCustomVision = cachedVisionSupport;
-              visionDecisionSource = 'cache';
-            } else {
-              setState(() {
-                _currentStep = AIProcessingStep.parsing;
-                _statusText = '正在检测自定义模型图片能力...';
-              });
-              final probedVisionSupport = await AIService.instance.probeCustomVisionSupport(model: customModelName);
-              useCustomVision = probedVisionSupport ?? false;
-              visionDecisionSource = probedVisionSupport == null ? 'probe-unknown' : 'probe';
-            }
+            setState(() {
+              _currentStep = AIProcessingStep.parsing;
+              _statusText = '正在检测自定义模型图片能力...';
+            });
+            final probedVisionSupport = await AIService.instance.probeCustomVisionSupport(model: customModelName);
+            useCustomVision = probedVisionSupport ?? false;
+            visionDecisionSource = probedVisionSupport == null ? 'probe-unknown' : 'probe';
           }
+        }
 
-          debugPrint('[AI Processing] provider=custom, visionDecisionSource=$visionDecisionSource, supportsVision=$useCustomVision, model=$customModelName');
-          
-          if (useCustomVision) {
-            debugPrint('[AI Processing] custom image import route: vision');
-            await _parseWithVisionModelStream(
-              provider: 'custom',
-              model: customModelName,
-              modelLabel: '自定义模型 $customModelName',
-            );
-          } else {
-            debugPrint('[AI Processing] custom image import route: ocr+ai');
-            await _processWithOCRAndAI();
-          }
-        } else if (providerStr == 'agnes') {
-          // Agnes 两个模型均支持视觉能力：直接走视觉识别路由（不经 OCR）
-          debugPrint('[AI Processing] agnes image import route: vision');
-          final savedAgnesModel = prefs.getString('agnes_model');
-          final agnesModel = (savedAgnesModel != null && savedAgnesModel.trim().isNotEmpty)
-              ? savedAgnesModel.trim()
-              : 'agnes-2.0-flash';
+        debugPrint('[AI Processing] provider=custom, visionDecisionSource=$visionDecisionSource, supportsVision=$useCustomVision, model=$customModelName');
+
+        if (useCustomVision) {
+          debugPrint('[AI Processing] custom image import route: vision');
           await _parseWithVisionModelStream(
-            provider: 'agnes',
-            model: agnesModel,
-            modelLabel: 'Agnes AI',
-          );
-        } else if (providerStr == 'builtin') {
-          // 内置模型：支持视觉能力，直接走视觉识别路由（默认中度思考）
-          debugPrint('[AI Processing] builtin image import route: vision');
-          final savedNode = prefs.getInt('builtin_node') ?? 1;
-          await _parseWithVisionModelStream(
-            provider: 'builtin',
-            model: 'agnes-2.0-flash',
-            modelLabel: '节点 $savedNode',
+            provider: 'custom',
+            model: customModelName,
+            modelLabel: '自定义模型 $customModelName',
           );
         } else {
-          await _processWithOCRAndAI();
+          _setVisionUnsupported('自定义模型');
         }
-        // OCR+AI 路由（豆包/混元/GLM/无视觉自定义模型）：重试时重新
-        // 提交 OCR 文本给模型
-        _visionRouteProvider = null;
-        _visionRouteModel = null;
-        _visionRouteLabel = '';
+      } else if (providerStr == 'agnes') {
+        // Agnes 两个模型均支持视觉能力：直接走视觉识别路由
+        debugPrint('[AI Processing] agnes image import route: vision');
+        final savedAgnesModel = prefs.getString('agnes_model');
+        final agnesModel = (savedAgnesModel != null && savedAgnesModel.trim().isNotEmpty)
+            ? savedAgnesModel.trim()
+            : 'agnes-2.0-flash';
+        await _parseWithVisionModelStream(
+          provider: 'agnes',
+          model: agnesModel,
+          modelLabel: 'Agnes AI',
+        );
+      } else if (providerStr == 'builtin') {
+        // 内置模型：支持视觉能力，直接走视觉识别路由（默认中度思考）
+        debugPrint('[AI Processing] builtin image import route: vision');
+        final savedNode = prefs.getInt('builtin_node') ?? 1;
+        await _parseWithVisionModelStream(
+          provider: 'builtin',
+          model: 'agnes-2.0-flash',
+          modelLabel: '节点 $savedNode',
+        );
+      } else {
+        // 混元 / GLM 等无视觉能力的模型：原「本地 OCR + AI」路由已随
+        // Google OCR 移除，图片导入仅支持视觉模型
+        _setVisionUnsupported(null);
       }
+      // 视觉路由：重试时重新提交图片和提示词
+      _visionRouteProvider = null;
+      _visionRouteModel = null;
+      _visionRouteLabel = '';
     } catch (e) {
       setState(() {
         _currentStep = AIProcessingStep.error;
@@ -326,44 +315,13 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     }
   }
 
-  Future<void> _processWithOCRAndRegex() async {
+  /// 无视觉能力的模型：图片导入不可用（原 OCR 辅助路由已移除）
+  void _setVisionUnsupported(String? providerName) {
     setState(() {
-      _currentStep = AIProcessingStep.ocr;
-      _statusText = '正在识别图片中的文字...';
+      _currentStep = AIProcessingStep.error;
+      _errorMessage = '${providerName ?? '当前模型'}暂不支持图片识别\n\n'
+          '请使用 Agnes AI、内置模型，或在自定义模型中开启图片识别';
     });
-
-    final ocrResult = await OCRService.instance.recognizeText(widget.imagePath);
-    _ocrText = ocrResult.text;
-
-    if (_ocrText == null || _ocrText!.trim().isEmpty) {
-      setState(() {
-        _currentStep = AIProcessingStep.error;
-        _errorMessage = '未识别到文字内容';
-      });
-      return;
-    }
-
-    _parseWithRegex();
-  }
-
-  Future<void> _processWithOCRAndAI() async {
-    setState(() {
-      _currentStep = AIProcessingStep.ocr;
-      _statusText = '正在识别图片中的文字...';
-    });
-
-    final ocrResult = await OCRService.instance.recognizeText(widget.imagePath);
-    _ocrText = ocrResult.text;
-
-    if (_ocrText == null || _ocrText!.trim().isEmpty) {
-      setState(() {
-        _currentStep = AIProcessingStep.error;
-        _errorMessage = '未识别到文字内容';
-      });
-      return;
-    }
-
-    _parseWithAI();
   }
 
   Future<void> _parseWithVisionModelStream({
@@ -501,10 +459,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         model: _visionRouteModel,
         modelLabel: _visionRouteLabel,
       );
-    } else if (_ocrText != null && _ocrText!.trim().isNotEmpty) {
-      _parseWithAI();
     } else {
-      // OCR 文本缺失（如启动即失败）：从起点重新走完整流程
+      // 非视觉路由（如自定义模型检测阶段失败）：从起点重新走完整流程
       _startProcessing();
     }
   }
@@ -572,7 +528,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
 
   List<CourseData> _assignColorsByName(List<CourseData> courses) {
     final colorMap = <String, String>{};
-    final colors = CourseColorPalette.extendedHexColors;
+    const colors = CourseColorPalette.extendedHexColors;
     int colorIndex = 0;
     
     for (final course in courses) {
@@ -597,105 +553,6 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       color: colorMap[c.name],
       notes: c.notes,
     )).toList();
-  }
-
-  Future<void> _parseWithRegex() async {
-    setState(() {
-      _currentStep = AIProcessingStep.parsing;
-      _statusText = '正在解析课程表（正则模式）...';
-    });
-
-    try {
-      final courses = RegexParserService.instance.parseScheduleText(_ocrText!);
-
-      if (courses.isEmpty) {
-        setState(() {
-          _currentStep = AIProcessingStep.error;
-          _errorMessage = '未能解析出课程信息\n\n提示：配置GLM API Key可获得更准确的AI解析';
-        });
-        return;
-      }
-
-      setState(() {
-        _currentStep = AIProcessingStep.completed;
-        _parsedCourses = courses;
-        _statusText = '解析完成（正则模式），识别到 ${courses.length} 门课程';
-      });
-
-      _addAIMessage('已通过正则表达式识别到 ${courses.length} 门课程。\n\n提示：配置GLM API Key后可获得更准确的AI解析和对话功能。');
-    } catch (e) {
-      setState(() {
-        _currentStep = AIProcessingStep.error;
-        _errorMessage = '正则解析失败：$e\n\n提示：配置GLM API Key可获得更准确的AI解析';
-      });
-    }
-  }
-
-  Future<void> _parseWithAI() async {
-    setState(() {
-      _currentStep = AIProcessingStep.parsing;
-      _statusText = '正在使用AI解析课程表...';
-      _isChatMode = true;
-      _isStreaming = true;
-      _resetStreamingState();
-    });
-
-    _addAIMessage('正在等待AI响应...\n\nOCR识别内容:\n${_ocrText!.length > 500 ? _ocrText!.substring(0, 500) + '...' : _ocrText}');
-
-    try {
-      final stream = AIService.instance.parseScheduleTextStream(
-        _ocrText!,
-        reasoningEffort: _runtimeReasoningEffort,
-      );
-      _streamSubscription = stream.listen(
-        (chunk) {
-          if (!_isFirstChunkReceived) {
-            _cancelNoResponseTimer();
-            setState(() {
-              _isFirstChunkReceived = true;
-            });
-          }
-          setState(() {
-            if (chunk.startsWith('【状态】')) {
-              _statusText = chunk.substring(4);
-            } else if (chunk.startsWith('【思考】')) {
-              _cancelNoResponseTimer();
-              _thinkingContent += chunk.substring(4);
-              _isThinking = true;
-            } else {
-              _streamingContent += chunk;
-              if (_isThinking && !_isThinkingCollapsed) {
-                _isThinkingCollapsed = true;
-              }
-            }
-          });
-          _updateLastAIStreamingMessage(fallbackText: '正在解析课表');
-          _scrollToBottom();
-        },
-        onError: (error) {
-          _cancelNoResponseTimer();
-          setState(() {
-            _currentStep = AIProcessingStep.error;
-            _errorMessage = 'AI解析失败: $error';
-            _isStreaming = false;
-          });
-          _updateLastAIMessage('❌ AI解析失败: $error', thinkingContent: null, isThinkingCollapsed: false, isError: true);
-        },
-        onDone: () {
-          _cancelNoResponseTimer();
-          _parseStreamResult();
-        },
-        cancelOnError: true,
-      );
-      _startNoResponseTimer();
-    } catch (e) {
-      setState(() {
-        _currentStep = AIProcessingStep.error;
-        _errorMessage = 'AI解析失败: $e';
-        _isStreaming = false;
-      });
-      _updateLastAIMessage('❌ AI解析失败: $e', thinkingContent: null, isThinkingCollapsed: false, isError: true);
-    }
   }
 
   void _addAIMessage(
@@ -810,11 +667,6 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     _scrollToBottom();
   }
   Future<void> _sendMessage() async {
-    if (_parseMode == ParseMode.regex) {
-      _addAIMessage('正则模式下暂不支持对话功能。请配置混元密钥后使用AI对话。');
-      return;
-    }
-
     final text = _chatController.text.trim();
     if (text.isEmpty || _isSending) return;
 
@@ -839,7 +691,6 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       final stream = AIService.instance.chatScheduleStream(
         userMessage: text,
         courses: _parsedCourses ?? [],
-        ocrContext: _ocrText,
         history: history,
         reasoningEffort: _runtimeReasoningEffort,
       );
@@ -1086,15 +937,13 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       opacity: 0.82,
       child: Container(
         padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: _parseMode == ParseMode.ai
-                ? [const Color(0xFF9C27B0), const Color(0xFFBA68C8)]
-                : [const Color(0xFF4A90E2), const Color(0xFF6BA3F5)],
+            colors: [Color(0xFF9C27B0), Color(0xFFBA68C8)],
           ),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: Row(
           children: [
@@ -1104,8 +953,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 color: Colors.white.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(
-                _parseMode == ParseMode.ai ? Icons.auto_awesome : Icons.rule,
+              child: const Icon(
+                Icons.auto_awesome,
                 color: Colors.white,
                 size: 24,
               ),
@@ -1115,9 +964,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     '课程表识别',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
@@ -1125,15 +974,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _parseMode == ParseMode.ai
-                      ? (_runtimeProvider == 'custom'
-                        ? '自定义模型 AI驱动'
-                        : (_runtimeProvider == 'hunyuan'
-                          ? '混元 Lite AI驱动'
-                          : (_runtimeProvider == 'glm'
-                            ? 'GLM-4.7-Flash AI驱动'
-                            : 'AI驱动')))
-                      : '正则表达式模式',
+                    _runtimeProvider == 'custom'
+                      ? '自定义模型 AI驱动'
+                      : 'AI驱动',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Colors.white70,
@@ -1142,10 +985,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 ],
               ),
             ),
-            // AI 对话入口仅在 AI 解析模式提供（AI 功能关闭/未配置时为正则模式，
-            // 不展示对话切换，避免绕过 AI 开关）
-            if (_parseMode == ParseMode.ai &&
-                _currentStep == AIProcessingStep.completed &&
+            // AI 对话入口仅在 AI 解析模式提供（AI 功能关闭/未配置时不展示
+            // 对话切换，避免绕过 AI 开关）
+            if (_currentStep == AIProcessingStep.completed &&
                 _parsedCourses != null &&
                 _parsedCourses!.isNotEmpty)
               IconButton(
@@ -1181,7 +1023,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
       if (_showCourseListInDialog) {
         return _buildEditableCourseListView();
       }
-      if (_isChatMode && _parseMode == ParseMode.ai) {
+      if (_isChatMode) {
         return _buildChatView();
       }
       return _buildResultView();
@@ -1201,8 +1043,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             height: 80,
             child: CircularProgressIndicator(
               strokeWidth: 4,
-              valueColor: AlwaysStoppedAnimation(
-                _parseMode == ParseMode.ai ? const Color(0xFF9C27B0) : const Color(0xFF4A90E2),
+              valueColor: const AlwaysStoppedAnimation(
+                Color(0xFF9C27B0),
               ),
               backgroundColor: Colors.white.withValues(alpha: 0.4),
             ),
@@ -1220,12 +1062,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildStepIndicator('OCR识别', _currentStep == AIProcessingStep.ocr),
-              _buildStepConnector(),
-              _buildStepIndicator(
-                _parseMode == ParseMode.ai ? 'AI解析' : '正则解析',
-                _currentStep == AIProcessingStep.parsing,
-              ),
+              _buildStepIndicator('AI解析', _currentStep == AIProcessingStep.parsing),
               _buildStepConnector(),
               _buildStepIndicator('完成', _currentStep == AIProcessingStep.completed),
             ],
@@ -1239,9 +1076,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: isActive
-            ? (_parseMode == ParseMode.ai ? const Color(0xFF9C27B0) : const Color(0xFF4A90E2))
-            : Colors.transparent,
+        color: isActive ? const Color(0xFF9C27B0) : Colors.transparent,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Text(
@@ -1316,31 +1151,6 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   Widget _buildResultView() {
     return Column(
       children: [
-        if (_parseMode == ParseMode.regex)
-          Container(
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade50.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue.shade100),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '正则模式解析。配置GLM API Key可获得更准确的AI解析。',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.blue.shade700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1519,9 +1329,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         ),
         Container(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             color: Colors.transparent,
-            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
           ),
           child: Row(
             children: [
@@ -1755,9 +1565,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 widget.onCompleted?.call(_parsedCourses!);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: _parseMode == ParseMode.ai
-                    ? const Color(0xFF9C27B0)
-                    : const Color(0xFF4A90E2),
+                backgroundColor: const Color(0xFF9C27B0),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
@@ -1896,9 +1704,9 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             '编辑课程',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 20),
           TextField(

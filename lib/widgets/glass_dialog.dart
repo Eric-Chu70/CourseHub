@@ -491,7 +491,7 @@ Future<T?> showBlurredMenu<T>({
                                             } else {
                                               activeInfoIndex = index;
                                               infoText =
-                                                  infoMessages![item.value];
+                                                  infoMessages[item.value];
                                               if (iconBox != null) {
                                                 infoTop = iconBox
                                                         .localToGlobal(
@@ -1227,6 +1227,7 @@ Future<T?> showBouncyDialog<T>({
   // 动画不变、移除内容模糊淡入淡出
   final bool effectiveReduceMotion =
       reduceMotion ?? await readReduceMotionPref();
+  if (!context.mounted) return null;
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,

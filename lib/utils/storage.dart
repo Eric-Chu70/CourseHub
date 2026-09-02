@@ -717,28 +717,36 @@ class StorageService {
             );
             await setTimeSlots(slots);
             result.settingsImported++;
-          } catch (e) {}
+          } catch (e) {
+            debugPrint('导入 timeSlots 设置失败: $e');
+          }
         }
         
         if (settings.containsKey('semesterStartDate')) {
           try {
             await setSemesterStartDate(DateTime.parse(settings['semesterStartDate'].toString()));
             result.settingsImported++;
-          } catch (e) {}
+          } catch (e) {
+            debugPrint('导入学期开始日期失败: $e');
+          }
         }
         
         if (settings.containsKey('semesterWeeks')) {
           try {
             await setSemesterWeeks(int.parse(settings['semesterWeeks'].toString()));
             result.settingsImported++;
-          } catch (e) {}
+          } catch (e) {
+            debugPrint('导入学期周数失败: $e');
+          }
         }
         
         if (settings.containsKey('dailyPeriods')) {
           try {
             await setDailyPeriods(int.parse(settings['dailyPeriods'].toString()));
             result.settingsImported++;
-          } catch (e) {}
+          } catch (e) {
+            debugPrint('导入每日节次数失败: $e');
+          }
         }
       }
 
@@ -754,20 +762,20 @@ class StorageService {
   }
 
   static Future<void> clearCurrentTimetableData() async {
-    final courseKeys = _coursesBox.keys.where((k) => k.toString().startsWith('$_currentTimetableId\_')).toList();
+    final courseKeys = _coursesBox.keys.where((k) => k.toString().startsWith('${_currentTimetableId}_')).toList();
     for (final key in courseKeys) {
       await _coursesBox.delete(key);
     }
     
-    final taskKeys = _tasksBox.keys.where((k) => k.toString().startsWith('$_currentTimetableId\_')).toList();
+    final taskKeys = _tasksBox.keys.where((k) => k.toString().startsWith('${_currentTimetableId}_')).toList();
     for (final key in taskKeys) {
       await _tasksBox.delete(key);
     }
     
     final settingKeys = [
-      '$_currentTimetableId\_timeSlots', '$_currentTimetableId\_semesterStartDate', 
-      '$_currentTimetableId\_semesterWeeks', '$_currentTimetableId\_dailyPeriods',
-      '$_currentTimetableId\_manualCurrentWeek',
+      '${_currentTimetableId}_timeSlots', '${_currentTimetableId}_semesterStartDate', 
+      '${_currentTimetableId}_semesterWeeks', '${_currentTimetableId}_dailyPeriods',
+      '${_currentTimetableId}_manualCurrentWeek',
     ];
     for (final key in settingKeys) {
       await _settingsBox.delete(key);

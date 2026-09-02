@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -335,7 +334,11 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     final prefs = await SharedPreferences.getInstance();
     final fastModeEnabled = prefs.getBool('fast_mode_enabled') ?? false;
     final aiEnabled = prefs.getBool('ai_enabled') ?? false;
-    final provider = prefs.getString('ai_provider') ?? 'hunyuan';
+    // 与 AIService.loadConfig 一致：只认内置/Agnes/自定义，历史遗留值回落内置
+    String provider = prefs.getString('ai_provider') ?? 'builtin';
+    if (provider != 'builtin' && provider != 'agnes' && provider != 'custom') {
+      provider = 'builtin';
+    }
     _customModelName = (prefs.getString('custom_api_model')?.trim().isNotEmpty ?? false)
         ? prefs.getString('custom_api_model')!.trim()
         : 'gpt-4o-mini';
@@ -592,7 +595,11 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
 
   Future<void> _loadFastModeSetting() async {
     final prefs = await SharedPreferences.getInstance();
-    final provider = prefs.getString('ai_provider') ?? 'hunyuan';
+    // 与 AIService.loadConfig 一致：只认内置/Agnes/自定义，历史遗留值回落内置
+    String provider = prefs.getString('ai_provider') ?? 'builtin';
+    if (provider != 'builtin' && provider != 'agnes' && provider != 'custom') {
+      provider = 'builtin';
+    }
     _customModelName = (prefs.getString('custom_api_model')?.trim().isNotEmpty ?? false)
         ? prefs.getString('custom_api_model')!.trim()
         : 'gpt-4o-mini';
@@ -860,10 +867,21 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     _scrollToBottom();
   }
 
-  /// 重新生成最后一条回复：删除当前回复并重发最近一次用户消息。
-  /// 不依赖 _lastUserMessage 等快照（成功回复后会被 _resetRetryState
-  /// 清空），而是直接从消息列表回溯重建：最近一条用户消息为重发内容，
-  /// 其之前的历史照常构建；图片消息从本地文件重新压缩编码。
+  /// 重新生成最后一条回复：删除当前回复，把最近一次用户消息当成
+  /// 一条全新消息发送——不携带之前的问答历史（旧实现携带完整历史，
+  /// 请求与原次完全相同，模型/服务商命中缓存或确定性输出会原样复读
+  /// 上一轮正文）。图片消息从本地文件重新压缩编码。
+  /// 由于剥离历史后各次请求彼此相同，追加随机表述变体提示打散复读。
+  static const List<String> _regenerateVariants = [
+    '请换一个角度或思路重新组织回答',
+    '请调整表述方式和结构重新回答',
+    '请用更精炼简洁的方式回答',
+    '请用更详细、充分展开的方式回答',
+    '请优先用分点或列表组织回答',
+    '请优先用连贯的段落叙述回答',
+  ];
+  final Random _random = Random();
+
   Future<void> _regenerateLastMessage() async {
     if (_isLoading) return;
     if (_messages.isEmpty || _messages.last.role != 'assistant') return;
@@ -894,17 +912,13 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     final text = userMsg.content;
     if (text.isEmpty && imageBase64 == null) return;
 
-    // 历史 = 该用户消息之前的全部消息（纯图片消息用占位文本）
-    final history = _messages
-        .take(userIdx)
-        .map((msg) {
-          var content = msg.content;
-          if (content.isEmpty && msg.imagePath != null) {
-            content = '[图片]';
-          }
-          return {'role': msg.role, 'content': content};
-        })
-        .toList();
+    // 打散复读：剥离历史后每次重新生成的请求完全相同，中转/模型侧命中
+    // 缓存或确定性输出会原样复读同一段正文。给发出的消息追加一条随机
+    // 表述变体提示（仅用于本次请求，不进气泡、不进历史），保证每次请求
+    // 互不相同，并引导模型换角度/换组织方式回答
+    final variant =
+        _regenerateVariants[_random.nextInt(_regenerateVariants.length)];
+    final sentText = text.isEmpty ? text : '$text\n\n（$variant）';
 
     setState(() {
       _stopRequested = false;
@@ -923,15 +937,19 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     _persistentMessages = List.from(_messages);
     _publishStreamUpdate();
     _retryCount = 0;
-    _lastUserMessage = text;
+    _lastUserMessage = sentText;
     _lastImageBase64 = imageBase64;
-    _lastHistory = history;
+    // 全新消息：不带任何历史上下文
+    _lastHistory = const [];
+    // 重置上下文注入标志：让本次请求与首条消息一致（系统提示携带
+    // 课表/任务数据，推理模型重新注入背景），避免模型脱离数据盲答
+    _hasSentContext = false;
     _scrollToBottom(force: true);
 
     _executeSendMessage(
-      messageText: text,
+      messageText: sentText,
       imageBase64: imageBase64,
-      history: history,
+      history: const [],
     );
   }
   void _resetRetryState() {
@@ -998,7 +1016,7 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     if (isRetry) {
       debugPrint('[AI Assistant] Retrying schedule analysis');
       setState(() {
-        _statusMessage = '自动重试中... (${_retryCount}/$_maxRetryCount)';
+        _statusMessage = '自动重试中... ($_retryCount/$_maxRetryCount)';
         _isSearching = true;
       });
       _scrollToBottom();
@@ -1027,7 +1045,7 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
         'teacher': c.teacher ?? '未知',
         'location': c.location ?? '未知',
         'day': _getDayName(c.day),
-        'time': '第${startTime}-${endTime}节',
+        'time': '第$startTime-$endTime节',
         'weeks': c.weeks ?? '全周',
       };
     }).toList();
@@ -1053,13 +1071,13 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
 
       final holidayStatus = isBeforeStart
           ? '当前处于开学前假期（新学期尚未开始）'
-          : '当前处于假期状态（已超出学期${semesterWeeks}周）';
+          : '当前处于假期状态（已超出学期$semesterWeeks周）';
 
       final studyAdvice = isBeforeStart
           ? '''3. 给出开学前学习建议（如预习新学期课程、调整作息迎接开学、准备开学物品等），不要建议复盘上学期课程'''
           : '''3. 给出假期学习建议（如复盘上学期、预习下学期、阅读、作息调整等）''';
 
-      prompt = '''📚 当前所有课程（共${courses.length}门，学期共${semesterWeeks}周，当前为第${currentWeekNum}周）：
+      prompt = '''📚 当前所有课程（共${courses.length}门，学期共$semesterWeeks周，当前为第$currentWeekNum周）：
 $coursesSummary
 
 🎉 $holidayStatus
@@ -1228,12 +1246,19 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
                 _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
                 _persistentSelectedModel = _selectedModel;
                 final thinkingToSave = _thinkingContent.isNotEmpty ? _thinkingContent : null;
-                _messages.add(_ChatMessage(
+                // 欢迎消息固定在顶部：已存在对话时（切换课表后点欢迎消息
+                // 的重新生成），新欢迎消息插回列表顶部而非追加到末尾
+                final welcomeMsg = _ChatMessage(
                   role: 'assistant',
                   content: _streamingContent,
                   isWelcome: true,
                   thinkingContent: thinkingToSave,
-                ));
+                );
+                if (_messages.isEmpty) {
+                  _messages.add(welcomeMsg);
+                } else {
+                  _messages.insert(0, welcomeMsg);
+                }
                 _streamingContent = '';
                 _thinkingContent = '';
                 _hasAnalyzed = true;
@@ -1244,7 +1269,12 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
               _publishStreamUpdate();
               _resetRetryState();
               _updateSupportsImageUpload();
-              _scrollToBottom();
+              // 顶部插入的欢迎消息完成后回到顶部查看；仅欢迎消息时维持回底
+              if (_messages.length > 1) {
+                _scrollToTop();
+              } else {
+                _scrollToBottom();
+              }
             },
           );
         } catch (e) {
@@ -1415,12 +1445,19 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
             _selectedModel ??= _displayForStreamedModel(AIService.instance.lastStreamedModel);
             _persistentSelectedModel = _selectedModel;
             final thinkingToSave = _thinkingContent.isNotEmpty ? _thinkingContent : null;
-            _messages.add(_ChatMessage(
+            // 欢迎消息固定在顶部：已存在对话时（切换课表后点欢迎消息
+            // 的重新生成），新欢迎消息插回列表顶部而非追加到末尾
+            final welcomeMsg = _ChatMessage(
               role: 'assistant',
               content: _streamingContent,
               isWelcome: true,
               thinkingContent: thinkingToSave,
-            ));
+            );
+            if (_messages.isEmpty) {
+              _messages.add(welcomeMsg);
+            } else {
+              _messages.insert(0, welcomeMsg);
+            }
             _streamingContent = '';
             _thinkingContent = '';
             _hasAnalyzed = true;
@@ -1431,7 +1468,12 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
           _publishStreamUpdate();
           _resetRetryState();
           _updateSupportsImageUpload();
-          _scrollToBottom();
+          // 顶部插入的欢迎消息完成后回到顶部查看；仅欢迎消息时维持回底
+          if (_messages.length > 1) {
+            _scrollToTop();
+          } else {
+            _scrollToBottom();
+          }
         },
         cancelOnError: true,
       );
@@ -1552,7 +1594,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
               'currentPeriod': i - 1,  // 返回上一节课的索引，用于过滤剩余课程
               'nextCourse': courseInSlot,
               'waitingMinutes': waitingMinutes,
-              'message': '课间休息，${waitingMinutes}分钟后上${courseInSlot.name}',
+              'message': '课间休息，$waitingMinutes分钟后上${courseInSlot.name}',
             };
           }
         }
@@ -1597,7 +1639,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
         'currentPeriod': currentPeriod,
         'nextCourse': nextCourse,
         'waitingMinutes': waitingMinutes,
-        'message': '课间休息，${waitingMinutes}分钟后上${nextCourse.name}',
+        'message': '课间休息，$waitingMinutes分钟后上${nextCourse.name}',
       };
     }
 
@@ -1653,7 +1695,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
     if (startSlot != null && endSlot != null) {
       return '${startSlot['start']}-${endSlot['end']}';
     }
-    return '第${startTime}-${endTime}节';
+    return '第$startTime-$endTime节';
   }
 
   String _processAIResponse(String content) {
@@ -2018,7 +2060,7 @@ ${tasksInfo.isEmpty ? '暂无待办任务 ✨' : tasksInfo.map((t) => '• [${t[
       final coursesInfo = courses.map((c) {
         final startTime = c.time + 1;
         final endTime = startTime + c.duration - 1;
-        return '${c.name}|${_getDayName(c.day)}|第${startTime}-${endTime}节|${c.duration}节|${c.location ?? "未知"}|${c.teacher ?? "未知"}|${c.weeks ?? "全周"}';
+        return '${c.name}|${_getDayName(c.day)}|第$startTime-$endTime节|${c.duration}节|${c.location ?? "未知"}|${c.teacher ?? "未知"}|${c.weeks ?? "全周"}';
       }).join('\n');
 
       final tasksInfo = tasks.map((t) {
@@ -2077,7 +2119,7 @@ $dataSection${includeData ? '' : '（课程和任务数据已在之前的对话�
     final coursesInfo = courses.map((c) {
       final startTime = c.time + 1;
       final endTime = startTime + (c.duration ?? 2) - 1;
-      return '${_getDayName(c.day)}第${startTime}-${endTime}节: ${c.name} @${c.location ?? "未知"} ${c.teacher ?? ""} ${c.weeks != null ? "(周次: ${c.weeks})" : ""}';
+      return '${_getDayName(c.day)}第$startTime-$endTime节: ${c.name} @${c.location ?? "未知"} ${c.teacher ?? ""} ${c.weeks != null ? "(周次: ${c.weeks})" : ""}';
     }).join('\n');
 
     final tasksInfo = tasks.map((t) {
@@ -2221,7 +2263,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     if (isRetry) {
       debugPrint('[AI Assistant] Retrying message: "$messageText"');
       setState(() {
-        _statusMessage = '自动重试中... (${_retryCount}/$_maxRetryCount)';
+        _statusMessage = '自动重试中... ($_retryCount/$_maxRetryCount)';
         _isSearching = true;
       });
       _scrollToBottom();
@@ -2545,6 +2587,19 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     });
   }
 
+  /// 滚动到消息列表顶部：已存在对话时重新生成的欢迎消息插回顶部，
+  /// 完成后回到顶部查看新分析
+  void _scrollToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
   void _ensureFinalScrollToBottom({required bool shouldFollowOutput}) {
     if (!shouldFollowOutput) {
       return;
@@ -2729,6 +2784,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         });
                                         setState(() {});
                                         Future.delayed(const Duration(milliseconds: 150), () {
+                                          if (!context.mounted) return;
                                           Navigator.pop(context);
                                         });
                                       },
@@ -2772,10 +2828,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                                     ),
                                                   ),
                                                   if (supportsImage)
-                                                    Text(
+                                                    const Text(
                                                       '支持图片上传',
                                                       style: TextStyle(
-                                                        color: const Color.fromARGB(255, 72, 72, 72),
+                                                        color: Color.fromARGB(255, 72, 72, 72),
                                                         fontSize: 10,
                                                       ),
                                                     ),
@@ -2800,7 +2856,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                                      side: BorderSide(color: Colors.grey.shade300),
                                     ),
                                   ),
                                   child: const Text('关闭'),
@@ -2980,7 +3036,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                              side: BorderSide(color: Colors.grey.shade300),
                             ),
                           ),
                           child: const Text('取消'),
@@ -3263,7 +3319,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                                      side: BorderSide(color: Colors.grey.shade300),
                                     ),
                                   ),
                                   child: const Text('取消'),
@@ -3297,7 +3353,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     await AIService.instance.setCustomReasoningEffort(
                                       reasoningEffort.isNotEmpty ? reasoningEffort : null,
                                     );
-                                    Navigator.pop(builderCtx);
+                                    if (builderCtx.mounted) {
+                                      Navigator.pop(builderCtx);
+                                    }
                                     _loadFastModeSettingAndAnalyze();
                                   },
                                   style: ElevatedButton.styleFrom(
@@ -3337,7 +3395,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
       final originalSize = bytes.length;
       var resized = decoded;
-      final maxDim = 1024;
+      const maxDim = 1024;
       if (resized.width > maxDim || resized.height > maxDim) {
         resized = img.copyResize(resized, width: maxDim, height: maxDim);
       }
@@ -3852,26 +3910,26 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               ),
               child: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.tips_and_updates_outlined,
-                    color: const Color(0xFF4A90E2),
+                    color: Color(0xFF4A90E2),
                     size: 20,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: GestureDetector(
                       onTap: _navigateToSettings,
-                      child: Text.rich(
+                      child: const Text.rich(
                         TextSpan(
                           children: [
-                            const TextSpan(
+                            TextSpan(
                               text: '响应较慢？可前往 ',
                               style: TextStyle(
                                 color: Color(0xFF4A90E2),
                                 fontSize: 14,
                               ),
                             ),
-                            const TextSpan(
+                            TextSpan(
                               text: '"设置"',
                               style: TextStyle(
                                 color: Color(0xFF4A90E2),
@@ -3879,14 +3937,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const TextSpan(
+                            TextSpan(
                               text: ' → ',
                               style: TextStyle(
                                 color: Color(0xFF4A90E2),
                                 fontSize: 14,
                               ),
                             ),
-                            const TextSpan(
+                            TextSpan(
                               text: '"开启快速响应"',
                               style: TextStyle(
                                 color: Color(0xFF4A90E2),
@@ -3894,7 +3952,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const TextSpan(
+                            TextSpan(
                               text: ' 提高模型响应速度',
                               style: TextStyle(
                                 color: Color(0xFF4A90E2),
@@ -4206,7 +4264,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
 
   /// 长按消息气泡：弹出操作菜单（Overlay 浮层，样式复刻课表页
   /// 长按课程二级菜单——毛玻璃圆角、easeOutBack 灵动弹出、
-  /// 点击空白处收起）。最后一条 AI 消息显示「重新生成+复制」两项，
+  /// 点击空白处收起）。最后一条普通 AI 消息显示「重新生成+复制」两项，
   /// 其余消息（含欢迎消息）仅「复制」。
   void _showMessageActionMenu(_ChatMessage message, int messageIndex, Offset globalPos) {
     _removeMessageMenuOverlay();
@@ -4214,14 +4272,15 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     final isLast = _messages.isNotEmpty && identical(message, _messages.last);
     final isAssistant = message.role == 'assistant';
     final hasText = message.content.isNotEmpty;
+    final canRegenerate = isAssistant && isLast && !_isLoading && !message.isWelcome;
 
     // 无任何可用选项（如非最后一条的纯图片消息）时直接返回，避免插入空浮层
-    if (!(isAssistant && isLast && !_isLoading) && !hasText) return;
+    if (!canRegenerate && !hasText) return;
 
     _messageMenuOverlay = OverlayEntry(
       builder: (context) => _MessageActionMenu(
         anchor: globalPos,
-        showRegenerate: isAssistant && isLast && !_isLoading,
+        showRegenerate: canRegenerate,
         onRegenerate: () {
           _regenerateLastMessage();
         },
@@ -4260,7 +4319,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     final isUser = message.role == 'user';
     final hasCourses = message.courses != null && message.courses!.isNotEmpty;
 
-    // 长按气泡呼出操作菜单：最后一条 AI 消息显示「重新生成+复制」两项，
+    // 长按气泡呼出操作菜单：最后一条普通 AI 消息显示「重新生成+复制」两项，
     // 其余消息（含欢迎消息）仅「复制」；菜单样式参考课表页长按课程菜单。
     // 用 Listener + 定时器实现（不加入手势竞技场，不与 SelectionArea
     // 抢手势）：按下起 350ms 计时，按住不动即弹菜单；一旦拖动超过
@@ -4317,7 +4376,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
                         child: ConstrainedBox(
-                          constraints: BoxConstraints(
+                          constraints: const BoxConstraints(
                             maxWidth: 200,
                             maxHeight: 300,
                           ),
@@ -4372,7 +4431,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: ConstrainedBox(
-                            constraints: BoxConstraints(
+                            constraints: const BoxConstraints(
                               maxWidth: 200,
                               maxHeight: 300,
                             ),
@@ -4552,7 +4611,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                 ),
                 BlurredPopupMenuButton<String>(
                   icon: Icon(Icons.more_vert, size: 18, color: Colors.grey.shade600),
-                  items: [
+                  items: const [
                     BlurredPopupMenuItem(value: 'edit', icon: Icons.edit_outlined, label: '编辑', iconColor: Color(0xFF4A90E2)),
                     BlurredPopupMenuItem(value: 'delete', icon: Icons.delete_outline, label: '删除', iconColor: Colors.red, textColor: Colors.red),
                   ],
@@ -5270,8 +5329,8 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> with TickerProvide
           : 0.0;
       tx = rawTx.clamp(minTx, maxTx);
       if (!_isInteracting) {
-        final scaledImageH_forCenter = imageDisplayH * rawScale;
-        if (scaledImageH_forCenter <= containerH) {
+        final scaledimagehForcenter = imageDisplayH * rawScale;
+        if (scaledimagehForcenter <= containerH) {
           ty = containerH * (1 - rawScale) / 2;
         }
       }
@@ -5677,7 +5736,9 @@ class _ChatMessage {
   final String? imagePath;
   final double? imageAspectRatio;
   final String? thinkingContent;
-  bool isThinkingCollapsed;
+  // 历史气泡思考过程默认收起：流式输出时正文开始后会自动折叠思考框，
+  // 消息存入历史后若默认展开会出现「部分思考过程被展开」的现象
+  bool isThinkingCollapsed = true;
 
   _ChatMessage({
     required this.role,
@@ -5689,7 +5750,6 @@ class _ChatMessage {
     this.imagePath,
     this.imageAspectRatio,
     this.thinkingContent,
-    this.isThinkingCollapsed = true,
   });
 }
 
@@ -5904,7 +5964,7 @@ class _DragSegmentedState extends State<_DragSegmented> {
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1),
+              border: Border.all(color: Colors.grey.shade300, width: 1),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(9),
@@ -5946,7 +6006,7 @@ class _DragSegmentedState extends State<_DragSegmented> {
                       child: ShaderMask(
                         shaderCallback: (bounds) {
                           final relLeft = (left / bounds.width).clamp(0.0, 1.0);
-                          final edge = 0.015;
+                          const edge = 0.015;
                           final relStart = (relLeft - edge).clamp(0.0, 1.0);
                           final relEnd = ((left + segmentW - 4) / bounds.width).clamp(0.0, 1.0);
                           final relStop = (relEnd + edge).clamp(0.0, 1.0);
@@ -6020,7 +6080,7 @@ class _DragSegmentedState extends State<_DragSegmented> {
 /// 长按消息气泡弹出的操作菜单（Overlay 浮层）。
 /// 样式复刻课表页长按课程二级菜单：毛玻璃圆角外壳、easeOutBack
 /// 灵动弹出、easeInCubic 收回、点击空白处收起。
-/// 最后一条 AI 消息显示「重新生成（上）+ 复制（下）」两项，
+/// 最后一条普通 AI 消息显示「重新生成（上）+ 复制（下）」两项，
 /// 其余消息仅「复制」。
 class _MessageActionMenu extends StatefulWidget {
   const _MessageActionMenu({
@@ -6033,7 +6093,7 @@ class _MessageActionMenu extends StatefulWidget {
 
   /// 长按位置（全局坐标），菜单在其附近弹出
   final Offset anchor;
-  /// 是否显示重新生成项（仅最后一条 AI 消息且不在生成中）
+  /// 是否显示重新生成项（仅最后一条普通 AI 消息且不在生成中）
   final bool showRegenerate;
   final VoidCallback? onRegenerate;
   final VoidCallback? onCopy;

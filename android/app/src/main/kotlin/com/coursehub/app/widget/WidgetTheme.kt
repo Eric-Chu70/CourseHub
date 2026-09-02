@@ -61,10 +61,12 @@ abstract class CourseHubWidgetReceiver<T : GlanceAppWidget> : HomeWidgetGlanceWi
             val pendingResult = goAsync()
             CoroutineScope(Dispatchers.Default).launch {
                 try {
-                    glanceAppWidget.updateAll(context.applicationContext)
+                    // 先续链再渲染（同 WidgetUpdateReceiver）：渲染超时/失败
+                    // 不至于断掉后续自动更新的调度
                     WidgetUpdateScheduler.scheduleNextUpdate(context.applicationContext)
                     // 同时注册 WorkManager 周期任务作为兜底
                     WidgetUpdateWorker.enqueuePeriodic(context.applicationContext)
+                    glanceAppWidget.updateAll(context.applicationContext)
                 } catch (e: Exception) {
                     // 忽略更新失败
                 } finally {

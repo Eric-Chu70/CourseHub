@@ -172,12 +172,14 @@ class TodayLargeWidget : GlanceAppWidget() {
                     }
                 } else {
                     // 课程列表
+                    // 课程名可用宽度：卡片宽 - 外层内边距32 - 卡片内边距20 - 色条12
+                    val textAreaWidthDp = (side.value - 64f).coerceAtLeast(60f)
                     courses.forEach { course ->
                         item {
                             Column(
                                 modifier = GlanceModifier.clickable(clickAction)
                             ) {
-                                CourseCard(course)
+                                CourseCard(course, textAreaWidthDp)
                                 Spacer(GlanceModifier.height(10.dp))
                             }
                         }
@@ -202,7 +204,7 @@ class TodayLargeWidget : GlanceAppWidget() {
     }
 
     @Composable
-    private fun CourseCard(course: WidgetData.Course) {
+    private fun CourseCard(course: WidgetData.Course, textAreaWidthDp: Float) {
         Row(
             modifier = GlanceModifier
                 .fillMaxWidth()
@@ -224,8 +226,21 @@ class TodayLargeWidget : GlanceAppWidget() {
                     modifier = GlanceModifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Vertical.CenterVertically
                 ) {
+                    // 当前上课中的剩余时间优先完整显示：课程名按剩余宽度压缩，超长截断加省略号
+                    val isCurrentRunning = course.isCurrent && course.endTime.isNotEmpty() &&
+                        course.endTime != "00:00" &&
+                        (WidgetData.timeToMinutes(course.endTime) - WidgetData.getCurrentMinutes()) > 0
+                    // 预留"xx分钟后下课"(11sp约66dp)+间距6dp+余量6dp
+                    val nameWidthDp = if (isCurrentRunning) textAreaWidthDp - 78f else textAreaWidthDp
+                    // 15sp 中文字符宽约15dp，取15.5留余量；最少保留2个字符
+                    val maxChars = (nameWidthDp / 15.5f).toInt().coerceAtLeast(2)
+                    val displayName = if (course.name.length > maxChars) {
+                        course.name.take(maxChars) + "…"
+                    } else {
+                        course.name
+                    }
                     Text(
-                        text = course.name,
+                        text = displayName,
                         style = TextStyle(
                             color = WidgetTheme.primaryProvider(),
                             fontSize = 15.sp,
@@ -234,19 +249,17 @@ class TodayLargeWidget : GlanceAppWidget() {
                         maxLines = 1
                     )
                     // 当前上课中：显示"xx分钟后下课"
-                    if (course.isCurrent && course.endTime.isNotEmpty() && course.endTime != "00:00") {
+                    if (isCurrentRunning) {
                         val remainingMin = WidgetData.timeToMinutes(course.endTime) - WidgetData.getCurrentMinutes()
-                        if (remainingMin > 0) {
-                            Spacer(GlanceModifier.width(6.dp))
-                            Text(
-                                text = "${remainingMin}分钟后下课",
-                                style = TextStyle(
-                                    color = ColorProvider(Color(0xFF2196F3), Color(0xFF64B5F6)),
-                                    fontSize = 11.sp
-                                ),
-                                maxLines = 1
-                            )
-                        }
+                        Spacer(GlanceModifier.width(6.dp))
+                        Text(
+                            text = "${remainingMin}分钟后下课",
+                            style = TextStyle(
+                                color = ColorProvider(Color(0xFF2196F3), Color(0xFF64B5F6)),
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1
+                        )
                     }
                 }
                 Spacer(GlanceModifier.height(2.dp))

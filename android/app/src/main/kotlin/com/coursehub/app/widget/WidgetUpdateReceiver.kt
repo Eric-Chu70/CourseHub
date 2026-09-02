@@ -28,6 +28,16 @@ class WidgetUpdateReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
+                // 先续链再渲染：渲染 3 个 Glance 小组件可能超过广播 10s 预算
+                // 或抛异常，若渲染失败再续链会导致闹钟链断裂、小组件只能等
+                // app 打开才更新；先排下一次闹钟保证链路永续（失败只损失本次）
+                try {
+                    WidgetUpdateScheduler.scheduleNextUpdate(context.applicationContext)
+                    // 同时刷新 WorkManager 周期任务
+                    WidgetUpdateWorker.enqueuePeriodic(context.applicationContext)
+                } catch (e: Exception) {
+                    // 忽略调度失败
+                }
                 // 更新所有今日课程类小组件
                 // updateAll 会触发 provideGlance，其中会调用 loadTodayDataFiltered
                 // 根据当前时间重新过滤课程
@@ -37,14 +47,6 @@ class WidgetUpdateReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 // 忽略更新失败
             } finally {
-                // 链式调度下一次更新
-                try {
-                    WidgetUpdateScheduler.scheduleNextUpdate(context.applicationContext)
-                    // 同时刷新 WorkManager 周期任务
-                    WidgetUpdateWorker.enqueuePeriodic(context.applicationContext)
-                } catch (e: Exception) {
-                    // 忽略调度失败
-                }
                 pendingResult.finish()
             }
         }

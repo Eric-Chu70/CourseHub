@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
 import '../utils/storage.dart';
@@ -12,7 +11,6 @@ import '../widgets/ai_processing_dialog.dart';
 import '../widgets/glass_dialog.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_sync_service.dart';
-import '../services/ocr_service.dart';
 import '../services/glm_service.dart';
 import '../models/course.dart';
 import '../utils/course_color_palette.dart';
@@ -234,6 +232,7 @@ class _ImportScreenState extends State<ImportScreen> {
           _buildInfoItem('合并模式：保留现有数据，添加新数据'),
           _buildInfoItem('替换模式：清空当前课表后导入新数据'),
           _buildInfoItem('导出的 JSON 文件可用于备份或迁移数据'),
+          _buildInfoItem('暂不支持云端备份AI配置（安全风险高）'),
         ],
       ),
     );
@@ -426,6 +425,7 @@ class _ImportScreenState extends State<ImportScreen> {
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
         final content = await file.readAsString();
+        if (!mounted) return;
         await _processJsonData(context, content);
       }
     } catch (e) {
@@ -1036,6 +1036,7 @@ class _ImportScreenState extends State<ImportScreen> {
     if (selectedIds == null || selectedIds.isEmpty) {
       return;
     }
+    if (!mounted) return;
 
     final cloudSync = CloudSyncService.instance;
     final selectedPayload =
@@ -1355,6 +1356,7 @@ class _ImportScreenState extends State<ImportScreen> {
     final mode =
         await _showCloudSyncModeDialog(backup.updatedAt, selectedTimetable);
     if (mode == null) return;
+    if (!mounted) return;
 
     final selectedPayload = StorageService.getCloudBackupTimetableData(
         backup.payload, selectedTimetable);
@@ -1631,7 +1633,7 @@ class _ImportScreenState extends State<ImportScreen> {
     }
 
     if (namedTimetables is Map) {
-      final nextNamed = Map<String, dynamic>.from(namedTimetables as Map);
+      final nextNamed = Map<String, dynamic>.from(namedTimetables);
       for (final name in namesToDelete) {
         nextNamed.remove(name);
       }
@@ -2078,11 +2080,13 @@ class _ImportScreenState extends State<ImportScreen> {
           await picker.pickImage(source: source, imageQuality: 85);
 
       if (image == null) return;
+      if (!mounted) return;
 
       await AIProcessingDialog.show(
         context,
         imagePath: image.path,
         onCompleted: (courses) async {
+          if (!mounted) return;
           await _importParsedCourses(context, courses);
         },
       );
@@ -2097,6 +2101,7 @@ class _ImportScreenState extends State<ImportScreen> {
       BuildContext context, List<CourseData> courses) async {
     try {
       await StorageService.resetCurrentWeek();
+      if (!mounted) return;
 
       final baseTime = DateTime.now().millisecondsSinceEpoch;
       final courseList = courses.asMap().entries.map((entry) {

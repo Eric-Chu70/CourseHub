@@ -119,7 +119,12 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
 
     final prefs = await SharedPreferences.getInstance();
     _aiEnabled = prefs.getBool('ai_enabled') ?? false;
-    _currentProvider = prefs.getString('ai_provider') ?? 'hunyuan';
+    // 与 AIService.loadConfig 一致：只认内置/Agnes/自定义，历史遗留值回落内置
+    String provider = prefs.getString('ai_provider') ?? 'builtin';
+    if (provider != 'builtin' && provider != 'agnes' && provider != 'custom') {
+      provider = 'builtin';
+    }
+    _currentProvider = provider;
 
     if (!_aiEnabled) {
       if (mounted) setState(() => _phase = _InsightPhase.disabled);

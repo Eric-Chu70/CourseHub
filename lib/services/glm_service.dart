@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class CourseData {
@@ -81,9 +81,6 @@ class GLMParseResult {
 }
 
 enum AIProvider {
-  glm,
-  hunyuan,
-  doubao,
   custom,
   agnes,
   builtin,
@@ -96,16 +93,12 @@ class AIService {
 
   static AIService get instance => _instance;
 
-  static const String _glmBaseUrl = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
-  static const String _glmModel = 'glm-4.7-flash';
   static const String _defaultCustomModel = 'gpt-4o-mini';
 
   // Agnes AI：OpenAI 兼容接口，直接以 Bearer 密钥调用
   static const String _agnesBaseUrl = 'https://api.agnes-ai.cn/v1/chat/completions';
   static const String _defaultAgnesModel = 'agnes-2.0-flash';
 
-  static const String _defaultSupabaseUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/hunyuan';
-  static const String _doubaoEdgeFunctionUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/HuoshanAPI';
   static const String _nonDoubaoEdgeFunctionUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/NonDoubaoAPI';
 
   // 内置模型（限时免费）：单一 Supabase Edge Function，请求体带 node 字段（1-4）
@@ -115,23 +108,27 @@ class AIService {
       'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/BuiltinModel';
   int _builtinNode = 1;
 
-  String? _apiKey;
-  String? _secretId;
-  String? _secretKey;
-  String? _supabaseUrl = _defaultSupabaseUrl;
+  // 会话级标记：每次进入 App（进程启动）后，首次通过内置模型发起 AI 请求时
+  // 随机选择 1-4 号节点并写回偏好（供设置页/徽章展示真实节点）；会话内用户
+  // 在设置页手动切换节点仍然生效，重启 App 后重新随机
+  bool _builtinNodeRandomizedThisSession = false;
+
+  Future<void> _randomizeBuiltinNodeForSession() async {
+    if (_builtinNodeRandomizedThisSession) return;
+    _builtinNodeRandomizedThisSession = true;
+    _builtinNode = math.Random().nextInt(4) + 1;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('builtin_node', _builtinNode);
+  }
+
   String? _customApiUrl;
   String? _customApiKey;
   String? _customModel;
   String? _agnesApiKey;
   String _agnesModel = _defaultAgnesModel;
-  String _currentProviderStr = 'hunyuan';
-  
-  AIProvider _provider = AIProvider.hunyuan;
+  String _currentProviderStr = 'builtin';
 
-  void setApiKey(String apiKey) {
-    _apiKey = apiKey;
-  }
-
+  AIProvider _provider = AIProvider.builtin;
   /// 内置模型：切换节点（1-4），并立即持久化
   Future<void> setBuiltinNode(int node) async {
     if (node < 1 || node > 4) return;
@@ -170,16 +167,6 @@ class AIService {
         ? '${uri.scheme}://${uri.host}${uri.path}'
         : apiUrl;
     return 'custom_vision_capability::$endpoint::${model.trim()}';
-  }
-
-  Future<void> _cacheCustomReasoningCapability({
-    required String apiUrl,
-    required String model,
-    required bool isReasoning,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = _customReasoningCacheKey(apiUrl: apiUrl, model: model);
-    await prefs.setBool(key, isReasoning);
   }
 
   Future<void> _cacheCustomVisionCapability({
@@ -355,28 +342,10 @@ class AIService {
     return prefs.getBool(key) ?? false;
   }
 
-  void setHunyuanCredentials(String secretId, String secretKey, {String? supabaseUrl}) {
-    _secretId = secretId;
-    _secretKey = secretKey;
-    if (supabaseUrl != null && supabaseUrl.isNotEmpty) {
-      _supabaseUrl = supabaseUrl;
-    }
-    _provider = AIProvider.hunyuan;
-  }
-
-  void setGLMApiKey(String apiKey) {
-    _apiKey = apiKey;
-    _provider = AIProvider.glm;
-  }
-
   void setAgnesConfig(String apiKey, String model) {
     _agnesApiKey = apiKey;
     _agnesModel = (model.trim().isNotEmpty) ? model.trim() : _defaultAgnesModel;
     _provider = AIProvider.agnes;
-  }
-
-  void setDoubaoProvider() {
-    _provider = AIProvider.doubao;
   }
 
   void setProvider(AIProvider provider) {
@@ -410,16 +379,15 @@ class AIService {
 
   Future<void> loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    final providerStr = prefs.getString('ai_provider');
-    _currentProviderStr = providerStr ?? 'hunyuan';
-    
-    if (providerStr == 'glm') {
-      _provider = AIProvider.glm;
-      _apiKey = prefs.getString('glm_api_key');
-      _customApiUrl = null;
-      _customApiKey = null;
-      _customModel = null;
-    } else if (providerStr == 'agnes') {
+    // 只支持内置/Agnes/自定义三种 provider；历史遗留值（hunyuan/glm/doubao）
+    // 一律回落到内置模型（默认节点 1）
+    String providerStr = prefs.getString('ai_provider') ?? 'builtin';
+    if (providerStr != 'builtin' && providerStr != 'agnes' && providerStr != 'custom') {
+      providerStr = 'builtin';
+    }
+    _currentProviderStr = providerStr;
+
+    if (providerStr == 'agnes') {
       _provider = AIProvider.agnes;
       _agnesApiKey = prefs.getString('agnes_api_key');
       final savedModel = prefs.getString('agnes_model');
@@ -429,29 +397,15 @@ class AIService {
       _customApiUrl = null;
       _customApiKey = null;
       _customModel = null;
-    } else if (providerStr == 'doubao') {
-      _provider = AIProvider.doubao;
-      _customApiUrl = null;
-      _customApiKey = null;
-      _customModel = null;
-    } else if (providerStr == 'builtin') {
-      _provider = AIProvider.builtin;
-      _builtinNode = prefs.getInt('builtin_node') ?? 1;
-      if (_builtinNode < 1 || _builtinNode > 4) _builtinNode = 1;
-      _customApiUrl = null;
-      _customApiKey = null;
-      _customModel = null;
     } else if (providerStr == 'custom') {
       _customApiUrl = prefs.getString('custom_api_url');
       _customApiKey = prefs.getString('custom_api_key');
       _customModel = prefs.getString('custom_api_model') ?? _defaultCustomModel;
       _provider = AIProvider.custom;
     } else {
-      _provider = AIProvider.hunyuan;
-      _secretId = prefs.getString('tencent_secret_id');
-      _secretKey = prefs.getString('tencent_secret_key');
-      final savedUrl = prefs.getString('supabase_url');
-      _supabaseUrl = (savedUrl != null && savedUrl.isNotEmpty) ? savedUrl : _defaultSupabaseUrl;
+      _provider = AIProvider.builtin;
+      _builtinNode = prefs.getInt('builtin_node') ?? 1;
+      if (_builtinNode < 1 || _builtinNode > 4) _builtinNode = 1;
       _customApiUrl = null;
       _customApiKey = null;
       _customModel = null;
@@ -460,16 +414,12 @@ class AIService {
 
   Future<void> saveConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    String providerStr = 'hunyuan';
-    if (_provider == AIProvider.glm) {
-      providerStr = 'glm';
-    } else if (_provider == AIProvider.doubao) {
-      providerStr = 'doubao';
-    } else if (_provider == AIProvider.custom) {
+    final String providerStr;
+    if (_provider == AIProvider.custom) {
       providerStr = 'custom';
     } else if (_provider == AIProvider.agnes) {
       providerStr = 'agnes';
-    } else if (_provider == AIProvider.builtin) {
+    } else {
       providerStr = 'builtin';
     }
     await prefs.setString('ai_provider', providerStr);
@@ -479,58 +429,8 @@ class AIService {
       await prefs.setString('agnes_model', _agnesModel);
     } else if (_provider == AIProvider.builtin) {
       await prefs.setInt('builtin_node', _builtinNode);
-    } else if (_provider == AIProvider.glm) {
-      if (_apiKey != null) await prefs.setString('glm_api_key', _apiKey!);
-    } else if (_provider == AIProvider.hunyuan) {
-      if (_secretId != null) await prefs.setString('tencent_secret_id', _secretId!);
-      if (_secretKey != null) await prefs.setString('tencent_secret_key', _secretKey!);
-      if (_supabaseUrl != null) await prefs.setString('supabase_url', _supabaseUrl!);
     }
   }
-
-  Future<GLMParseResult> parseScheduleText(String ocrText) async {
-    if (_currentProviderStr == 'custom') {
-      if (_customApiUrl == null || _customApiUrl!.isEmpty || _customApiKey == null || _customApiKey!.isEmpty) {
-        await _ensureCustomConfigLoaded();
-      }
-      if (_customApiUrl == null || _customApiUrl!.isEmpty || _customApiKey == null || _customApiKey!.isEmpty) {
-        throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
-      }
-      return _parseWithNonDoubao(
-        ocrText,
-        provider: 'custom',
-        model: _customModel ?? _defaultCustomModel,
-      );
-    }
-
-    if (_currentProviderStr == 'hunyuan') {
-      return _parseWithNonDoubao(
-        ocrText,
-        provider: 'hunyuan',
-        model: 'hunyuan-lite',
-      );
-    }
-
-    if (_currentProviderStr == 'agnes') {
-      return _parseWithAgnes(ocrText);
-    }
-
-    if (_currentProviderStr == 'builtin') {
-      // 内置模型：文本解析经当前节点中转（无客户端密钥）
-      return _parseWithBuiltin(ocrText);
-    }
-
-    if (_currentProviderStr == 'glm') {
-      return _parseWithNonDoubao(
-        ocrText,
-        provider: 'glm',
-        model: _glmModel,
-      );
-    }
-
-    return _parseWithDoubao(ocrText);
-  }
-
   Stream<String> parseScheduleTextStream(
     String ocrText, {
     String? provider,
@@ -538,21 +438,12 @@ class AIService {
     String? reasoningEffort,
   }) async* {
     String resolvedProvider = provider ?? _currentProviderStr;
-    if (resolvedProvider != 'doubao' &&
-        resolvedProvider != 'hunyuan' &&
-        resolvedProvider != 'glm' &&
-        resolvedProvider != 'custom' &&
+    if (resolvedProvider != 'custom' &&
         resolvedProvider != 'agnes' &&
         resolvedProvider != 'builtin') {
       resolvedProvider = _provider == AIProvider.custom
           ? 'custom'
-          : (_provider == AIProvider.agnes
-              ? 'agnes'
-              : (_provider == AIProvider.builtin
-                  ? 'builtin'
-                  : (_provider == AIProvider.glm
-                      ? 'glm'
-                      : (_provider == AIProvider.doubao ? 'doubao' : 'hunyuan'))));
+          : (_provider == AIProvider.agnes ? 'agnes' : 'builtin');
     }
 
     String? resolvedModel = model;
@@ -569,12 +460,6 @@ class AIService {
             ? _customModel!.trim()
             : _defaultCustomModel;
       }
-    } else if (resolvedProvider == 'hunyuan' &&
-        (resolvedModel == null || resolvedModel.isEmpty)) {
-      resolvedModel = 'hunyuan-lite';
-    } else if (resolvedProvider == 'glm' &&
-        (resolvedModel == null || resolvedModel.isEmpty)) {
-      resolvedModel = _glmModel;
     } else if (resolvedProvider == 'agnes') {
       await _ensureAgnesConfigLoaded();
       if ((_agnesApiKey ?? '').trim().isEmpty) {
@@ -595,260 +480,6 @@ class AIService {
       reasoningEffort: reasoningEffort,
     );
   }
-
-  Future<GLMParseResult> parseScheduleFromImage(String imagePath) async {
-    if (_provider != AIProvider.doubao) {
-      throw GLMException('当前模型不支持直接图片识别，请切换到OCR+AI模式');
-    }
-    return _parseWithDoubaoVision(imagePath);
-  }
-
-  Stream<String> parseScheduleFromImageStream(String imagePath) async* {
-    if (_provider != AIProvider.doubao) {
-      throw GLMException('当前模型不支持直接图片识别，请切换到OCR+AI模式');
-    }
-
-    final file = File(imagePath);
-    if (!await file.exists()) {
-      throw GLMException('图片文件不存在');
-    }
-
-    final bytes = await file.readAsBytes();
-    final base64Image = base64Encode(bytes);
-
-    final httpClient = HttpClient();
-
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_doubaoEdgeFunctionUrl));
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode({
-        'type': 'vision',
-        'stream': true,
-        'messages': [
-          {
-            'role': 'system',
-            'content': _systemPrompt,
-          },
-          {
-            'role': 'user',
-            'content': [
-              {
-                'type': 'image_url',
-                'image_url': {
-                  'url': 'data:image/jpeg;base64,$base64Image',
-                },
-              },
-              {
-                'type': 'text',
-                'text': '请识别这张课程表图片中的所有课程信息，并按照要求的JSON格式输出。请直接输出JSON数组，不要输出其他文字：',
-              },
-            ],
-          },
-        ],
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-      String? returnedModel;
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final error = parsed['error'] as String?;
-            if (error != null && error.isNotEmpty) {
-              throw GLMException('流式响应异常: $error');
-            }
-            final content = parsed['content'] as String?;
-            final status = parsed['status'] as String?;
-            final thinking = parsed['thinking'] as String?;
-            returnedModel ??= parsed['model'] as String?;
-            
-            // 优先处理内容
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-            // 处理状态信息（如"正在搜索网络..."）
-            else if (status != null && status.isNotEmpty) {
-              yield '【状态】$status';
-            }
-            // 处理思考过程
-            else if (thinking != null && thinking.isNotEmpty) {
-              yield '【思考】$thinking';
-            }
-          } catch (_) {
-            // Skip invalid JSON
-          }
-        }
-      }
-
-      if (returnedModel != null) {
-        _lastStreamedModel = returnedModel;
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('解析失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Future<GLMParseResult> _parseWithDoubaoVision(String imagePath) async {
-    final file = File(imagePath);
-    if (!await file.exists()) {
-      throw GLMException('图片文件不存在');
-    }
-
-    final bytes = await file.readAsBytes();
-    final base64Image = base64Encode(bytes);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_doubaoEdgeFunctionUrl),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'type': 'vision',
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': [
-                  {
-                    'type': 'image_url',
-                    'image_url': {
-                      'url': 'data:image/jpeg;base64,$base64Image',
-                    },
-                  },
-                  {
-                    'type': 'text',
-                    'text': '请识别这张课程表图片中的所有课程信息，并按照要求的JSON格式输出。请直接输出JSON数组，不要输出其他文字：',
-                  },
-                ],
-              },
-            ],
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']['message'] ?? data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-        final selectedModel = data['model'] as String?;
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content, selectedModel: selectedModel);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
-  Future<GLMParseResult> _parseWithDoubao(String ocrText, {String? model}) async {
-    final prompt = _buildPrompt(ocrText);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_doubaoEdgeFunctionUrl),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'type': 'vision',
-            if (model != null && model.isNotEmpty) 'model': model,
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': prompt,
-              },
-            ],
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']['message'] ?? data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-        final selectedModel = data['model'] as String?;
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content, selectedModel: selectedModel);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
   Future<void> _ensureCustomConfigLoaded() async {
     if (_customApiUrl != null && _customApiKey != null && _customApiUrl!.isNotEmpty && _customApiKey!.isNotEmpty) {
       return;
@@ -876,18 +507,7 @@ class AIService {
       'messages': messages,
     };
 
-    if (provider == 'hunyuan') {
-      if (_secretId != null && _secretId!.isNotEmpty) {
-        payload['secret_id'] = _secretId;
-      }
-      if (_secretKey != null && _secretKey!.isNotEmpty) {
-        payload['secret_key'] = _secretKey;
-      }
-    } else if (provider == 'glm') {
-      if (_apiKey != null && _apiKey!.isNotEmpty) {
-        payload['api_key'] = _apiKey;
-      }
-    } else if (provider == 'custom') {
+    if (provider == 'custom') {
       if (_customApiUrl != null && _customApiUrl!.isNotEmpty) {
         payload['custom_api_url'] = _customApiUrl;
       }
@@ -911,177 +531,6 @@ class AIService {
     }
     return null;
   }
-
-  Future<GLMParseResult> _parseWithNonDoubao(
-    String ocrText, {
-    required String provider,
-    required String model,
-  }) async {
-    final prompt = _buildPrompt(ocrText);
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_nonDoubaoEdgeFunctionUrl),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(
-            _buildNonDoubaoRequestBody(
-              provider: provider,
-              model: model,
-              messages: [
-                {
-                  'role': 'system',
-                  'content': _systemPrompt,
-                },
-                {
-                  'role': 'user',
-                  'content': prompt,
-                },
-              ],
-            ),
-          ),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']['message'] ?? data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-        final selectedModel = data['model'] as String?;
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content, selectedModel: selectedModel);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
-  Future<String> _testNonDoubaoConnection({
-    required String provider,
-    required String successMessage,
-    String? model,
-  }) async {
-    if (provider == 'custom') {
-      await _ensureCustomConfigLoaded();
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_nonDoubaoEdgeFunctionUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(
-          _buildNonDoubaoRequestBody(
-            provider: provider,
-            model: model,
-            messages: [
-              {'role': 'user', 'content': '你好'}
-            ],
-          ),
-        ),
-      );
-
-      if (response.statusCode == 200) {
-        return successMessage;
-      }
-
-      throw GLMException('连接失败: ${response.statusCode}');
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  Future<String> _chatWithNonDoubao(
-    String userMessage,
-    String? context,
-    List<CourseData>? courses, {
-    required String provider,
-    required String model,
-  }) async {
-    String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
-
-当用户询问课程表相关问题时，以下是当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
-
-当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
-1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
-2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
-3. 删除课程：返回 {"action": "delete", "index": 课程索引}
-
-课程信息字段说明：
-- name: 课程名称（必填）
-- teacher: 教师姓名（可选）
-- location: 上课地点（可选）
-- dayOfWeek: 星期几，1=周一，7=周日（必填）
-- period: 第几节课，从1开始（必填）
-- duration: 课程持续节数，默认为2（可选）
-- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
-
-注意：
-- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
-- 其他情况下请用自然语言回答用户的问题''';
-
-    if (context != null && context.isNotEmpty) {
-      systemContent += '\n\n原始OCR识别内容：\n$context';
-    }
-
-    if (provider == 'custom') {
-      await _ensureCustomConfigLoaded();
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_nonDoubaoEdgeFunctionUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(
-          _buildNonDoubaoRequestBody(
-            provider: provider,
-            model: model,
-            messages: [
-              {'role': 'system', 'content': systemContent},
-              {'role': 'user', 'content': userMessage},
-            ],
-          ),
-        ),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body);
-      return data['choices'][0]['message']['content'] as String;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
   Stream<String> _chatWithNonDoubaoStream({
     required List<Map<String, dynamic>> messages,
     required String provider,
@@ -1133,7 +582,6 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
 
       String buffer = '';
       String? returnedModel;
-      bool sawReasoning = false;
 
       await for (final chunk in response.transform(utf8.decoder)) {
         buffer += chunk;
@@ -1189,6 +637,9 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     String? model,
     String? reasoningEffort,
   }) async* {
+    // 任务分析、对话页、课表识别等全部内置模型请求都经由本方法：
+    // 每次进入 App 后的首次请求在此随机选定本次会话使用的节点
+    await _randomizeBuiltinNodeForSession();
     debugPrint('[AI Service] Builtin stream route node=$_builtinNode model=${model ?? ''} endpoint=$_builtinEndpointUrl');
 
     final httpClient = HttpClient();
@@ -1265,297 +716,6 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
       httpClient.close();
     }
   }
-
-  /// 内置模型非流式对话：经当前节点的 Supabase Edge Function 中转
-  Future<Map<String, dynamic>> _chatWithModelBuiltin({
-    required List<Map<String, dynamic>> messages,
-    String? model,
-  }) async {
-    debugPrint('[AI Service] Builtin non-stream route node=$_builtinNode model=${model ?? ''} endpoint=$_builtinEndpointUrl');
-
-    try {
-      final response = await http.post(
-        Uri.parse(_builtinEndpointUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'provider': 'builtin',
-          'node': _builtinNode,
-          'stream': false,
-          'messages': messages,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-      }
-
-      final data = jsonDecode(response.body);
-      final content = data['choices']?[0]?['message']?['content'] as String? ??
-          data['content'] as String?;
-      if (content == null || content.isEmpty) {
-        throw GLMException('内置模型返回内容为空');
-      }
-      return {
-        'content': content,
-        'model': data['model'] as String? ?? 'builtin-node-$_builtinNode',
-      };
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
-  Future<Map<String, dynamic>> _chatWithModelNonDoubao({
-    required List<Map<String, dynamic>> messages,
-    required String provider,
-    String? model,
-  }) async {
-    if (provider == 'custom') {
-      await _ensureCustomConfigLoaded();
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_nonDoubaoEdgeFunctionUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(
-          _buildNonDoubaoRequestBody(
-            provider: provider,
-            model: model,
-            messages: messages,
-          ),
-        ),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body);
-      return {
-        'content': data['choices'][0]['message']['content'] as String,
-        'model': data['model'] as String,
-      };
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
-  Future<GLMParseResult> _parseWithHunyuan(String ocrText) async {
-    if (_secretId == null || _secretId!.isEmpty) {
-      throw GLMException('请先设置腾讯云 SecretId');
-    }
-    if (_secretKey == null || _secretKey!.isEmpty) {
-      throw GLMException('请先设置腾讯云 SecretKey');
-    }
-    if (_supabaseUrl == null || _supabaseUrl!.isEmpty) {
-      throw GLMException('请先设置 Supabase Function URL');
-    }
-
-    final prompt = _buildPrompt(ocrText);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final authHeader = '$_secretId $_secretKey';
-        debugPrint('=== Hunyuan API Request ===');
-        debugPrint('URL: $_supabaseUrl');
-        debugPrint('SecretId length: ${_secretId!.length}');
-        debugPrint('SecretKey length: ${_secretKey!.length}');
-        debugPrint('Auth header: ${authHeader.substring(0, 20)}...');
-        
-        final response = await http.post(
-          Uri.parse(_supabaseUrl!),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': authHeader,
-          },
-          body: jsonEncode({
-            'model': 'hunyuan-lite',
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': prompt,
-              },
-            ],
-          }),
-        ).timeout(const Duration(seconds: 60));
-
-        if (response.statusCode != 200) {
-          final errorData = jsonDecode(response.body);
-          throw GLMException('API请求失败: ${errorData['error'] ?? response.statusCode}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
-  /// 内置模型：课程表文本解析（非流式，经当前节点 Supabase Edge Function 中转）
-  Future<GLMParseResult> _parseWithBuiltin(String ocrText) async {
-    final prompt = _buildPrompt(ocrText);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_builtinEndpointUrl),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'provider': 'builtin',
-            'node': _builtinNode,
-            'stream': false,
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': prompt,
-              },
-            ],
-          }),
-        ).timeout(const Duration(seconds: 60));
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ??
-            data['content'] as String? ?? '';
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
-  Future<GLMParseResult> _parseWithGLM(String ocrText) async {
-    if (_apiKey == null || _apiKey!.isEmpty) {
-      throw GLMException('请先设置 GLM API Key');
-    }
-
-    final prompt = _buildPrompt(ocrText);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_glmBaseUrl),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $_apiKey',
-          },
-          body: jsonEncode({
-            'model': _glmModel,
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': prompt,
-              },
-            ],
-            'temperature': 0.1,
-            'max_tokens': 4096,
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']['message']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络后重试\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
   /// 懒加载 Agnes 配置：内存缺失时从 SharedPreferences 读取
   Future<void> _ensureAgnesConfigLoaded() async {
     if (_agnesApiKey != null && _agnesApiKey!.trim().isNotEmpty) {
@@ -1568,179 +728,6 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
       _agnesModel = savedModel.trim();
     }
   }
-
-  /// Agnes AI：直连 OpenAI 兼容接口解析课程表（非流式）
-  Future<GLMParseResult> _parseWithAgnes(String ocrText) async {
-    await _ensureAgnesConfigLoaded();
-    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
-      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
-    }
-
-    final prompt = _buildPrompt(ocrText);
-
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        final response = await http.post(
-          Uri.parse(_agnesBaseUrl),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
-          },
-          body: jsonEncode({
-            'model': _agnesModel,
-            'messages': [
-              {
-                'role': 'system',
-                'content': _systemPrompt,
-              },
-              {
-                'role': 'user',
-                'content': prompt,
-              },
-            ],
-            'temperature': 0.1,
-            'max_tokens': 4096,
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-
-        if (data['error'] != null) {
-          throw GLMException('API错误: ${data['error']['message'] ?? data['error']}');
-        }
-
-        final content = data['choices']?[0]?['message']?['content'] as String? ?? '';
-        final selectedModel = data['model'] as String?;
-
-        if (content.isEmpty) {
-          throw GLMException('AI返回内容为空');
-        }
-
-        return _parseResponse(content, selectedModel: selectedModel);
-      } on http.ClientException catch (e) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw GLMException('网络连接失败，请检查网络后重试\n错误: $e');
-        }
-        await Future.delayed(Duration(seconds: retryCount * 2));
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('解析失败: $e');
-      }
-    }
-
-    throw GLMException('请求超时，请检查网络连接');
-  }
-
-  /// Agnes AI：直连连接测试
-  Future<String> _testAgnesConnection() async {
-    await _ensureAgnesConfigLoaded();
-    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
-      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_agnesBaseUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
-        },
-        body: jsonEncode({
-          'model': _agnesModel,
-          'messages': [
-            {'role': 'user', 'content': '你好'}
-          ],
-          'max_tokens': 50,
-        }),
-      ).timeout(const Duration(seconds: 30));
-
-      if (response.statusCode == 200) {
-        return 'Agnes AI连接成功';
-      } else {
-        throw GLMException('连接失败: ${response.statusCode}');
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  /// Agnes AI：直连对话（非流式），系统提示与 _chatWithNonDoubao 保持一致
-  Future<String> _chatWithAgnes(
-    String userMessage,
-    String? context,
-    List<CourseData>? courses,
-  ) async {
-    await _ensureAgnesConfigLoaded();
-    if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
-      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
-    }
-
-    String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
-
-当用户询问课程表相关问题时，以下是当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
-
-当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
-1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
-2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
-3. 删除课程：返回 {"action": "delete", "index": 课程索引}
-
-课程信息字段说明：
-- name: 课程名称（必填）
-- teacher: 教师姓名（可选）
-- location: 上课地点（可选）
-- dayOfWeek: 星期几，1=周一，7=周日（必填）
-- period: 第几节课，从1开始（必填）
-- duration: 课程持续节数，默认为2（可选）
-- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
-
-注意：
-- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
-- 其他情况下请用自然语言回答用户的问题''';
-
-    if (context != null && context.isNotEmpty) {
-      systemContent += '\n\n原始OCR识别内容：\n$context';
-    }
-
-    try {
-      final effort = await _resolvedAgnesReasoningEffort(null);
-      final response = await http.post(
-        Uri.parse(_agnesBaseUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${_agnesApiKey!.trim()}',
-        },
-        body: jsonEncode({
-          'model': _agnesModel,
-          'messages': [
-            {'role': 'system', 'content': systemContent},
-            {'role': 'user', 'content': userMessage},
-          ],
-          if (effort != null) 'reasoning_effort': effort,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-      }
-
-      final data = jsonDecode(response.body);
-      return data['choices'][0]['message']['content'] as String;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
   /// Agnes AI：解析思考强度（显式传入优先，否则读取配置）
   Future<String?> _resolvedAgnesReasoningEffort(String? passed) async {
     if (passed != null && passed.trim().isNotEmpty) {
@@ -1838,6 +825,280 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     }
   }
 
+  /// 自定义API：客户端直连流式对话（不经 Supabase 中转，参考 Agnes 直连策略以减少延迟）。
+  /// 在客户端复刻 Edge Function 的协议归一化：content/thinking/status/error 提取，
+  /// 兼容 OpenAI Chat Completions 与 Responses API 两种事件格式。
+  Stream<String> _chatWithCustomStream({
+    required List<Map<String, dynamic>> messages,
+    String? model,
+    String? reasoningEffort,
+  }) async* {
+    await _ensureCustomConfigLoaded();
+    final apiUrl = (_customApiUrl ?? '').trim();
+    final apiKey = (_customApiKey ?? '').trim();
+    if (apiUrl.isEmpty || apiKey.isEmpty) {
+      throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
+    }
+
+    final requestModel = (model != null && model.trim().isNotEmpty)
+        ? model.trim()
+        : ((_customModel != null && _customModel!.trim().isNotEmpty)
+            ? _customModel!.trim()
+            : _defaultCustomModel);
+    final effort = (reasoningEffort != null && reasoningEffort.trim().isNotEmpty)
+        ? reasoningEffort.trim()
+        : null;
+    final validEffort =
+        (effort != null && const {'low', 'medium', 'high'}.contains(effort)) ? effort : null;
+
+    debugPrint('[AI Service] Custom direct stream route model=$requestModel hasEffort=${validEffort != null}');
+
+    final httpClient = HttpClient();
+
+    try {
+      Future<HttpClientResponse> send(Map<String, dynamic> body) async {
+        final request = await httpClient.postUrl(Uri.parse(apiUrl));
+        request.headers.contentType = ContentType.json;
+        if (_detectCustomAuthHeader(apiUrl) == 'api-key') {
+          request.headers.set('api-key', apiKey);
+        } else {
+          request.headers.set('Authorization', 'Bearer $apiKey');
+        }
+        request.headers.set('Accept', 'text/event-stream');
+        request.write(jsonEncode(body));
+        return request.close();
+      }
+
+      final baseBody = <String, dynamic>{
+        'model': requestModel,
+        'messages': messages,
+        'stream': true,
+        if (validEffort != null) 'reasoning_effort': validEffort,
+      };
+      final requestBody = <String, dynamic>{...baseBody};
+      if (validEffort == null) {
+        // 直接回答：双参数禁思考。thinking(GLM 系) 与 reasoning_effort 'none'
+        // (实测部分默认开启思考的端点仅识别该值)，两者组合实测无冲突
+        requestBody['thinking'] = const {'type': 'disabled'};
+        requestBody['reasoning_effort'] = 'none';
+      }
+
+      var response = await send(requestBody);
+      if (response.statusCode == 400 && validEffort == null) {
+        // 部分端点不接受禁思考参数，回退为纯净请求体重试一次，保证功能可用
+        debugPrint('[AI Service] Custom direct stream got 400 with thinking-disable params, retrying without them');
+        try {
+          await response.drain<void>();
+        } catch (_) {}
+        response = await send(baseBody);
+      }
+
+      if (response.statusCode != 200) {
+        final errorBody = await response.transform(utf8.decoder).join();
+        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
+      }
+
+      String buffer = '';
+      String? returnedModel;
+
+      await for (final chunk in response.transform(utf8.decoder)) {
+        buffer += chunk;
+        final lines = buffer.split('\n');
+        buffer = lines.removeLast();
+
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
+
+          final data = trimmed.substring(5).trim();
+          if (data == '[DONE]') continue;
+
+          Map<String, dynamic>? parsed;
+          try {
+            final decoded = jsonDecode(data);
+            if (decoded is Map<String, dynamic>) parsed = decoded;
+          } catch (_) {
+            // Skip invalid JSON payloads.
+          }
+          if (parsed == null) continue;
+
+          returnedModel ??= _extractStreamModel(parsed, requestModel);
+
+          // 流内错误事件：与内置模型路径行为一致，直接抛出
+          final errorRaw = parsed['error'] ?? _rootStreamPayload(parsed)['error'];
+          if (errorRaw != null) {
+            String? errorMessage;
+            if (errorRaw is Map) {
+              errorMessage = errorRaw['message']?.toString() ??
+                  errorRaw['Message']?.toString() ??
+                  jsonEncode(errorRaw);
+            } else if (errorRaw is String && errorRaw.isNotEmpty) {
+              errorMessage = errorRaw;
+            }
+            if (errorMessage != null && errorMessage.isNotEmpty) {
+              throw GLMException('流式响应异常: $errorMessage');
+            }
+          }
+
+          final status = _extractStreamStatus(parsed);
+          if (status != null) {
+            yield '【状态】$status';
+          }
+          final thinking = _extractStreamThinking(parsed);
+          if (thinking != null && thinking.isNotEmpty && thinking != 'null') {
+            yield '【思考】$thinking';
+          }
+          final content = _extractStreamContent(parsed);
+          if (content != null && content.isNotEmpty) {
+            yield content;
+          }
+        }
+      }
+
+      _lastStreamedModel = returnedModel ?? requestModel;
+    } catch (e) {
+      if (e is GLMException) rethrow;
+      throw GLMException('对话失败: $e');
+    } finally {
+      httpClient.close();
+    }
+  }
+
+  /// 以下 _readStringLike/_rootStreamPayload/_firstStreamChoice 等辅助方法
+  /// 与 Edge Function（functions/NonDoubaoAPI/index.ts）的提取逻辑保持一致
+  static String? _readStringLike(dynamic value) {
+    if (value is String) {
+      return value.isNotEmpty ? value : null;
+    }
+    if (value is List) {
+      final parts = <String>[];
+      for (final item in value) {
+        if (item is String) {
+          parts.add(item);
+          continue;
+        }
+        if (item is Map) {
+          final text = _readStringLike(
+            item['text'] ??
+                item['Text'] ??
+                item['content'] ??
+                item['Content'] ??
+                item['value'] ??
+                item['Value'] ??
+                item['reasoning_content'] ??
+                item['reasoning'] ??
+                item['thinking'],
+          );
+          if (text != null) parts.add(text);
+        }
+      }
+      if (parts.isNotEmpty) return parts.join();
+    }
+    return null;
+  }
+
+  static Map<String, dynamic> _rootStreamPayload(Map<String, dynamic> parsed) {
+    final response = parsed['Response'];
+    if (response is Map<String, dynamic>) return response;
+    return parsed;
+  }
+
+  static Map<String, dynamic>? _firstStreamChoice(Map<String, dynamic> root) {
+    final choices = root['choices'] ?? root['Choices'];
+    if (choices is List && choices.isNotEmpty) {
+      final first = choices.first;
+      if (first is Map<String, dynamic>) return first;
+    }
+    return null;
+  }
+
+  static String _extractStreamModel(Map<String, dynamic> parsed, String fallback) {
+    final root = _rootStreamPayload(parsed);
+    final model = parsed['model'] ?? root['model'] ?? root['Model'];
+    if (model is String && model.isNotEmpty) return model;
+    return fallback;
+  }
+
+  static String? _extractStreamStatus(Map<String, dynamic> parsed) {
+    final eventType = parsed['type'];
+    if (eventType == 'response.web_search_call.in_progress') {
+      return '正在搜索网络...';
+    }
+    if (eventType == 'response.web_search_call.completed') {
+      return '搜索完成，正在整理答案...';
+    }
+    final root = _rootStreamPayload(parsed);
+    final status = root['status'] ?? root['Status'];
+    if (status is String && status.isNotEmpty) return status;
+    return null;
+  }
+
+  static String? _extractStreamThinking(Map<String, dynamic> parsed) {
+    final root = _rootStreamPayload(parsed);
+    final direct = _readStringLike(root['thinking'] ?? root['Thinking']);
+    if (direct != null) return direct;
+
+    final eventType = parsed['type'];
+    if (eventType == 'response.reasoning_summary_text.delta' ||
+        eventType == 'response.reasoning.delta') {
+      final eventThinking = _readStringLike(parsed['delta'] ?? parsed['Delta']);
+      if (eventThinking != null) return eventThinking;
+    }
+
+    final choice = _firstStreamChoice(root);
+    final delta = choice?['delta'];
+    final message = choice?['message'];
+    return _readStringLike(
+          parsed['reasoning_content'] ??
+              parsed['reasoning'] ??
+              parsed['thinking'],
+        ) ??
+        _readStringLike(
+          delta is Map
+              ? delta['reasoning_content'] ??
+                  delta['reasoning'] ??
+                  delta['thinking']
+              : null,
+        ) ??
+        _readStringLike(
+          message is Map
+              ? message['reasoning_content'] ??
+                  message['reasoning'] ??
+                  message['thinking']
+              : null,
+        ) ??
+        _readStringLike(
+          root['reasoning_content'] ?? root['reasoning'] ?? root['thinking'],
+        );
+  }
+
+  static String? _extractStreamContent(Map<String, dynamic> parsed) {
+    final eventType = parsed['type'];
+    if (eventType == 'response.output_text.delta') {
+      return _readStringLike(parsed['delta'] ?? parsed['Delta']);
+    }
+    if (eventType == 'response.output_text.done' || eventType == 'response.output_item.done') {
+      return _readStringLike(
+        parsed['text'] ??
+            parsed['delta'] ??
+            parsed['output_text'] ??
+            parsed['outputText'],
+      );
+    }
+
+    final root = _rootStreamPayload(parsed);
+    final choice = _firstStreamChoice(root);
+    final delta = choice?['delta'];
+    final message = choice?['message'];
+    final output = root['output'];
+    return _readStringLike(parsed['content'] ?? parsed['output_text']) ??
+        _readStringLike(root['content'] ?? root['Content']) ??
+        _readStringLike(delta is Map ? delta['content'] ?? delta['Content'] : null) ??
+        _readStringLike(delta is Map ? delta['text'] ?? delta['Text'] : null) ??
+        _readStringLike(message is Map ? message['content'] ?? message['Content'] : null) ??
+        _readStringLike(output is Map ? output['text'] ?? output['Text'] : null);
+  }
+
   static const String _systemPrompt = '''你是一个课程表解析助手。你的任务是将OCR识别的课程表文字转换为结构化的JSON数据。
 
 输出格式要求：
@@ -1915,318 +1176,6 @@ $ocrText
 
 请直接输出JSON数组：''';
   }
-
-  GLMParseResult _parseResponse(String content, {String? selectedModel}) {
-    try {
-      String jsonStr = content.trim();
-
-      if (jsonStr.contains('```json')) {
-        jsonStr = jsonStr.replaceAll(RegExp(r'```json\s*'), '').replaceAll(RegExp(r'\s*```'), '');
-      } else if (jsonStr.contains('```')) {
-        jsonStr = jsonStr.replaceAll(RegExp(r'```\s*'), '').replaceAll(RegExp(r'\s*```'), '');
-      }
-
-      int startIndex = jsonStr.indexOf('[');
-      int endIndex = jsonStr.lastIndexOf(']');
-      if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-        jsonStr = jsonStr.substring(startIndex, endIndex + 1);
-      }
-
-      if (jsonStr.isEmpty) {
-        throw GLMException('AI返回的JSON内容为空');
-      }
-
-      final List<dynamic> coursesJson = jsonDecode(jsonStr);
-
-      return GLMParseResult(
-        courses: coursesJson.map((json) => CourseData.fromJson(json as Map<String, dynamic>)).toList(),
-        rawContent: content,
-        selectedModel: selectedModel,
-      );
-    } catch (e) {
-      throw GLMException('JSON解析失败: $e\n原始内容: $content');
-    }
-  }
-
-  Future<String> testConnection() async {
-    if (_provider == AIProvider.hunyuan) {
-      return _testNonDoubaoConnection(
-        provider: 'hunyuan',
-        model: 'hunyuan-lite',
-        successMessage: '混元连接成功',
-      );
-    }
-    if (_provider == AIProvider.glm) {
-      return _testNonDoubaoConnection(
-        provider: 'glm',
-        model: _glmModel,
-        successMessage: 'GLM连接成功',
-      );
-    }
-    if (_provider == AIProvider.agnes) {
-      return _testAgnesConnection();
-    }
-    if (_provider == AIProvider.builtin) {
-      return _testBuiltinConnection();
-    }
-    return _testDoubaoConnection();
-  }
-
-  /// 内置模型：连接测试（经当前节点发一条最小消息验证链路）
-  Future<String> _testBuiltinConnection() async {
-    try {
-      final result = await _chatWithModelBuiltin(
-        messages: [
-          {'role': 'user', 'content': '你好'}
-        ],
-        model: null,
-      ).timeout(const Duration(seconds: 30));
-      if ((result['content'] as String).trim().isNotEmpty) {
-        return '内置模型节点$_builtinNode连接成功';
-      }
-      throw GLMException('连接失败: 返回内容为空');
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  Future<String> _testDoubaoConnection({String? model, String successMessage = '火山引擎连接成功'}) async {
-    try {
-      final response = await http.post(
-        Uri.parse(_doubaoEdgeFunctionUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          if (model != null && model.isNotEmpty) 'model': model,
-          'messages': [
-            {'role': 'user', 'content': '你好'}
-          ],
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        return successMessage;
-      } else {
-        throw GLMException('连接失败: ${response.statusCode}');
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  Future<String> _testHunyuanConnection() async {
-    if (_secretId == null || _secretId!.isEmpty) {
-      throw GLMException('请先设置腾讯云 SecretId');
-    }
-    if (_secretKey == null || _secretKey!.isEmpty) {
-      throw GLMException('请先设置腾讯云 SecretKey');
-    }
-    if (_supabaseUrl == null || _supabaseUrl!.isEmpty) {
-      throw GLMException('请先设置 Supabase Function URL');
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_supabaseUrl!),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': '$_secretId $_secretKey',
-        },
-        body: jsonEncode({
-          'model': 'hunyuan-lite',
-          'messages': [
-            {'role': 'user', 'content': '你好'}
-          ],
-        }),
-      ).timeout(const Duration(seconds: 30));
-
-      if (response.statusCode == 200) {
-        return '混元连接成功';
-      } else {
-        final errorData = jsonDecode(response.body);
-        throw GLMException('连接失败: ${errorData['error'] ?? response.statusCode}');
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  Future<String> _testGLMConnection() async {
-    if (_apiKey == null || _apiKey!.isEmpty) {
-      throw GLMException('请先设置 GLM API Key');
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_glmBaseUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $_apiKey',
-        },
-        body: jsonEncode({
-          'model': _glmModel,
-          'messages': [
-            {'role': 'user', 'content': '你好'}
-          ],
-          'max_tokens': 50,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        return 'GLM连接成功';
-      } else {
-        throw GLMException('连接失败: ${response.statusCode}');
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('连接测试失败: $e');
-    }
-  }
-
-  Future<String> chat({
-    required String userMessage,
-    String? context,
-    List<CourseData>? courses,
-  }) async {
-    if (_provider == AIProvider.custom) {
-      final customModel = (_customModel != null && _customModel!.trim().isNotEmpty)
-          ? _customModel!.trim()
-          : _defaultCustomModel;
-      return _chatWithNonDoubao(
-        userMessage,
-        context,
-        courses,
-        provider: 'custom',
-        model: customModel,
-      );
-    }
-
-    if (_provider == AIProvider.doubao) {
-      return _chatWithDoubao(userMessage, context, courses);
-    }
-
-    if (_provider == AIProvider.agnes) {
-      return _chatWithAgnes(userMessage, context, courses);
-    }
-
-    if (_provider == AIProvider.builtin) {
-      // 内置模型：经当前节点 Supabase Edge Function 中转（非流式）
-      String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
-
-当用户询问课程表相关问题时，以下是当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
-
-当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
-1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
-2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
-3. 删除课程：返回 {"action": "delete", "index": 课程索引}
-
-课程信息字段说明：
-- name: 课程名称（必填）
-- teacher: 教师姓名（可选）
-- location: 上课地点（可选）
-- dayOfWeek: 星期几，1=周一，7=周日（必填）
-- period: 第几节课，从1开始（必填）
-- duration: 课程持续节数，默认为2（可选）
-- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
-
-注意：
-- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
-- 其他情况下请用自然语言回答用户的问题''';
-
-      if (context != null && context.isNotEmpty) {
-        systemContent += '\n\n原始OCR识别内容：\n$context';
-      }
-
-      final result = await _chatWithModelBuiltin(
-        messages: [
-          {'role': 'system', 'content': systemContent},
-          {'role': 'user', 'content': userMessage},
-        ],
-        model: null,
-      );
-      return result['content'] as String;
-    }
-
-    if (_provider == AIProvider.hunyuan) {
-      return _chatWithNonDoubao(
-        userMessage,
-        context,
-        courses,
-        provider: 'hunyuan',
-        model: 'hunyuan-lite',
-      );
-    }
-
-    return _chatWithNonDoubao(
-      userMessage,
-      context,
-      courses,
-      provider: 'glm',
-      model: _glmModel,
-    );
-  }
-
-  Future<String> _chatWithDoubao(String userMessage, String? context, List<CourseData>? courses, {String? model}) async {
-    String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
-
-当用户询问课程表相关问题时，以下是当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
-
-当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
-1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
-2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
-3. 删除课程：返回 {"action": "delete", "index": 课程索引}
-
-课程信息字段说明：
-- name: 课程名称（必填）
-- teacher: 教师姓名（可选）
-- location: 上课地点（可选）
-- dayOfWeek: 星期几，1=周一，7=周日（必填）
-- period: 第几节课，从1开始（必填）
-- duration: 课程持续节数，默认为2（可选）
-- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
-
-注意：
-- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
-- 其他情况下请用自然语言回答用户的问题''';
-
-    if (context != null && context.isNotEmpty) {
-      systemContent += '\n\n原始OCR识别内容：\n$context';
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_doubaoEdgeFunctionUrl),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'type': 'chat',
-          if (model != null && model.isNotEmpty) 'model': model,
-          'messages': [
-            {'role': 'system', 'content': systemContent},
-            {'role': 'user', 'content': userMessage},
-          ],
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body);
-      return data['choices'][0]['message']['content'] as String;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
   Stream<String> chatWithModelStream({
     required String userMessage,
     String? model,
@@ -2239,21 +1188,11 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
     String? reasoningEffort,
   }) async* {
     final resolvedProvider = provider ??
-      (_provider == AIProvider.hunyuan
-        ? 'hunyuan'
-        : (_provider == AIProvider.agnes
-          ? 'agnes'
-          : (_provider == AIProvider.builtin
-            ? 'builtin'
-            : (_provider == AIProvider.glm
-              ? 'glm'
-              : (_provider == AIProvider.custom ? 'custom' : 'doubao')))));
+      (_provider == AIProvider.custom
+          ? 'custom'
+          : (_provider == AIProvider.agnes ? 'agnes' : 'builtin'));
     String? resolvedModel = model;
-    if (resolvedProvider == 'hunyuan' && (resolvedModel == null || resolvedModel.isEmpty)) {
-      resolvedModel = 'hunyuan-lite';
-    } else if (resolvedProvider == 'glm' && (resolvedModel == null || resolvedModel.isEmpty)) {
-      resolvedModel = _glmModel;
-    } else if (resolvedProvider == 'agnes') {
+    if (resolvedProvider == 'agnes') {
       await _ensureAgnesConfigLoaded();
       if ((_agnesApiKey ?? '').trim().isEmpty) {
         throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
@@ -2267,9 +1206,6 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
           : _defaultCustomModel;
     }
 
-    if (resolvedProvider != 'doubao' && resolvedProvider != 'hunyuan' && resolvedProvider != 'glm' && resolvedProvider != 'custom' && resolvedProvider != 'agnes' && resolvedProvider != 'builtin') {
-      throw GLMException('当前provider不支持此功能: $resolvedProvider');
-    }
 
     final List<Map<String, dynamic>> messages = [];
     
@@ -2306,399 +1242,40 @@ ${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂�
       messages.add({'role': 'user', 'content': userMessage});
     }
 
-    if (resolvedProvider != 'doubao') {
-      debugPrint('[AI Service] chatWithModelStream route provider=$resolvedProvider model=${resolvedModel ?? ''} hasImage=${imageBase64 != null && imageBase64.isNotEmpty}');
-      if (resolvedProvider == 'agnes') {
-        // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
-        yield* _chatWithAgnesStream(
-          messages: messages,
-          model: resolvedModel,
-          reasoningEffort: reasoningEffort,
-        );
-        return;
-      }
-      if (resolvedProvider == 'builtin') {
-        // 内置模型：经当前节点的 Supabase Edge Function 中转（协议同 NonDoubao）
-        yield* _chatWithBuiltinStream(
-          messages: messages,
-          model: resolvedModel,
-          reasoningEffort: reasoningEffort,
-        );
-        return;
-      }
-      yield* _chatWithNonDoubaoStream(
+    debugPrint('[AI Service] chatWithModelStream route provider=$resolvedProvider model=${resolvedModel ?? ''} hasImage=${imageBase64 != null && imageBase64.isNotEmpty}');
+    if (resolvedProvider == 'agnes') {
+      // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
+      yield* _chatWithAgnesStream(
         messages: messages,
-        provider: resolvedProvider,
         model: resolvedModel,
         reasoningEffort: reasoningEffort,
       );
       return;
     }
-
-    final httpClient = HttpClient();
-    
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_doubaoEdgeFunctionUrl));
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode({
-        'type': imageBase64 != null ? 'vision' : 'chat',
-        'stream': true,
-        'fast_mode': fastMode,
-        'enable_search': resolvedProvider == 'doubao' ? enableSearch : false,
-        if (resolvedModel != null && resolvedModel.isNotEmpty) 'model': resolvedModel,
-        'messages': messages,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-      String? returnedModel;
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['content'] as String?;
-            final status = parsed['status'] as String?;
-            final thinking = parsed['thinking'] as String?;
-            returnedModel ??= parsed['model'] as String?;
-            
-            // 优先处理内容
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-            // 处理状态信息
-            else if (status != null && status.isNotEmpty) {
-              yield '【状态】$status';
-            }
-            // 处理思考过程
-            else if (thinking != null && thinking.isNotEmpty) {
-              yield '【思考】$thinking';
-            }
-          } catch (_) {
-            // Skip invalid JSON
-          }
-        }
-      }
-
-      // Store the model for reference
-      if (returnedModel != null) {
-        _lastStreamedModel = returnedModel;
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    } finally {
-      httpClient.close();
+    if (resolvedProvider == 'builtin') {
+      // 内置模型：经当前节点的 Supabase Edge Function 中转（协议同 NonDoubao）
+      yield* _chatWithBuiltinStream(
+        messages: messages,
+        model: resolvedModel,
+        reasoningEffort: reasoningEffort,
+      );
+      return;
     }
-  }
-
-  Stream<String> _chatWithHunyuanStream(
-    String userMessage,
-    String? systemPrompt,
-    List<Map<String, String>>? history,
-    String model,
-  ) async* {
-    if (_secretId == null || _secretKey == null) {
-      throw GLMException('请先配置混元API密钥');
+    if (resolvedProvider == 'custom') {
+      // 自定义API：客户端直连上游（不经 Supabase 中转，减少延迟）
+      yield* _chatWithCustomStream(
+        messages: messages,
+        model: resolvedModel,
+        reasoningEffort: reasoningEffort,
+      );
+      return;
     }
-
-    final List<Map<String, String>> messages = [];
-    
-    if (systemPrompt != null) {
-      messages.add({'role': 'system', 'content': systemPrompt});
-    }
-    
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
-        messages.add({
-          'role': msg['role'] ?? 'user',
-          'content': msg['content'] ?? '',
-        });
-      }
-    }
-    
-    messages.add({'role': 'user', 'content': userMessage});
-
-    final httpClient = HttpClient();
-    
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_supabaseUrl ?? _defaultSupabaseUrl));
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', '$_secretId $_secretKey');
-      request.write(jsonEncode({
-        'model': model,
-        'messages': messages,
-        'stream': true,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('混元API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['content'] as String?;
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-          } catch (_) {
-            // Skip invalid JSON
-          }
-        }
-      }
-      
-      _lastStreamedModel = model;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('混元对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Stream<String> _chatWithGLMStream(
-    String userMessage,
-    String? systemPrompt,
-    List<Map<String, String>>? history,
-    String model,
-  ) async* {
-    if (_apiKey == null) {
-      throw GLMException('请先配置GLM API密钥');
-    }
-
-    final List<Map<String, String>> messages = [];
-    
-    if (systemPrompt != null) {
-      messages.add({'role': 'system', 'content': systemPrompt});
-    }
-    
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
-        messages.add({
-          'role': msg['role'] ?? 'user',
-          'content': msg['content'] ?? '',
-        });
-      }
-    }
-    
-    messages.add({'role': 'user', 'content': userMessage});
-
-    final httpClient = HttpClient();
-    
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_glmBaseUrl));
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', 'Bearer $_apiKey');
-      request.write(jsonEncode({
-        'model': model,
-        'messages': messages,
-        'stream': true,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('GLM API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['choices']?[0]?['delta']?['content'] as String?;
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-          } catch (_) {
-            // Skip invalid JSON
-          }
-        }
-      }
-      
-      _lastStreamedModel = model;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('GLM对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Stream<String> _chatWithCustomStream(
-    String userMessage,
-    String? systemPrompt,
-    List<Map<String, String>>? history,
-    String model,
-  ) async* {
-    if (_customApiUrl == null || _customApiKey == null || _customApiUrl!.isEmpty || _customApiKey!.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      _customApiUrl = prefs.getString('custom_api_url');
-      _customApiKey = prefs.getString('custom_api_key');
-      _customModel = prefs.getString('custom_api_model');
-    }
-
-    final apiUrl = (_customApiUrl ?? '').trim();
-    final apiKey = (_customApiKey ?? '').trim();
-    final resolvedModel = model.trim().isNotEmpty
-        ? model.trim()
-        : ((_customModel != null && _customModel!.trim().isNotEmpty)
-            ? _customModel!.trim()
-            : _defaultCustomModel);
-
-    if (apiUrl.isEmpty || apiKey.isEmpty) {
-      throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
-    }
-
-    final List<Map<String, String>> messages = [];
-
-    if (systemPrompt != null) {
-      messages.add({'role': 'system', 'content': systemPrompt});
-    }
-
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
-        messages.add({
-          'role': msg['role'] ?? 'user',
-          'content': msg['content'] ?? '',
-        });
-      }
-    }
-
-    messages.add({'role': 'user', 'content': userMessage});
-
-    final httpClient = HttpClient();
-
-    try {
-      final request = await httpClient.postUrl(Uri.parse(apiUrl));
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', 'Bearer $apiKey');
-      request.headers.set('Accept', 'text/event-stream');
-      request.write(jsonEncode({
-        'model': resolvedModel,
-        'messages': messages,
-        'stream': true,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('自定义API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-      String? returnedModel;
-  bool sawReasoning = false;
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            returnedModel ??= parsed['model'] as String?;
-
-            final dynamic deltaContent = parsed['choices']?[0]?['delta']?['content'];
-            final dynamic messageContent = parsed['choices']?[0]?['message']?['content'];
-            final dynamic plainContent = parsed['content'];
-            final dynamic deltaReasoning =
-                parsed['choices']?[0]?['delta']?['reasoning_content'] ??
-                parsed['choices']?[0]?['delta']?['reasoning'] ??
-                parsed['choices']?[0]?['delta']?['thinking'];
-            final dynamic messageReasoning =
-                parsed['choices']?[0]?['message']?['reasoning_content'] ??
-                parsed['choices']?[0]?['message']?['reasoning'] ??
-                parsed['choices']?[0]?['message']?['thinking'];
-            final dynamic plainReasoning =
-                parsed['reasoning_content'] ?? parsed['reasoning'] ?? parsed['thinking'];
-
-            final reasoning =
-                (deltaReasoning ?? messageReasoning ?? plainReasoning)?.toString();
-            final content = (deltaContent ?? messageContent ?? plainContent)?.toString();
-
-            if (reasoning != null && reasoning.isNotEmpty && reasoning != 'null') {
-              sawReasoning = true;
-              yield '【思考】$reasoning';
-            }
-
-            if (content != null && content.isNotEmpty && content != 'null') {
-              yield content;
-            }
-          } catch (_) {
-            // Skip invalid JSON payloads from stream.
-          }
-        }
-      }
-
-      if (sawReasoning) {
-        await _cacheCustomReasoningCapability(
-          apiUrl: apiUrl,
-          model: resolvedModel,
-          isReasoning: true,
-        );
-      }
-
-      _lastStreamedModel = returnedModel ?? resolvedModel;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('自定义API对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
+    yield* _chatWithNonDoubaoStream(
+      messages: messages,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      reasoningEffort: reasoningEffort,
+    );
   }
 
   String? _lastStreamedModel;
@@ -2763,27 +1340,17 @@ ${jsonEncode(coursesJson)}
     messages.add({'role': 'user', 'content': userMessage});
 
     String? model;
-    String provider = 'doubao';
-    if (_provider == AIProvider.hunyuan) {
-      provider = 'hunyuan';
-      model = 'hunyuan-lite';
-    } else if (_provider == AIProvider.glm) {
-      provider = 'glm';
-      model = _glmModel;
-    } else if (_provider == AIProvider.agnes) {
+    String provider;
+    if (_provider == AIProvider.agnes) {
       provider = 'agnes';
       model = _agnesModel;
-    } else if (_provider == AIProvider.builtin) {
-      provider = 'builtin';
     } else if (_provider == AIProvider.custom) {
       provider = 'custom';
       model = (_customModel != null && _customModel!.trim().isNotEmpty)
           ? _customModel!.trim()
           : _defaultCustomModel;
-    }
-    if (provider == 'doubao') {
-      yield* _chatScheduleDoubaoStream(messages, model: model);
-      return;
+    } else {
+      provider = 'builtin';
     }
     if (provider == 'agnes') {
       // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
@@ -2795,413 +1362,21 @@ ${jsonEncode(coursesJson)}
       yield* _chatWithBuiltinStream(messages: messages, model: model, reasoningEffort: reasoningEffort);
       return;
     }
+    if (provider == 'custom') {
+      // 自定义API：客户端直连上游（不经 Supabase 中转，减少延迟）
+      yield* _chatWithCustomStream(
+        messages: messages,
+        model: model,
+        reasoningEffort: reasoningEffort,
+      );
+      return;
+    }
     yield* _chatWithNonDoubaoStream(
       messages: messages,
       provider: provider,
       model: model,
       reasoningEffort: reasoningEffort,
     );
-  }
-
-  Stream<String> _chatScheduleDoubaoStream(List<Map<String, dynamic>> messages, {String? model}) async* {
-    final httpClient = HttpClient();
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_doubaoEdgeFunctionUrl));
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode({
-        'type': 'chat',
-        'stream': true,
-        if (model != null && model.isNotEmpty) 'model': model,
-        'messages': messages,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-      String? returnedModel;
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['content'] as String?;
-            returnedModel ??= parsed['model'] as String?;
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-          } catch (_) {}
-        }
-      }
-
-      if (returnedModel != null) {
-        _lastStreamedModel = returnedModel;
-      }
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Stream<String> _chatScheduleHunyuanStream(List<Map<String, dynamic>> messages) async* {
-    if (_secretId == null || _secretKey == null) {
-      throw GLMException('请先配置混元API密钥');
-    }
-
-    final httpClient = HttpClient();
-    
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_supabaseUrl ?? _defaultSupabaseUrl));
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', '$_secretId $_secretKey');
-      request.write(jsonEncode({
-        'model': 'hunyuan-lite',
-        'messages': messages,
-        'stream': true,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('混元API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['content'] as String?;
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-          } catch (_) {}
-        }
-      }
-      
-      _lastStreamedModel = 'hunyuan-lite';
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('混元对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Stream<String> _chatScheduleGLMStream(List<Map<String, dynamic>> messages) async* {
-    if (_apiKey == null) {
-      throw GLMException('请先配置GLM API密钥');
-    }
-
-    final httpClient = HttpClient();
-    
-    try {
-      final request = await httpClient.postUrl(Uri.parse(_glmBaseUrl));
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', 'Bearer $_apiKey');
-      request.write(jsonEncode({
-        'model': _glmModel,
-        'messages': messages,
-        'stream': true,
-      }));
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('GLM API请求失败: ${response.statusCode} - $errorBody');
-      }
-
-      String buffer = '';
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
-
-        for (final line in lines) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-          
-          final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
-
-          try {
-            final parsed = jsonDecode(data);
-            final content = parsed['choices']?[0]?['delta']?['content'] as String?;
-            if (content != null && content.isNotEmpty) {
-              yield content;
-            }
-          } catch (_) {}
-        }
-      }
-      
-      _lastStreamedModel = _glmModel;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('GLM对话失败: $e');
-    } finally {
-      httpClient.close();
-    }
-  }
-
-  Future<Map<String, dynamic>> chatWithModel({
-    required String userMessage,
-    String? model,
-    String? systemPrompt,
-    List<Map<String, String>>? history,
-  }) async {
-    String? resolvedModel = model;
-    if (resolvedModel == null || resolvedModel.isEmpty) {
-      if (_provider == AIProvider.hunyuan) {
-        resolvedModel = 'hunyuan-lite';
-      } else if (_provider == AIProvider.glm) {
-        resolvedModel = _glmModel;
-      } else if (_provider == AIProvider.agnes) {
-        resolvedModel = _agnesModel;
-      } else if (_provider == AIProvider.custom) {
-        resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
-            ? _customModel!.trim()
-            : _defaultCustomModel;
-      }
-    }
-
-    final List<Map<String, dynamic>> messages = [];
-    
-    if (systemPrompt != null) {
-      messages.add({'role': 'system', 'content': systemPrompt});
-    }
-    
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
-        messages.add({
-          'role': msg['role'] ?? 'user',
-          'content': msg['content'] ?? '',
-        });
-      }
-    }
-    
-    messages.add({'role': 'user', 'content': userMessage});
-
-    if (_provider == AIProvider.doubao) {
-      try {
-        final response = await http.post(
-          Uri.parse(_doubaoEdgeFunctionUrl),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'type': 'chat',
-            if (resolvedModel != null && resolvedModel.isNotEmpty) 'model': resolvedModel,
-            'messages': messages,
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode}');
-        }
-
-        final data = jsonDecode(response.body);
-        return {
-          'content': data['choices'][0]['message']['content'] as String,
-          'model': data['model'] as String,
-        };
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('对话失败: $e');
-      }
-    }
-
-    if (_provider == AIProvider.custom) {
-      return _chatWithModelNonDoubao(
-        messages: messages,
-        provider: 'custom',
-        model: resolvedModel,
-      );
-    }
-
-    if (_provider == AIProvider.builtin) {
-      // 内置模型：经当前节点的 Supabase Edge Function 中转（非流式）
-      return _chatWithModelBuiltin(messages: messages, model: resolvedModel);
-    }
-
-    if (_provider == AIProvider.agnes) {
-      // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
-      await _ensureAgnesConfigLoaded();
-      if ((_agnesApiKey ?? '').trim().isEmpty) {
-        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
-      }
-      final requestModel = (resolvedModel != null && resolvedModel.trim().isNotEmpty)
-          ? resolvedModel.trim()
-          : _agnesModel;
-      try {
-        final effort = await _resolvedAgnesReasoningEffort(null);
-        final response = await http.post(
-          Uri.parse(_agnesBaseUrl),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $_agnesApiKey',
-          },
-          body: jsonEncode({
-            'model': requestModel,
-            'messages': messages,
-            if (effort != null) 'reasoning_effort': effort,
-          }),
-        );
-
-        if (response.statusCode != 200) {
-          throw GLMException('API请求失败: ${response.statusCode} - ${response.body}');
-        }
-
-        final data = jsonDecode(response.body);
-        return {
-          'content': data['choices'][0]['message']['content'] as String,
-          'model': data['model'] as String? ?? requestModel,
-        };
-      } catch (e) {
-        if (e is GLMException) rethrow;
-        throw GLMException('对话失败: $e');
-      }
-    }
-
-    return _chatWithModelNonDoubao(
-      messages: messages,
-      provider: _provider == AIProvider.hunyuan ? 'hunyuan' : 'glm',
-      model: resolvedModel,
-    );
-  }
-
-  Future<String> _chatWithHunyuan(String userMessage, String? context, List<CourseData>? courses) async {
-    if (_secretId == null || _secretKey == null || _supabaseUrl == null) {
-      throw GLMException('请先配置混元API');
-    }
-
-    String systemContent = '''你是一个智能助手，可以帮助用户解答各种问题。
-
-当用户询问课程表相关问题时，以下是当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}
-
-当用户要求修改课程时，请分析用户的需求，然后返回一个JSON对象来描述修改操作：
-1. 添加课程：返回 {"action": "add", "course": {...课程信息...}}
-2. 修改课程：返回 {"action": "modify", "index": 课程索引, "course": {...修改后的课程信息...}}
-3. 删除课程：返回 {"action": "delete", "index": 课程索引}
-
-课程信息字段说明：
-- name: 课程名称（必填）
-- teacher: 教师姓名（可选）
-- location: 上课地点（可选）
-- dayOfWeek: 星期几，1=周一，7=周日（必填）
-- period: 第几节课，从1开始（必填）
-- duration: 课程持续节数，默认为2（可选）
-- weeks: 上课周次，支持不连续周次，格式如 "1,3,5-8,10"（可选）
-
-注意：
-- 只有当用户明确要求修改课程时，才返回JSON格式的修改指令
-- 其他情况下请用自然语言回答用户的问题''';
-
-    if (context != null && context.isNotEmpty) {
-      systemContent += '\n\n原始OCR识别内容：\n$context';
-    }
-
-    try {
-      final response = await http.post(
-        Uri.parse(_supabaseUrl!),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': '$_secretId $_secretKey',
-        },
-        body: jsonEncode({
-          'model': 'hunyuan-lite',
-          'messages': [
-            {'role': 'system', 'content': systemContent},
-            {'role': 'user', 'content': userMessage},
-          ],
-        }),
-      ).timeout(const Duration(seconds: 60));
-
-      if (response.statusCode != 200) {
-        final errorData = jsonDecode(response.body);
-        throw GLMException('API请求失败: ${errorData['error'] ?? response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body);
-      return data['choices'][0]['message']['content'] as String;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
-  }
-
-  Future<String> _chatWithGLM(String userMessage, String? context, List<CourseData>? courses) async {
-    if (_apiKey == null || _apiKey!.isEmpty) {
-      throw GLMException('请先设置 GLM API Key');
-    }
-
-    try {
-      String systemContent = '''你是一个课程表助手。用户会问你关于课程表的问题，请用简洁友好的方式回答。
-如果用户想修改课程信息，请给出建议。
-当前识别到的课程数据：
-${courses != null ? jsonEncode(courses.map((c) => c.toJson()).toList()) : '暂无'}''';
-
-      if (context != null && context.isNotEmpty) {
-        systemContent += '\n\n原始OCR识别内容：\n$context';
-      }
-
-      final response = await http.post(
-        Uri.parse(_glmBaseUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $_apiKey',
-        },
-        body: jsonEncode({
-          'model': _glmModel,
-          'messages': [
-            {'role': 'system', 'content': systemContent},
-            {'role': 'user', 'content': userMessage},
-          ],
-          'temperature': 0.7,
-          'max_tokens': 1024,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        throw GLMException('API请求失败: ${response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body);
-      return data['choices'][0]['message']['content'] as String;
-    } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
-    }
   }
 }
 

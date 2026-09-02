@@ -80,7 +80,7 @@ class TodayMediumWidget : GlanceAppWidget() {
                     ))
             ) {
                 Column(
-                modifier = GlanceModifier.fillMaxSize().padding(12.dp, 10.dp, 12.dp, 12.dp),
+                modifier = GlanceModifier.fillMaxSize().padding(12.dp, 8.dp, 12.dp, 8.dp),
                 horizontalAlignment = Alignment.Horizontal.Start
             ) {
                 Row(
@@ -111,6 +111,7 @@ class TodayMediumWidget : GlanceAppWidget() {
                             )
                         )
                     }
+                    Spacer(GlanceModifier.defaultWeight())
                 }
                 Spacer(GlanceModifier.height(4.dp))
 
@@ -140,15 +141,38 @@ class TodayMediumWidget : GlanceAppWidget() {
                             Spacer(GlanceModifier.height(4.dp))
                         }
                     }
-                    if (data.courses.size > 2) {
+
+                    // 底部左下角：剩余课程圆点行（参考 2x2 的 BottomDotsRow
+                    // 样式），文案改为「此外还有x节课」；左侧缩进与课程卡
+                    // 颜色条对齐（课程卡 padding horizontal = 7.dp）
+                    if (!data.isHoliday && data.courses.size > 2) {
+                        val remainingCourses = data.courses.drop(2)
                         Spacer(GlanceModifier.height(4.dp))
-                        Text(
-                            text = "还有 ${data.courses.size - 2} 节课…",
-                            style = TextStyle(
-                                color = WidgetTheme.hintProvider(),
-                                fontSize = 11.sp
+                        Row(
+                            modifier = GlanceModifier.padding(start = 7.dp),
+                            verticalAlignment = Alignment.Vertical.CenterVertically
+                        ) {
+                            remainingCourses.forEachIndexed { index, c ->
+                                Box(
+                                    modifier = GlanceModifier
+                                        .size(5.dp)
+                                        .cornerRadius(3.dp)
+                                        .background(WidgetTheme.colorProvider(c.color))
+                                ) {}
+                                if (index < remainingCourses.size - 1) {
+                                    Spacer(GlanceModifier.width(3.dp))
+                                }
+                            }
+                            Spacer(GlanceModifier.width(6.dp))
+                            Text(
+                                text = "此外还有${remainingCourses.size}节课",
+                                style = TextStyle(
+                                    color = WidgetTheme.hintProvider(),
+                                    fontSize = 10.sp
+                                ),
+                                maxLines = 1
                             )
-                        )
+                        }
                     }
                 }
                 }
@@ -158,12 +182,12 @@ class TodayMediumWidget : GlanceAppWidget() {
 
     @Composable
     private fun CourseCard(course: WidgetData.Course) {
-        Row(
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .cornerRadius(10.dp)
-                .background(WidgetTheme.cardProvider())
-                .padding(7.dp),
+            Row(
+                modifier = GlanceModifier
+                    .fillMaxWidth()
+                    .cornerRadius(10.dp)
+                    .background(WidgetTheme.cardProvider())
+                    .padding(horizontal = 7.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Vertical.CenterVertically
         ) {
             Box(

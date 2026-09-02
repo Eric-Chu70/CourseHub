@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
 import '../models/course.dart';
 import '../utils/course_color_palette.dart';
 import '../utils/storage.dart';
