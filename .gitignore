@@ -31,6 +31,12 @@ _edit_probe.txt
 # OCR 已移除，PaddleOCR 模型不再随仓库分发（如需可从 PaddleOCR 官方重新下载）
 assets/paddleocr/
 
+# 软著申请材料（功能说明书/源代码文档）与生成脚本，仅备份到 Developing，不入库
+gen_manual_doc.py
+gen_soft_copyright.py
+功能说明书_*.docx
+源代码_*.docx
+
 # IntelliJ related
 *.iml
 *.ipr

@@ -133,6 +133,8 @@ class AIService {
   Future<void> setBuiltinNode(int node) async {
     if (node < 1 || node > 4) return;
     _builtinNode = node;
+    // 用户显式选定节点（含从其他 provider 中途切到内置）后，本会话不再随机
+    _builtinNodeRandomizedThisSession = true;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('builtin_node', node);
   }

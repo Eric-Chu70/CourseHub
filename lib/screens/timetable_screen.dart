@@ -1961,7 +1961,7 @@ class TimetableScreenState extends State<TimetableScreen>
           // 「显示非本周课程」关闭：非本周课程块不渲染，也不加模糊区域
           if (activeCourses.isEmpty && !_showInactiveCourses) continue;
           final course = activeCourses.isEmpty
-              ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
+              ? _pickFallbackCourse(sameStartCourses, week)
               : activeCourses.first;
           // 出现动画期间：新课程块的模糊区域不走静态层（恒 sigma 8 会在
           // 动画开始前（420ms 对话框退出期内）就完整露出——「先出现一个
@@ -2484,8 +2484,7 @@ class TimetableScreenState extends State<TimetableScreen>
       // 原位改放透明点击区——点击后原课程卡片淡入短暂显示 5s（见
       // _beginInactivePeek），左右滑动切换周页自动隐藏（同加号遮罩）
       if (isInactiveInCurrentWeek && !_showInactiveCourses) {
-        final hiddenCourse =
-            sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b);
+        final hiddenCourse = _pickFallbackCourse(sameStartCourses, week);
         // morph 飞行中：浮现卡片与真课程块同样由翻转卡片（复刻）接管，
         // 随 _morphBlockFade 渐隐/渐显（Opacity 包在 Positioned 内部，
         // 避免将 Positioned 包进 IgnorePointer/Opacity 破坏 Stack 布局）
@@ -2501,7 +2500,7 @@ class TimetableScreenState extends State<TimetableScreen>
         continue;
       }
         final course = isInactiveInCurrentWeek
-          ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
+          ? _pickFallbackCourse(sameStartCourses, week)
           : activeCourses.first;
 
       final hasAlternativeCourses = sameStartCourses.length > 1;
@@ -2535,9 +2534,39 @@ class TimetableScreenState extends State<TimetableScreen>
 
   bool _shouldShowCourse(Course course, int week) {
     if (course.weeks == null || course.weeks!.isEmpty) return true;
-    
+
     final weeks = _parseWeeks(course.weeks!);
     return weeks.contains(week);
+  }
+
+  /// 多课程叠加但本周都不上时选「代表课程」：
+  /// 全部未开始 → 开始周离本周最近者；已全部结束 → 结束周离本周最近者；
+  /// 并列时保持列表原序（稳定）。网格卡片、模糊层、非本周浮现位共用
+  Course _pickFallbackCourse(List<Course> courses, int week) {
+    Course pick(Course best, Course c, int Function(Course) dist) {
+      final dc = dist(c);
+      final db = dist(best);
+      if (dc < db) return c;
+      return best;
+    }
+
+    int startDist(Course c) {
+      final weeks = _parseWeeks(c.weeks ?? '');
+      if (weeks.isEmpty) return 0;
+      return weeks.reduce((a, b) => a < b ? a : b) - week;
+    }
+
+    int endDist(Course c) {
+      final weeks = _parseWeeks(c.weeks ?? '');
+      if (weeks.isEmpty) return 0;
+      return week - weeks.reduce((a, b) => a > b ? a : b);
+    }
+
+    final allNotStarted = courses.every((c) => startDist(c) > 0);
+    if (allNotStarted) {
+      return courses.reduce((best, c) => pick(best, c, startDist));
+    }
+    return courses.reduce((best, c) => pick(best, c, endDist));
   }
 
   Set<int> _parseWeeks(String weeks) {
@@ -2881,7 +2910,6 @@ class TimetableScreenState extends State<TimetableScreen>
             final currentCourse = slotCourses[currentPage];
             final courseColor = _parseColor(currentCourse.color);
             final dialogTasks = _getDialogTasksForCourse(currentCourse);
-            final slideSign = currentPage >= previousPage ? 1.0 : -1.0;
             final dialogWidth = math.min(420.0, MediaQuery.of(context).size.width - 48);
             final headerHeight = _calculateCourseHeaderHeight(
               course: currentCourse,
@@ -2918,54 +2946,70 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                     child: Row(
                                 children: [
-                                  AnimatedSwitcher(
+                                  // 课程图标：单一静态组件（不随课程重建），
+                                  // 尺寸随头部高度平滑缩放、颜色随课程渐变，
+                                  // 垂直位置随头部高度动画自然平滑位移保持居中
+                                  AnimatedContainer(
                                     duration: const Duration(milliseconds: 260),
-                                    switchInCurve: Curves.easeOut,
-                                    switchOutCurve: Curves.easeIn,
-                                    transitionBuilder: (child, anim) {
-                                      return FadeTransition(
-                                        opacity: anim,
-                                        child: SlideTransition(
-                                          position: Tween<Offset>(
-                                            begin: Offset(-0.12 * slideSign, 0),
-                                            end: Offset.zero,
-                                          ).animate(anim),
-                                          child: child,
-                                        ),
-                                      );
-                                    },
-                                    layoutBuilder: (currentChild, previousChildren) {
-                                      return currentChild ?? const SizedBox.shrink();
-                                    },
-                                    child: Container(
-                                      key: ValueKey('course_icon_${currentCourse.id}'),
-                                      width: iconBoxSize,
-                                      height: iconBoxSize,
-                                      decoration: BoxDecoration(
-                                        color: courseColor.withValues(alpha: 0.28),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Icon(
-                                        Icons.book,
-                                        color: courseColor,
-                                        size: iconGlyphSize,
+                                    curve: Curves.easeOut,
+                                    width: iconBoxSize,
+                                    height: iconBoxSize,
+                                    decoration: BoxDecoration(
+                                      color: courseColor.withValues(alpha: 0.28),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                      child: TweenAnimationBuilder<Color?>(
+                                        duration: const Duration(milliseconds: 260),
+                                        tween: ColorTween(end: courseColor),
+                                        builder: (context, color, child) {
+                                          return Icon(
+                                            Icons.book,
+                                            size: iconGlyphSize,
+                                            color: color,
+                                          );
+                                        },
                                       ),
                                     ),
                                   ),
                                   const SizedBox(width: 16),
                                   Expanded(
                                     child: AnimatedSwitcher(
-                                      duration: const Duration(milliseconds: 220),
+                                      duration: const Duration(milliseconds: 350),
                                       switchInCurve: Curves.easeOut,
                                       switchOutCurve: Curves.easeIn,
+                                      // 切换课程时文字原地模糊淡入淡出 + 轻微
+                                      // 原地缩放（参考登录对话框副标题切换）；
+                                      // 「减弱动态效果」开启时去掉模糊，保留
+                                      // 同时长的淡入淡出与缩放
                                       transitionBuilder: (child, anim) {
+                                        if (_reduceMotionEnabled) {
+                                          return FadeTransition(
+                                            opacity: anim,
+                                            child: AnimatedBuilder(
+                                              animation: anim,
+                                              builder: (context, grandChild) => Transform.scale(
+                                                scale: 0.94 + 0.06 * anim.value,
+                                                child: grandChild,
+                                              ),
+                                              child: child,
+                                            ),
+                                          );
+                                        }
                                         return FadeTransition(
                                           opacity: anim,
-                                          child: SlideTransition(
-                                            position: Tween<Offset>(
-                                              begin: Offset(0.08 * slideSign, 0),
-                                              end: Offset.zero,
-                                            ).animate(anim),
+                                          child: AnimatedBuilder(
+                                            animation: anim,
+                                            builder: (context, grandChild) => ImageFiltered(
+                                              imageFilter: ImageFilter.blur(
+                                                sigmaX: 8 * (1.0 - anim.value),
+                                                sigmaY: 8 * (1.0 - anim.value),
+                                              ),
+                                              child: Transform.scale(
+                                                scale: 0.94 + 0.06 * anim.value,
+                                                child: grandChild,
+                                              ),
+                                            ),
                                             child: child,
                                           ),
                                         );
@@ -3015,40 +3059,22 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 260),
-                                    switchInCurve: Curves.easeOut,
-                                    switchOutCurve: Curves.easeIn,
-                                    transitionBuilder: (child, anim) {
-                                      return FadeTransition(
-                                        opacity: anim,
-                                        child: SlideTransition(
-                                          position: Tween<Offset>(
-                                            begin: Offset(0.12 * slideSign, 0),
-                                            end: Offset.zero,
-                                          ).animate(anim),
-                                          child: child,
-                                        ),
-                                      );
-                                    },
-                                    layoutBuilder: (currentChild, previousChildren) {
-                                      return currentChild ?? const SizedBox.shrink();
-                                    },
-                                    child: GestureDetector(
-                                      key: ValueKey('close_btn_${currentCourse.id}'),
-                                      onTap: () => Navigator.pop(context),
-                                      child: Container(
-                                        width: closeBoxSize,
-                                        height: closeBoxSize,
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withValues(alpha: 0.05),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Icon(
-                                          Icons.close,
-                                          size: closeGlyphSize,
-                                          color: Colors.grey.shade600,
-                                        ),
+                                  // 关闭按钮：单一静态组件——不缩放、不变色，
+                                  // 仅随头部高度动画平滑位移保持居中（高度不变
+                                  // 时完全静止，消除此前按课程 id 重建的闪现）
+                                  GestureDetector(
+                                    onTap: () => Navigator.pop(context),
+                                    child: Container(
+                                      width: closeBoxSize,
+                                      height: closeBoxSize,
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.05),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: closeGlyphSize,
+                                        color: Colors.grey.shade600,
                                       ),
                                     ),
                                   ),

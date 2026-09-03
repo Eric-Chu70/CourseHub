@@ -66,6 +66,9 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
 
   // 本次分析基于的课表 id：切换课表后与之不同时，标题行展示"重新生成"按钮
   static String? _analysisTimetableId;
+  // 本次分析基于的未完成任务快照（id+截止日+名称）：新增/删除/勾选完成/
+  // 编辑任务后与快照不同时，同样展示"重新生成"按钮
+  static Set<String>? _analysisTaskSnapshot;
   // 用户点击叉号关闭后，本次 App 运行期间不再加载（直到 App 终止）
   static bool _dismissedByUser = false;
 
@@ -77,7 +80,23 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
       vsync: this,
     );
     _streamUpdateTick.addListener(_handleStreamUpdateTick);
-    _loadConfigAndAnalyze();
+    // 缓存命中时同步定相：首帧直接渲染最终高度，避免先以 idle 相态
+    // 渲染再经 AnimatedSize 撑高（每次进入 DDL 页"往下弹出一次"的根源）
+    if (_dismissedByUser) {
+      _phase = _InsightPhase.hidden;
+    } else if (_hasAnalyzed &&
+        _cachedInsight != null &&
+        _cachedInsight!.isNotEmpty) {
+      final extracted = _extractInsightText(_cachedInsight!);
+      _typewriterContent = extracted;
+      _typewriterIndex = extracted.length;
+      _phase = _InsightPhase.done;
+    } else if (_isAnalyzing) {
+      _phase = _InsightPhase.loading;
+      _shimmerController.repeat();
+    } else {
+      _loadConfigAndAnalyze();
+    }
   }
 
   @override
@@ -165,6 +184,11 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     }
 
     final tasks = widget.tasks.where((t) => !t.completed).toList();
+    // 记录本次分析基于的未完成任务快照：任务增删/编辑/勾选完成后
+    // 与快照不同时展示"重新生成"
+    _analysisTaskSnapshot = tasks
+        .map((t) => '${t.id}|${t.dueDate.toIso8601String()}|${t.name}')
+        .toSet();
     final tasksInfo = tasks.asMap().entries.map((e) {
       final t = e.value;
       return '${e.key + 1}. ${t.name} - 截止: ${t.dueDate.year}/${t.dueDate.month}/${t.dueDate.day}';
@@ -229,9 +253,8 @@ $tasksInfo
     }
   }
 
-  /// 从完整内容中提取"任务建议"部分（不带标题），启动打字机
-  /// [useTypewriter] 为 true 时使用打字机效果，否则直接显示完整文字
-  void _startTypewriterFromContent(String fullContent, {bool useTypewriter = true}) {
+  /// 从完整内容中提取"任务建议"部分（不带标题）——纯函数，无副作用
+  String _extractInsightText(String fullContent) {
     // 正则匹配"任务建议"和"学习建议"部分
     // 支持 markdown 标题（## 任务建议）或加粗（**任务建议**）
     final taskSuggestRegex = RegExp(
@@ -249,13 +272,16 @@ $tasksInfo
     if (taskMatch != null) {
       final typewriterStart = taskMatch.end;
       final typewriterEnd = studyMatch != null ? studyMatch.start : fullContent.length;
-      _typewriterContent = fullContent
-          .substring(typewriterStart, typewriterEnd)
-          .trim();
-    } else {
-      // 没匹配到任务建议，显示全部内容
-      _typewriterContent = fullContent.trim();
+      return fullContent.substring(typewriterStart, typewriterEnd).trim();
     }
+    // 没匹配到任务建议，显示全部内容
+    return fullContent.trim();
+  }
+
+  /// 从完整内容提取文字后启动打字机
+  /// [useTypewriter] 为 true 时使用打字机效果，否则直接显示完整文字
+  void _startTypewriterFromContent(String fullContent, {required bool useTypewriter}) {
+    _typewriterContent = _extractInsightText(fullContent);
 
     if (_typewriterContent.isEmpty) {
       if (mounted) setState(() => _phase = _InsightPhase.done);
@@ -302,11 +328,29 @@ $tasksInfo
 
   final GlobalKey _containerKey = GlobalKey();
 
-  /// 是否需要展示"重新生成"按钮：已有分析结果，且当前课表与
-  /// 分析时基于的课表不同（正常情况不展示）
+  /// 当前未完成任务快照（与 _analysisTaskSnapshot 同构可比）
+  Set<String> _currentTaskSnapshot() {
+    return widget.tasks
+        .where((t) => !t.completed)
+        .map((t) => '${t.id}|${t.dueDate.toIso8601String()}|${t.name}')
+        .toSet();
+  }
+
+  /// 是否需要展示"重新生成"按钮：已有分析结果，且当前课表或未完成任务
+  /// 集合（新增/删除/勾选完成/编辑）与分析时不同（正常情况不展示）
   bool get _needsRegenerate =>
       _analysisTimetableId != null &&
-      _analysisTimetableId != StorageService.currentTimetableId;
+      (_analysisTimetableId != StorageService.currentTimetableId ||
+          _analysisTaskSnapshot == null ||
+          !_setEquals(_analysisTaskSnapshot!, _currentTaskSnapshot()));
+
+  static bool _setEquals(Set<String> a, Set<String> b) {
+    if (a.length != b.length) return false;
+    for (final v in a) {
+      if (!b.contains(v)) return false;
+    }
+    return true;
+  }
 
   /// 叉号关闭：参数对齐课表/课程删除动画（220ms easeInCubic，
   /// 模糊增大 + 向内缩小 + 淡出），播完置 hidden——本次 App 运行
@@ -341,6 +385,7 @@ $tasksInfo
     _hasAnalyzed = false;
     _hasError = false;
     _analysisTimetableId = null;
+    _analysisTaskSnapshot = null;
     _typewriterContent = '';
     _typewriterIndex = 0;
     _typewriterTimer?.cancel();
