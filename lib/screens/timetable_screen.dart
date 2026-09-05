@@ -2,16 +2,17 @@ import 'dart:async';
 import 'dart:io';
 import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
-import 'dart:ui' show ImageFilter, ImageByteFormat, instantiateImageCodec, lerpDouble;
+import 'dart:ui' show ImageFilter, ImageByteFormat, lerpDouble;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/course.dart';
 import '../models/task.dart';
 import '../utils/storage.dart';
+import '../services/wallpaper_storage_service.dart';
 import '../dialogs/course_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
@@ -84,6 +85,10 @@ class TimetableScreenState extends State<TimetableScreen>
   bool _isTabVisible = true;
   final GlobalKey _videoRepaintKey = GlobalKey();
   Uint8List? _wallpaperBytes;
+  /// _wallpaperBytes 对应的壁纸路径：路径未变时跳过重复读盘（预载已备好）
+  String? _wallpaperBytesPath;
+  /// 冷启动首帧同步初始化只执行一次（防止刷新时把旧预载值覆盖到新 prefs 上）
+  bool _wallpaperSyncInitDone = false;
   final Map<int, double> _pageScrollOffsets = {};
 
   // 长按课程块弹出的操作菜单（Overlay 浮层）
@@ -358,8 +363,41 @@ class TimetableScreenState extends State<TimetableScreen>
     _dailyPeriods = StorageService.getDailyPeriods();
     _semesterStartDate = StorageService.getSemesterStartDate();
     _currentWeek = StorageService.getCurrentWeek();
+    // 冷启动时先用 main 预载的数据同步初始化壁纸（首帧即有壁纸），
+    // 再走异步 _loadWallpaper 补全视频初始化等剩余逻辑
+    _initWallpaperFromPreload();
     // 总是调用 _loadWallpaper，内部已有视频路径未变则跳过重新初始化的逻辑
     _loadWallpaper();
+  }
+
+  /// 用 main() 预载结果同步初始化壁纸状态（仅冷启动执行一次）
+  ///
+  /// 图片壁纸：预载字节已解码入全局 ImageCache（同一 Uint8List 实例为
+  /// MemoryImage 缓存 key），首帧 Image.memory 命中缓存同步绘制；
+  /// 视频壁纸：先显示持久化首帧缩略图，视频控制器异步初始化后接管。
+  void _initWallpaperFromPreload() {
+    if (_wallpaperSyncInitDone) return;
+    _wallpaperSyncInitDone = true;
+    final pre = WallpaperPreload.instance;
+    if (!pre.available) return;
+    _wallpaperPath = pre.path;
+    _wallpaperEnabled = pre.enabled;
+    _wallpaperOpacity = pre.opacity;
+    _wallpaperIsLight = pre.isLight;
+    _wallpaperBlurEnabled = pre.blurEnabled && !pre.reduceMotion;
+    _reduceMotionEnabled = pre.reduceMotion;
+    _showInactiveCourses = pre.showInactiveCourses;
+    _videoSoundEnabled = pre.videoSound;
+    if (pre.isVideo) {
+      _isVideoWallpaper = true;
+      _currentVideoPath = pre.path;
+      _videoFirstFrameBytes = pre.videoThumbBytes;
+    } else {
+      _isVideoWallpaper = false;
+      _currentVideoPath = null;
+      _wallpaperBytes = pre.imageBytes;
+      _wallpaperBytesPath = pre.path;
+    }
   }
 
   Future<void> _loadWallpaper() async {
@@ -400,9 +438,18 @@ class TimetableScreenState extends State<TimetableScreen>
     if (enabled && path != null) {
       final ext = path.toLowerCase().split('.').last;
       final isVid = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
-      // 视频文件跳过亮度分析（instantiateImageCodec 不支持视频，会报错且浪费内存）
+      // 视频文件跳过亮度分析（instantiateImageCodec 不支持视频，会报错且浪费内存），
+      // 视频固定视为浅色壁纸；图片亮度按路径缓存（wallpaper_is_light_v2_path，
+      // v2 为标题栏+时间栏区域采样版），仅壁纸变更时重算一次
       if (!isVid) {
-        isLight = await _analyzeWallpaperBrightness(path);
+        if (prefs.getString('wallpaper_is_light_v2_path') == path &&
+            prefs.containsKey('wallpaper_is_light')) {
+          isLight = prefs.getBool('wallpaper_is_light')!;
+        } else {
+          isLight = await WallpaperStorageService.analyzeBrightness(path);
+          await prefs.setBool('wallpaper_is_light', isLight);
+          await prefs.setString('wallpaper_is_light_v2_path', path);
+        }
       }
     }
     if (mounted) {
@@ -437,9 +484,16 @@ class TimetableScreenState extends State<TimetableScreen>
         _videoFirstFrameBytes = null;
         _videoController?.dispose();
         _videoController = null;
-        _wallpaperBytes = await File(path).readAsBytes();
+        // 预载已读取且路径未变时跳过重复读盘（字节与 ImageCache 同源）
+        if (_wallpaperBytes == null || _wallpaperBytesPath != path) {
+          _wallpaperBytes = await File(path).readAsBytes();
+          _wallpaperBytesPath = path;
+        }
         if (mounted) {
-          precacheImage(FileImage(File(path)), context);
+          // 渲染走 Image.memory（MemoryImage key），预缓存同一 provider
+          // 确保解码结果复用；同时主动刷新，避免旧壁纸残留到下次 setState
+          precacheImage(MemoryImage(_wallpaperBytes!), context);
+          setState(() {});
         }
       }
     } else {
@@ -451,58 +505,60 @@ class TimetableScreenState extends State<TimetableScreen>
     }
   }
 
-  /// 捕获视频当前帧作为过渡背景
-  void _captureFirstFrame() {
+  /// 捕获视频当前帧作为过渡背景，并持久化首帧缩略图供下次启动秒显
+  ///
+  /// [attempt] 帧重试计数：视频层未挂载/纹理未就绪时等下一帧再试（上限 8 次）
+  void _captureFirstFrame({int attempt = 0}) {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (attempt >= 8) return;
       final ctx = _videoRepaintKey.currentContext;
-      if (ctx == null) return;
+      if (ctx == null) {
+        _captureFirstFrame(attempt: attempt + 1);
+        return;
+      }
       try {
         final boundary = ctx.findRenderObject() as dynamic;
-        if (boundary == null || boundary.debugNeedsPaint == true) {
-          // 等待下一帧再试
-          WidgetsBinding.instance.addPostFrameCallback((_) => _captureFirstFrame());
+        if (boundary == null) {
+          _captureFirstFrame(attempt: attempt + 1);
           return;
+        }
+        // debugNeedsPaint 仅 debug 模式可读：release 下该 getter 的 assert
+        // 被剥离，读取未赋值的 late 变量会抛 LateInitializationError，
+        // 导致首帧捕获（含缩略图持久化）在 release 包从未生效——本次修复
+        if (kDebugMode && boundary.debugNeedsPaint == true) {
+          _captureFirstFrame(attempt: attempt + 1);
+          return;
+        }
+        // 等视频纹理实际渲染出画面再捕获，避免抓到纯黑帧
+        if (attempt == 0) {
+          await Future.delayed(const Duration(milliseconds: 300));
         }
         final image = await boundary.toImage(pixelRatio: 1.0);
         final byteData = await image.toByteData(format: ImageByteFormat.png);
-        if (byteData != null && mounted) {
-          setState(() {
-            _videoFirstFrameBytes = byteData.buffer.asUint8List();
-          });
+        if (byteData == null || !mounted) return;
+        setState(() {
+          _videoFirstFrameBytes = byteData.buffer.asUint8List();
+        });
+        // 持久化半分辨率首帧缩略图（仅首次生成）：
+        // 下次启动由预载秒显，视频初始化期间不再露底
+        final videoPath = _currentVideoPath;
+        if (videoPath != null) {
+          try {
+            final small = await boundary.toImage(pixelRatio: 0.5);
+            final smallData = await small.toByteData(format: ImageByteFormat.png);
+            if (smallData != null) {
+              await WallpaperStorageService.persistVideoThumb(
+                videoPath,
+                smallData.buffer.asUint8List(),
+              );
+            }
+          } catch (_) {}
         }
-      } catch (_) {}
-    });
-  }
-
-  Future<bool> _analyzeWallpaperBrightness(String imagePath) async {
-    try {
-      final file = File(imagePath);
-      if (!file.existsSync()) return true;
-      final bytes = await file.readAsBytes();
-      final codec = await instantiateImageCodec(bytes, targetWidth: 100);
-      final frameInfo = await codec.getNextFrame();
-      final image = frameInfo.image;
-      final byteData = await image.toByteData(format: ImageByteFormat.rawRgba);
-      if (byteData == null) return true;
-      final pixels = byteData.buffer.asUint8List();
-      double totalLuminance = 0;
-      int sampleCount = 0;
-      for (int i = 0; i < pixels.length - 3; i += 40) {
-        final r = pixels[i];
-        final g = pixels[i + 1];
-        final b = pixels[i + 2];
-        final a = pixels[i + 3];
-        if (a < 128) continue;
-        totalLuminance += 0.299 * r + 0.587 * g + 0.114 * b;
-        sampleCount++;
+      } catch (_) {
+        // 捕获失败（视频纹理未就绪等）：下一帧重试
+        _captureFirstFrame(attempt: attempt + 1);
       }
-      if (sampleCount == 0) return true;
-      final avgLuminance = totalLuminance / sampleCount;
-      image.dispose();
-      return avgLuminance > 128;
-    } catch (_) {
-      return true;
-    }
+    });
   }
 
   void refreshData() {
@@ -5305,6 +5361,7 @@ class TimetableScreenState extends State<TimetableScreen>
       // 先用捕获的帧作为过渡，再重新加载壁纸
       _videoFirstFrameBytes = bytes;
       _wallpaperBytes = bytes;
+      _wallpaperBytesPath = filePath;
       await _loadWallpaper();
 
       if (mounted) {

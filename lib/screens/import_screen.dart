@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
@@ -15,6 +16,7 @@ import '../services/glm_service.dart';
 import '../models/course.dart';
 import '../utils/course_color_palette.dart';
 import '../widgets/blur_selection_menu.dart';
+import 'shiguang_school_select_screen.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -57,6 +59,18 @@ class _ImportScreenState extends State<ImportScreen> {
                           onTap: _isImporting
                               ? null
                               : () => _showImageSourceDialog(context),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildImportCard(
+                          context,
+                          icon: Icons.school,
+                          color: const Color(0xFF9B59B6),
+                          title: '教务系统导入',
+                          titleTrailing: const _ShiguangHelpIcon(),
+                          subtitle: '适配 150+ 所高校教务系统一键导入',
+                          onTap: _isImporting
+                              ? null
+                              : () => _openShiguangImport(context),
                         ),
                         const SizedBox(height: 12),
                         _buildImportCard(
@@ -149,6 +163,7 @@ class _ImportScreenState extends State<ImportScreen> {
     required String title,
     required String subtitle,
     VoidCallback? onTap,
+    Widget? titleTrailing,
   }) {
     return Card(
       child: InkWell(
@@ -172,12 +187,23 @@ class _ImportScreenState extends State<ImportScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        if (titleTrailing != null) ...[
+                          const SizedBox(width: 6),
+                          titleTrailing,
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -411,6 +437,24 @@ class _ImportScreenState extends State<ImportScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 教务系统导入入口：WebView 引擎不支持 Web 平台。
+  void _openShiguangImport(BuildContext context) {
+    if (kIsWeb) {
+      toastNotification.show(
+        context,
+        '教务系统导入目前不支持 Web 端使用',
+        type: ToastType.info,
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const ShiguangSchoolSelectScreen(),
       ),
     );
   }
@@ -2180,5 +2224,219 @@ class _ImportScreenState extends State<ImportScreen> {
     } catch (e) {
       return 2;
     }
+  }
+}
+
+/// 「教务系统导入」标题问号：点击在问号下方弹出两段说明气泡
+/// （样式与动画同设置页问号提示：easeOutBack 弹出 / easeInCubic
+/// 收回，220ms），点击空白处收回。
+class _ShiguangHelpIcon extends StatefulWidget {
+  const _ShiguangHelpIcon();
+
+  @override
+  State<_ShiguangHelpIcon> createState() => _ShiguangHelpIconState();
+}
+
+class _ShiguangHelpIconState extends State<_ShiguangHelpIcon> {
+  final GlobalKey _iconKey = GlobalKey();
+  OverlayEntry? _tipEntry;
+  bool _tipVisible = false;
+
+  void _toggleTip() {
+    if (_tipEntry != null) {
+      _removeTip();
+      return;
+    }
+    final iconBox = _iconKey.currentContext?.findRenderObject() as RenderBox?;
+    if (iconBox == null) return;
+    final iconPos = iconBox.localToGlobal(Offset.zero);
+    final iconSize = iconBox.size;
+    // 气泡水平居中（两侧各留 16px 屏幕边距），纵向自问号下方弹出。
+    final top = iconPos.dy + iconSize.height + 6;
+    _tipVisible = true;
+    _tipEntry = OverlayEntry(
+      builder: (context) => Stack(
+        children: [
+          // 透明屏障：点击气泡以外的任意处收回。
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _removeTip,
+            ),
+          ),
+          _ShiguangHelpTip(
+            visible: _tipVisible,
+            top: top,
+            onDismissed: () {
+              _tipEntry?.remove();
+              _tipEntry = null;
+            },
+          ),
+        ],
+      ),
+    );
+    Overlay.of(context).insert(_tipEntry!);
+  }
+
+  void _removeTip() {
+    if (_tipEntry == null) return;
+    // 翻转 visible 触发收回动画，动画完成后由 onDismissed 移除 entry。
+    _tipVisible = false;
+    _tipEntry!.markNeedsBuild();
+  }
+
+  @override
+  void dispose() {
+    // 页面关闭时同步移除气泡。
+    _tipEntry?.remove();
+    _tipEntry = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      key: _iconKey,
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleTip,
+      child: Icon(
+        Icons.help_outline,
+        size: 16,
+        color: Colors.grey.shade500,
+      ),
+    );
+  }
+}
+
+/// 教务系统导入说明气泡：水平居中（两侧各留 16px 屏幕边距），
+/// 自问号下方弹出（下滑出 + 淡入），收回时向上缩回并淡出，
+/// 两段文字（说明 + 鸣谢）。
+class _ShiguangHelpTip extends StatefulWidget {
+  final bool visible;
+  final double top;
+  final VoidCallback? onDismissed;
+
+  const _ShiguangHelpTip({
+    required this.visible,
+    required this.top,
+    this.onDismissed,
+  });
+
+  @override
+  State<_ShiguangHelpTip> createState() => _ShiguangHelpTipState();
+}
+
+class _ShiguangHelpTipState extends State<_ShiguangHelpTip>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+
+  late final CurvedAnimation _curved = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeInCubic,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.visible) {
+      _controller.forward();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ShiguangHelpTip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible == oldWidget.visible) return;
+    if (widget.visible) {
+      _controller.forward();
+    } else {
+      _controller.reverse().whenCompleteOrCancel(() {
+        if (mounted) widget.onDismissed?.call();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _curved.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 水平居中：两侧各留 16px 屏幕边距，内容不足时收缩换行。
+    final maxTipWidth = MediaQuery.of(context).size.width - 32;
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: widget.top,
+      child: AnimatedBuilder(
+        animation: _curved,
+        builder: (context, child) {
+          final t = _curved.value;
+          return Opacity(
+            // easeOutBack 会过冲超过 1.0，透明度需夹取。
+            opacity: t.clamp(0.0, 1.0),
+            child: Transform.translate(
+              // 自问号图标处（上方）向下滑出；收回时向上缩回图标处。
+              offset: Offset(0, -14 * (1 - t)),
+              child: Transform.scale(
+                // 顶部对齐缩放：视觉上自图标处向下展开/向上收起。
+                scale: 0.85 + 0.15 * t,
+                alignment: Alignment.topCenter,
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              constraints: BoxConstraints(maxWidth: maxTipWidth),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '如未适配您所在的高校，建议使用图片识别导入，更加高效便捷',
+                    style:
+                        TextStyle(fontSize: 12, color: Color(0xFF44465A)),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '适配作者鸣谢：GitHub@shiguang_warehouse',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

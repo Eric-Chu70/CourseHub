@@ -37,6 +37,10 @@ gen_soft_copyright.py
 功能说明书_*.docx
 源代码_*.docx
 
+# TRAE IDE 本地配置与开发调试备份文件，不入库
+.trae/
+lib/screens/shiguang/shiguang_diag_panel_backup.dart.txt
+
 # IntelliJ related
 *.iml
 *.ipr

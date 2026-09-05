@@ -1,6 +1,6 @@
 # CourseHub
 
-> 一款现代化的课程表管理应用，集成 AI 智能助手、DDL 热力图、云端同步等功能。
+> 一款现代化的课程表管理应用，集成 AI 智能助手、DDL 热力图、教务系统一键导入、云端同步等功能。
 
 ---
 
@@ -44,6 +44,15 @@
 - 拍照或从相册选择课程表图片，自动 OCR 识别并导入
 - 使用 Google ML Kit 本地文字识别，隐私安全
 - 识别结果经 AI 或正则解析为结构化课程数据
+
+### 教务系统导入
+
+- 应用内 WebView 登录教务系统，一键抓取课表导入，适配 150+ 所高校
+- 覆盖正方、超星、青果、URP 等通用教务系统
+- 学校列表按首字母分组，支持搜索与最近使用快速访问
+- 适配脚本来自开源仓库 shiguang_warehouse（MIT 协议），持续更新
+- 导入前预览解析结果，支持合并/替换两种导入模式
+- 仅支持 Android / iOS 平台
 
 ### 数据管理
 
@@ -142,7 +151,7 @@ flutter build apk --release
 
 # CourseHub
 
-> A modern course timetable management app with an integrated AI assistant, DDL heatmap, cloud sync, and more.
+> A modern course timetable management app with an integrated AI assistant, DDL heatmap, one-tap academic system import, cloud sync, and more.
 
 ---
 
@@ -186,6 +195,15 @@ The app **includes a built-in model available for free for a limited time — no
 - Take a photo or select a timetable image from gallery for automatic OCR recognition and import
 - Uses Google ML Kit for on-device text recognition, ensuring privacy
 - Recognition results parsed into structured course data via AI or regex
+
+### Academic System Import
+
+- Log in to your university's academic system via the built-in WebView and import the timetable in one tap — supports 150+ universities
+- Covers common academic systems such as Zhengfang, Chaoxing, Qingguo, and URP
+- Alphabetically grouped school list with search and recent-access history
+- Adapter scripts from the open-source shiguang_warehouse repository (MIT license), continuously updated
+- Preview parsed results before importing, with merge/replace modes
+- Android / iOS only
 
 ### Data Management
 

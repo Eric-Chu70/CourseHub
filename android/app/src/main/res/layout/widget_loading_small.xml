@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2x2 小组件加载占位：与 2x4 对齐——白色圆角矩形（20dp 圆角与
+     真实卡片一致）+ 居中「加载中…」文字。
+     注意：只能用 RemoteViews 白名单内的 view（FrameLayout/TextView 等），
+     ConstraintLayout 会导致 launcher inflate 崩溃（"加载小部件时出现问题"） -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_loading_card_bg">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="加载中…"
+        android:textColor="@color/widget_loading_text"
+        android:textSize="13sp" />
+</FrameLayout>

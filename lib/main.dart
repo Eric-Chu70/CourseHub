@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,11 +8,13 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dialogs/ai_consent_dialog.dart';
+import 'dialogs/update_dialog.dart';
 import 'screens/home_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/auth_service.dart';
 import 'services/glm_service.dart';
 import 'services/notification_service.dart';
+import 'services/update_service.dart';
 import 'services/wallpaper_storage_service.dart';
 import 'services/widget_service.dart';
 import 'utils/storage.dart';
@@ -39,6 +43,13 @@ void main() async {
 
   // 旧版拼写迁移（Anges → Agnes）：同步旧 prefs 键与 provider 值
   await AIService.migrateLegacyAgnesKeys();
+
+  // 壁纸首帧预载：趁原生启动页保持期间完成 prefs 读取 + 壁纸解码入缓存，
+  // 让壁纸与课表同帧渲染（消除课表先出、壁纸后闪）。
+  // 600ms 超时保护：超时/失败放弃预载，回退课表页异步加载，不卡启动
+  await WallpaperPreload.instance
+      .load()
+      .timeout(const Duration(milliseconds: 600), onTimeout: () {});
 
   // 先 runApp，让 UI 尽快显示，避免从小组件进入时白屏卡死
   SystemChrome.setEnabledSystemUIMode(
@@ -154,10 +165,70 @@ class _MainScreenState extends State<MainScreen> {
   /// 原生退出通道：走 MainActivity 自绘固定时长关闭动画，动画播完立即杀进程
   static const MethodChannel _exitChannel = MethodChannel('coursehub/app');
 
+  /// 启动提示链（欢迎/更新完成对话框 + AI 同意提示）完成信号：
+  /// 启动更新检查发现新版本时，等链结束后再弹绿色 toast，避免提示叠加
+  final Completer<void> _startupPromptsDone = Completer<void>();
+
   @override
   void initState() {
     super.initState();
     _checkAndShowWelcome();
+    _checkUpdateOnStartup();
+  }
+
+  /// 启动静默检查更新（每次冷启动一次）：联网拉取 latest.json，
+  /// 超时/失败/无新版本一律静默放弃、不打扰用户；
+  /// 发现新版本则等启动提示链结束后弹绿色 toast，点击进入更新对话框
+  /// （直接复用启动时拿到的版本信息，跳过对话框内的重复检查）。
+  /// 检查与启动提示链并行进行，网络慢时提示链先行、互不阻塞。
+  /// 门槛：设置页「自动检查软件升级」开关关闭时直接跳过（不发网络请求）；
+  /// 点击 toast 右侧「忽略」记录该版本号，忽略记录不低于线上最新版本时
+  /// 静默跳过，发布更新的版本后自动恢复推送。
+  /// 设置页手动检查不受门槛影响。
+  Future<void> _checkUpdateOnStartup() async {
+    // 自动检查开关关闭：完全静默
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('auto_update_check') ?? true)) return;
+
+    final result = await UpdateService.checkForUpdate(appVersion);
+    if (!result.hasUpdate || result.info == null) return;
+    final info = result.info!;
+
+    // 仅忽略此版本：忽略记录 >= 最新版本时静默跳过
+    final ignored = prefs.getString('ignored_update_version');
+    if (ignored != null &&
+        UpdateService.compareVersions(ignored, info.version) >= 0) {
+      return;
+    }
+
+    // 等待欢迎/AI 同意对话框链结束，避免提示叠加
+    await _startupPromptsDone.future;
+    if (!mounted) return;
+
+    toastNotification.show(
+      context,
+      '新版本v${info.version}现已可用！',
+      type: ToastType.success,
+      duration: const Duration(milliseconds: 5000),
+      onTap: () {
+        if (!mounted) return;
+        showUpdateDialog(context, preloadedInfo: info);
+      },
+      actionLabel: '忽略',
+      onAction: () async {
+        // 忽略此版本：记录版本号，本版本不再提示（新版本发布后自动恢复）
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('ignored_update_version', info.version);
+        // 等绿色提示收场动画（约 300ms）结束后再弹蓝色确认提示
+        await Future.delayed(const Duration(milliseconds: 350));
+        if (!mounted) return;
+        toastNotification.show(
+          context,
+          '此版本更新不再提示',
+          type: ToastType.info,
+        );
+      },
+    );
   }
 
   Future<void> _checkAndShowWelcome() async {
@@ -173,8 +244,11 @@ class _MainScreenState extends State<MainScreen> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showWelcomeDialog(isUpdate: !isFirstLaunch);
         });
+        return; // 链尾由 _showWelcomeDialog 的 whenComplete 收尾
       }
     }
+    // 常规启动（无版本变化）或页面已卸载：提示链视为立即完成
+    if (!_startupPromptsDone.isCompleted) _startupPromptsDone.complete();
   }
 
   void _showWelcomeDialog({bool isUpdate = false}) {
@@ -259,8 +333,10 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ),
                 ),
-    ).whenComplete(() {
-      _showAIConsentPromptAfterWelcome();
+    ).whenComplete(() async {
+      await _showAIConsentPromptAfterWelcome();
+      // 提示链收尾：通知启动更新检查可以弹 toast 了
+      if (!_startupPromptsDone.isCompleted) _startupPromptsDone.complete();
     });
   }
 
