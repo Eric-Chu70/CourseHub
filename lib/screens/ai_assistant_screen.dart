@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import 'home_screen.dart';
 import '../widgets/toast_notification.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:intl/intl.dart';
@@ -17,10 +18,13 @@ import '../services/glm_service.dart';
 import '../utils/storage.dart';
 import '../models/course.dart';
 import '../models/task.dart';
+import '../models/chat_session.dart';
 import '../dialogs/course_dialog.dart';
 import '../widgets/glass_dialog.dart';
 import 'settings_screen.dart';
+import 'ai_sessions_menu_panel.dart';
 import '../widgets/blur_selection_menu.dart';
+import '../widgets/app_text_field.dart';
 
 class AIAssistantScreen extends StatefulWidget {
   final VoidCallback? onKeyboardShown;
@@ -55,6 +59,16 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   static double _persistentScrollOffset = 0.0;
   static bool _needsRefresh = false;
   static bool _isAnalyzing = false;
+  /// 当前会话标题（首轮对话完成后由 AI 自动生成）；null 时顶栏显示"课表助手"
+  static String? _persistentChatTitle;
+  /// 当前对话对应的已保存会话 id（保存过才有，再次保存时覆盖更新）
+  static String? _persistentSavedSessionId;
+  /// 本会话是否已尝试/完成标题生成（恢复的历史会话视为已有标题，不再生成）
+  static bool _titleGeneratedThisSession = false;
+  static bool _isGeneratingTitle = false;
+  /// 已保存会话菜单（Overlay）打开期间为 true：菜单内编辑框的键盘变化
+  /// 不驱动对话页输入区/消息列表移动，关闭菜单后统一补一次同步
+  static bool _sessionsMenuOpen = false;
   static final ValueNotifier<int> _streamUpdateTick = ValueNotifier<int>(0);
   
   static bool _isLoading = false;
@@ -93,9 +107,16 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   /// 不再触发主 build()（消息列表不重建），消除键盘弹出/收起时的卡顿。
   final ValueNotifier<({double layoutHeight, double bounceOffset, double rawHeight})> _keyboardLayoutNotifier =
       ValueNotifier((layoutHeight: 0, bounceOffset: 0, rawHeight: 0));
-  double _inputAreaExtraHeight = 0;
-  double _textLinesExtraHeight = 0;
-  static const double _kTextLineHeight = 21.0;
+  /// 输入区实测总高度（post-frame 读 RenderBox，含图片预览/多行增长/边框内边距），
+  /// 驱动消息列表底部避让。替代旧的「字符数估行 × 固定行高」方案——该方案对
+  /// 中文（实际每行约 16 字而非估算的 25）、字体缩放、附件区动画都会系统性失准
+  double _inputAreaHeight = 61;
+  final GlobalKey _inputAreaKey = GlobalKey();
+  /// 输入框内部滚动控制器（多行超出显示区域后内部滚动），用于边缘淡出判定
+  final ScrollController _inputScrollController = ScrollController();
+  /// 输入框上下边缘淡出状态：仅当文字超出显示区域滚动时，有剩余内容的一端淡出
+  final ValueNotifier<({bool top, bool bottom})> _inputEdgeFade =
+      ValueNotifier((top: false, bottom: false));
   late final AnimationController _keyboardDismissAnimController;
   Animation<double>? _keyboardDismissAnimation;
   Animation<double>? _keyboardDismissBounceAnimation;
@@ -117,6 +138,12 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   bool _stopRequested = false;
   late List<_ChatMessage> _messages;
   late String? _selectedModel;
+  String? _chatTitle;
+  String? _currentSavedSessionId;
+  // 已保存会话的下拉菜单（Overlay 浮层 + 自持动画控制器，支持收起反向动画）
+  OverlayEntry? _sessionsMenuOverlay;
+  AnimationController? _sessionsMenuController;
+  CurvedAnimation? _sessionsMenuCurved;
   String? _selectedImagePath;
   String? _selectedImageBase64;
   double? _selectedImageAspectRatio;
@@ -282,9 +309,17 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
     _streamUpdateTick.addListener(_handleStreamUpdateTick);
     // 课表切换等数据变化时刷新：欢迎消息"重新生成"按钮需主动出现/消失
     StorageService.dataChangeListenable.addListener(_handleStorageDataChanged);
-    _messageController.addListener(_updateTextLinesExtraHeight);
+    _messageController.addListener(_onInputTextChanged);
+    _inputScrollController.addListener(_updateInputEdgeFade);
+    // 首帧后先实测一次输入区高度（初始估值为 1 行基准，字体缩放/布局差异
+    // 由此校正；后续变化由 SizeChangedLayoutNotification 驱动）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncInputAreaHeight();
+    });
     _messages = _persistentMessages;
     _selectedModel = _persistentSelectedModel;
+    _chatTitle = _persistentChatTitle;
+    _currentSavedSessionId = _persistentSavedSessionId;
     _loadFastModeSettingAndAnalyze();
 
     _keyboardDismissAnimController = AnimationController(
@@ -536,6 +571,9 @@ class AIAssistantScreenState extends State<AIAssistantScreen>
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
+    // 会话菜单打开期间屏蔽键盘变化：菜单内编辑框的键盘不应驱动
+    // 对话页输入区/消息列表跟随移动（画面乱跳）
+    if (_sessionsMenuOpen) return;
     final view = View.of(context);
     final mediaQuery = MediaQuery.maybeOf(context);
     final keyboardHeight = mediaQuery?.viewInsets.bottom ?? (view.viewInsets.bottom / view.devicePixelRatio);
@@ -2191,8 +2229,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       _selectedImagePath = null;
       _selectedImageBase64 = null;
       _selectedImageAspectRatio = null;
-      _inputAreaExtraHeight = 0;
-      _textLinesExtraHeight = 0;
       _isLoading = true;
       _isFirstChunkReceived = false;
       _streamingContent = '';
@@ -2382,6 +2418,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           _resetRetryState();
           _persistentMessages = List.from(_messages);
           _publishStreamUpdate();
+          _syncCurrentSession();
           _ensureFinalScrollToBottom(shouldFollowOutput: shouldFollowOutput);
         },
         onDone: () {
@@ -2412,6 +2449,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               _resetRetryState();
               _persistentMessages = List.from(_messages);
               _publishStreamUpdate();
+              _syncCurrentSession();
               _ensureFinalScrollToBottom(shouldFollowOutput: shouldFollowOutput);
               return;
             }
@@ -2439,6 +2477,8 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           _resetRetryState();
           _persistentMessages = List.from(_messages);
           _publishStreamUpdate();
+          _maybeGenerateChatTitle();
+          _syncCurrentSession();
           _ensureFinalScrollToBottom(shouldFollowOutput: shouldFollowOutput);
         },
         cancelOnError: true,
@@ -2463,6 +2503,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       _resetRetryState();
       _persistentMessages = List.from(_messages);
       _publishStreamUpdate();
+      _syncCurrentSession();
       _ensureFinalScrollToBottom(shouldFollowOutput: shouldFollowOutput);
     }
   }
@@ -2504,6 +2545,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _resetRetryState();
     _persistentMessages = List.from(_messages);
     _publishStreamUpdate();
+    _syncCurrentSession();
     _scrollToBottom();
   }
 
@@ -2646,6 +2688,520 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _resetRetryState();
     _persistentMessages = [];
     _persistentSelectedModel = null;
+    _persistentChatTitle = null;
+    _persistentSavedSessionId = null;
+    _titleGeneratedThisSession = false;
+    _currentSavedSessionId = null;
+    if (mounted) {
+      setState(() => _chatTitle = null);
+    }
+  }
+
+  bool get _hasRealConversation =>
+      _messages.any((m) => m.role == 'user' && !m.isWelcome);
+
+  // ==================== 历史对话保存 ====================
+
+  /// 顶栏三点菜单"保存本次对话"：立即保存/覆盖更新当前对话，绿色 toast 反馈
+  Future<void> _saveCurrentChat() async {
+    if (_isLoading || _isAnalyzing) {
+      toastNotification.show(context, '请等待回复完成后再保存', type: ToastType.info);
+      return;
+    }
+    if (!_hasRealConversation) {
+      toastNotification.show(context, '当前没有可保存的对话', type: ToastType.info);
+      return;
+    }
+    final now = DateTime.now();
+    final id = _currentSavedSessionId ?? 'chat_${now.millisecondsSinceEpoch}';
+    final existing = StorageService.getChatSession(id);
+    final session = ChatSessionData(
+      id: id,
+      title: _sanitizeChatTitle(_chatTitle ?? '') ?? _fallbackChatTitle(),
+      createdAt: existing != null
+          ? (DateTime.tryParse(existing['createdAt']?.toString() ?? '') ?? now)
+          : now,
+      savedAt: now,
+      selectedModel: _selectedModel,
+      messages: _serializeMessages(_messages),
+    );
+    await StorageService.saveChatSession(session.toJson());
+    _currentSavedSessionId = id;
+    _persistentSavedSessionId = id;
+    if (!mounted) return;
+    HapticFeedback.selectionClick();
+    toastNotification.show(context, '已保存对话');
+  }
+
+  /// AI 标题生成失败时的回退标题：首条真实用户消息截断
+  String _fallbackChatTitle() {
+    for (final m in _messages) {
+      if (m.role == 'user' && !m.isWelcome) {
+        final text = m.content.isEmpty && m.imagePath != null ? '[图片]' : m.content;
+        return _sanitizeChatTitle(text) ?? '未命名对话';
+      }
+    }
+    return '未命名对话';
+  }
+
+  /// 标题清洗：去包裹引号/换行/结尾句读，并限长 10 个汉字或 20 个字符
+  String? _sanitizeChatTitle(String raw) {
+    var t = raw.trim();
+    if (t.isEmpty) return null;
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    t = t.replaceFirst(RegExp(r'^标题[:：]\s*'), '');
+    const openers = {'“': '”', '「': '」', '『': '』', '《': '》', '"': '"', "'": "'", '(': ')', '（': '）', '【': '】'};
+    var changed = true;
+    while (changed && t.length >= 2) {
+      changed = false;
+      final closer = openers[t[0]];
+      if (closer != null && t.endsWith(closer)) {
+        t = t.substring(1, t.length - 1).trim();
+        changed = true;
+      }
+    }
+    while (t.isNotEmpty && '。．.，,、！!？?：:；;'.contains(t[t.length - 1])) {
+      t = t.substring(0, t.length - 1);
+    }
+    if (t.isEmpty) return null;
+    final sb = StringBuffer();
+    int weight = 0;
+    for (final rune in t.runes) {
+      weight += RegExp(r'[\u4e00-\u9fff]').hasMatch(String.fromCharCode(rune)) ? 2 : 1;
+      if (weight > 20) break;
+      sb.writeCharCode(rune);
+    }
+    t = sb.toString().trim();
+    return t.isEmpty ? null : t;
+  }
+
+  /// 首轮真实对话完成（onDone 成功分支）后自动生成会话标题。
+  /// 后台静默请求：不赋 _streamSubscription，不受停止按钮/清空取消影响；
+  /// 失败静默放弃，保存时回退为用户消息截断标题。
+  void _maybeGenerateChatTitle() {
+    if (_titleGeneratedThisSession || _isGeneratingTitle) return;
+    if (!_hasRealConversation) return;
+    final last = _messages.last;
+    if (last.role != 'assistant' || last.isError || last.isWelcome) return;
+    _generateChatTitle();
+  }
+
+  Future<void> _generateChatTitle() async {
+    _isGeneratingTitle = true;
+    try {
+      await AIService.instance.loadConfig();
+      final userMsg = _messages.firstWhere((m) => m.role == 'user' && !m.isWelcome);
+      final assistantMsg = _messages.last;
+      final userText = userMsg.content.isEmpty && userMsg.imagePath != null ? '[图片]' : userMsg.content;
+      final buf = StringBuffer();
+      await for (final chunk in AIService.instance.chatWithModelStream(
+        userMessage: '用户：$userText\n\n助手：${assistantMsg.content}',
+        systemPrompt: '你是对话标题生成器。根据给定的一轮对话内容，输出一个能概括对话主题的简短标题。'
+            '要求：只输出标题本身，不超过10个汉字（其他语言不超过20个字符），'
+            '不要引号、句号或任何额外说明文字。',
+      )) {
+        if (chunk.startsWith('【状态】') || chunk.startsWith('【思考】')) continue;
+        buf.write(chunk);
+      }
+      final title = _sanitizeChatTitle(buf.toString());
+      if (title == null || title.isEmpty) return;
+      _safeSetState(() {
+        _chatTitle = title;
+        _persistentChatTitle = title;
+        _titleGeneratedThisSession = true;
+      });
+      // 标题生成好之前用户可能已保存会话（用的回退临时标题）：
+      // AI 标题一生成，立即同步到已存会话记录，不留旧名
+      final savedId = _currentSavedSessionId;
+      if (savedId != null) {
+        final stored = StorageService.getChatSession(savedId);
+        if (stored != null && stored['title'] != title) {
+          stored['title'] = title;
+          await StorageService.saveChatSession(stored);
+        }
+      }
+    } catch (e) {
+      debugPrint('[AI Assistant] Generate chat title failed: $e');
+    } finally {
+      _isGeneratingTitle = false;
+    }
+  }
+
+  List<Map<String, dynamic>> _serializeMessages(List<_ChatMessage> messages) {
+    return messages.map((m) {
+      final map = <String, dynamic>{
+        'role': m.role,
+        'content': m.content,
+        'isError': m.isError,
+        'isInterrupted': m.isInterrupted,
+        'isWelcome': m.isWelcome,
+      };
+      if (m.thinkingContent != null) map['thinkingContent'] = m.thinkingContent;
+      if (m.imagePath != null) map['imagePath'] = m.imagePath;
+      if (m.imageAspectRatio != null) map['imageAspectRatio'] = m.imageAspectRatio;
+      if (m.courses != null) {
+        map['courses'] = m.courses!.map((c) => {
+              'id': c.id,
+              'name': c.name,
+              'teacher': c.teacher,
+              'location': c.location,
+              'day': c.day,
+              'time': c.time,
+              'duration': c.duration,
+              'weeks': c.weeks,
+              'color': c.color,
+            }).toList();
+      }
+      return map;
+    }).toList();
+  }
+
+  _ChatMessage _chatMessageFromJson(Map<String, dynamic> json) {
+    var content = json['content']?.toString() ?? '';
+    var imagePath = json['imagePath'] as String?;
+    // 图片临时文件可能已被系统清理：降级为占位文本
+    if (imagePath != null && !File(imagePath).existsSync()) {
+      imagePath = null;
+      if (content.isEmpty) content = '[图片已失效]';
+    }
+    final coursesRaw = json['courses'] as List?;
+    return _ChatMessage(
+      role: json['role']?.toString() ?? 'assistant',
+      content: content,
+      isError: json['isError'] as bool? ?? false,
+      isInterrupted: json['isInterrupted'] as bool? ?? false,
+      isWelcome: json['isWelcome'] as bool? ?? false,
+      thinkingContent: json['thinkingContent'] as String?,
+      imagePath: imagePath,
+      imageAspectRatio: (json['imageAspectRatio'] as num?)?.toDouble(),
+      courses: coursesRaw
+          ?.map((item) {
+            final c = Map<String, dynamic>.from(item as Map);
+            return Course(
+              id: c['id']?.toString() ?? '',
+              name: c['name']?.toString() ?? '',
+              teacher: c['teacher']?.toString(),
+              location: c['location']?.toString(),
+              day: (c['day'] as num?)?.toInt() ?? 0,
+              time: (c['time'] as num?)?.toInt() ?? 0,
+              duration: (c['duration'] as num?)?.toInt() ?? 1,
+              weeks: c['weeks']?.toString(),
+              color: c['color']?.toString() ?? '#4A90E2',
+            );
+          })
+          .toList(),
+    );
+  }
+
+  /// 恢复已保存的会话到当前对话区
+  Future<void> _loadChatSession(Map<String, dynamic> sessionMap) async {
+    final id = sessionMap['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    final session = ChatSessionData.fromJson(sessionMap);
+    // 仅当当前是"从未保存过的新对话"时才需确认（已保存会话之间的切换
+    // 不会丢内容：继续聊天会实时同步回原会话记录）
+    if (_currentSavedSessionId == null && _hasRealConversation) {
+      final confirmed = await _confirmReplaceCurrentChat();
+      if (!confirmed || !mounted) return;
+    }
+    // —— 切换前进行中的工作处理 ——
+    if (_isAnalyzing) {
+      // 分析中：立即停止（不转入后台）
+      _streamSubscription?.cancel();
+      _streamSubscription = null;
+      _cancelSlowResponseTimer();
+      _cancelNoResponseTimer();
+      _resetRetryState();
+      _isAnalyzing = false;
+      _hasAnalyzed = false;
+    } else if (_isLoading) {
+      if (_currentSavedSessionId != null && _currentSavedSessionId != session.id) {
+        // 回答输出阶段且当前对话有归属的已保存会话：
+        // 流转入后台继续完成，结束后写回原会话记录
+        _detachStreamToBackground(_currentSavedSessionId!);
+      } else {
+        // 未保存的新对话：立即中断响应，不保存当前对话
+        _streamSubscription?.cancel();
+        _streamSubscription = null;
+      }
+      _cancelSlowResponseTimer();
+      _cancelNoResponseTimer();
+      _resetRetryState();
+    }
+    _hideSlowResponseTip();
+    _stopRequested = false;
+    final restored = session.messages.map(_chatMessageFromJson).toList();
+    setState(() {
+      _messages = restored;
+      _selectedModel = session.selectedModel;
+      _persistentSelectedModel = _selectedModel;
+      _streamingContent = '';
+      _thinkingContent = '';
+      _statusMessage = '';
+      _isLoading = false;
+      _isFirstChunkReceived = false;
+      _isSearching = false;
+      _isThinking = false;
+      _isThinkingCollapsed = true;
+      _hasAnalyzed = restored.any((m) => m.isWelcome);
+      _hasSentContext = false;
+      _analysisTimetableId = _hasAnalyzed ? StorageService.currentTimetableId : null;
+      _chatTitle = session.title;
+      _persistentChatTitle = session.title;
+      _currentSavedSessionId = session.id;
+      _persistentSavedSessionId = session.id;
+      _titleGeneratedThisSession = true;
+      _retryCount = 0;
+    });
+    _persistentMessages = List.from(_messages);
+    _publishStreamUpdate();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToBottom(animated: false, force: true);
+    });
+  }
+
+  Future<bool> _confirmReplaceCurrentChat() async {
+    final confirmed = await showBouncyDialog<bool>(
+      context: context,
+      barrierLabel: '恢复会话',
+      shellPadding: EdgeInsets.zero,
+      shellBoxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.2),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
+      builder: (dialogContext) => ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 340),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.history, color: Color(0xFF4A90E2), size: 28),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '恢复历史会话',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '当前对话尚未保存，恢复后将替换为所选会话。',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: Colors.grey.shade300),
+                        ),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4A90E2),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('恢复'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  void _onSessionDeleted(String id) {
+    if (_currentSavedSessionId == id) {
+      _currentSavedSessionId = null;
+      _persistentSavedSessionId = null;
+    }
+  }
+
+  /// 从历史会话继续聊天后，把当前对话实时同步回该会话记录：
+  /// 每轮回复完成/出错/被停止后全量写回（更新消息、时间与模型）。
+  Future<void> _syncCurrentSession() async {
+    final id = _currentSavedSessionId;
+    if (id == null || !_hasRealConversation) return;
+    final existing = StorageService.getChatSession(id);
+    if (existing == null) {
+      _currentSavedSessionId = null;
+      _persistentSavedSessionId = null;
+      return;
+    }
+    existing['messages'] = _serializeMessages(_messages);
+    existing['savedAt'] = DateTime.now().toIso8601String();
+    existing['selectedModel'] = _selectedModel;
+    if (_chatTitle != null) existing['title'] = _chatTitle;
+    await StorageService.saveChatSession(existing);
+  }
+
+  /// 切换到其他会话时，把仍在输出中的响应流"脱离"UI 继续在后台消费，
+  /// 完成后把结果写回原会话记录（不影响新会话的消息列表）。
+  void _detachStreamToBackground(String sessionId) {
+    final sub = _streamSubscription;
+    _streamSubscription = null;
+    // 基线消息：当前对话内容（含用户刚发出、尚未写回存储的那条）
+    final baseMessages = List<_ChatMessage>.from(_messages);
+    var content = _streamingContent;
+    var thinking = _thinkingContent;
+    final model = _selectedModel ?? _displayForStreamedModel(AIService.instance.lastStreamedModel);
+    _streamingContent = '';
+    _thinkingContent = '';
+    _statusMessage = '';
+    _isSearching = false;
+    if (sub == null) return;
+
+    sub.onData((chunk) {
+      if (chunk.startsWith('【状态】')) return;
+      if (chunk.startsWith('【思考】')) {
+        thinking += chunk.substring(4);
+        return;
+      }
+      content += chunk;
+    });
+    sub.onDone(() {
+      _storeBackgroundCompletion(sessionId, baseMessages, content, thinking, model, errored: false);
+    });
+    sub.onError((error) {
+      debugPrint('[AI Assistant] Background stream error: $error');
+      _storeBackgroundCompletion(sessionId, baseMessages, content, thinking, model, errored: true);
+    });
+  }
+
+  /// 把后台完成（或中断）的响应写回原会话记录
+  Future<void> _storeBackgroundCompletion(
+    String sessionId,
+    List<_ChatMessage> baseMessages,
+    String content,
+    String thinking,
+    String? model, {
+    required bool errored,
+  }) async {
+    try {
+      final stored = StorageService.getChatSession(sessionId);
+      if (stored == null) return;
+      String processed;
+      if (errored) {
+        processed = content.isEmpty ? '⏹️ 会话已切换，后台响应中断' : content;
+      } else {
+        processed = content.isEmpty ? '⏹️ 会话已切换，响应在后台结束' : _processAIResponse(content);
+      }
+      final messages = List<_ChatMessage>.from(baseMessages)
+        ..add(_ChatMessage(
+          role: 'assistant',
+          content: processed,
+          isError: errored,
+          thinkingContent: thinking.isNotEmpty ? thinking : null,
+        ));
+      stored['messages'] = _serializeMessages(messages);
+      stored['savedAt'] = DateTime.now().toIso8601String();
+      stored['selectedModel'] = model;
+      await StorageService.saveChatSession(stored);
+    } catch (e) {
+      debugPrint('[AI Assistant] Store background completion failed: $e');
+    }
+  }
+
+  void _onSessionRenamed(String id, String newTitle) {
+    if (_currentSavedSessionId == id) {
+      _safeSetState(() {
+        _chatTitle = newTitle;
+        _persistentChatTitle = newTitle;
+      });
+    }
+  }
+
+  // ==================== 已保存会话下拉菜单 ====================
+
+  /// 自顶栏向左下弹出的已保存会话菜单：
+  /// easeOutBack 过冲缩放（Q弹）+ 位移淡入 + 内容由模糊渐清晰；
+  /// 收起时反向：scale 回缩、模糊"向内化开"再淡出。数据由面板自持，
+  /// 重命名/删除后面板自行刷新，无需重建 Overlay。
+  void _showSavedSessionsMenu() {
+    _unfocusBeforeDialog();
+    if (_sessionsMenuOverlay != null) return;
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+      reverseDuration: const Duration(milliseconds: 240),
+    );
+    final curved = CurvedAnimation(
+      parent: controller,
+      // 强过冲弹性曲线：t 短暂超出 1.0 再回落，配合面板的位移/缩放
+      // 得到"淡入弹出 → 超出 → 收回"的 Q 弹感（面板变换层恒定存在，
+      // 过冲值仅驱动参数）
+      curve: const Cubic(0.175, 0.885, 0.32, 1.35),
+      reverseCurve: Curves.easeInCubic,
+    );
+    _sessionsMenuController = controller;
+    _sessionsMenuCurved = curved;
+    final entry = OverlayEntry(
+      builder: (context) => SavedSessionsMenuHost(
+        animation: curved,
+        currentSessionId: _currentSavedSessionId,
+        onDismiss: _dismissSessionsMenu,
+        onLoadSession: _loadChatSession,
+        onRenamed: _onSessionRenamed,
+        onDeleted: _onSessionDeleted,
+      ),
+    );
+    _sessionsMenuOverlay = entry;
+    overlay.insert(entry);
+    _sessionsMenuOpen = true;
+    controller.forward();
+  }
+
+  Future<void> _dismissSessionsMenu([VoidCallback? then]) async {
+    final entry = _sessionsMenuOverlay;
+    final controller = _sessionsMenuController;
+    final curved = _sessionsMenuCurved;
+    if (entry == null || controller == null) {
+      then?.call();
+      return;
+    }
+    _sessionsMenuOverlay = null;
+    _sessionsMenuController = null;
+    _sessionsMenuCurved = null;
+    await controller.reverse();
+    if (entry.mounted) entry.remove();
+    curved?.dispose();
+    controller.dispose();
+    _sessionsMenuOpen = false;
+    // 菜单打开期间的键盘变化被屏蔽，关闭后补一次同步对齐实际键盘状态
+    if (mounted) {
+      didChangeMetrics();
+    }
+    then?.call();
   }
 
   /// 打开对话框/页面前的统一处理：清除当前焦点并隐藏键盘。
@@ -2937,7 +3493,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     ),
                   ),
                   const SizedBox(height: 20),
-                  TextField(
+                  AppTextField(
                     contextMenuBuilder: styledEditableContextMenu,
                     controller: controller,
                     decoration: InputDecoration(
@@ -3223,7 +3779,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                           ),
                           const SizedBox(height: 20),
-                          TextField(
+                          AppTextField(
                             contextMenuBuilder: styledEditableContextMenu,
                             controller: urlController,
                             decoration: InputDecoration(
@@ -3235,7 +3791,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             ),
                           ),
                           const SizedBox(height: 12),
-                          TextField(
+                          AppTextField(
                             contextMenuBuilder: styledEditableContextMenu,
                             controller: keyController,
                             decoration: InputDecoration(
@@ -3247,7 +3803,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             ),
                           ),
                           const SizedBox(height: 12),
-                          TextField(
+                          AppTextField(
                             contextMenuBuilder: styledEditableContextMenu,
                             controller: modelController,
                             decoration: InputDecoration(
@@ -3428,7 +3984,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           _selectedImagePath = image.path;
           _selectedImageBase64 = base64Encode(bytes);
           _selectedImageAspectRatio = aspectRatio;
-          _inputAreaExtraHeight = 44;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToBottom();
@@ -3458,7 +4013,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           _selectedImagePath = image.path;
           _selectedImageBase64 = base64Encode(bytes);
           _selectedImageAspectRatio = aspectRatio;
-          _inputAreaExtraHeight = 44;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToBottom();
@@ -3505,34 +4059,55 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     return '抱歉，发生了错误：$error';
   }
 
-  void _updateTextLinesExtraHeight() {
+  /// 文字变化：post-frame 复核输入框内部滚动状态（maxScrollExtent 在布局后
+  /// 才可用；高度是否变化由 SizeChangedLayoutNotification 驱动，无需在此处理）
+  void _onInputTextChanged() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updateInputEdgeFade();
+    });
+  }
+
+  /// 实测输入区总高度并同步消息列表底部避让
+  ///
+  /// 触发源是输入区的 SizeChangedLayoutNotification——换行增行、图片预览
+  /// 出现/移除、字体缩放、旋转、AnimatedSize 动画逐帧等一切真实尺寸变化
+  /// 都会送达。post-frame 读 RenderBox 实际高度，与缓存差 >0.5px 才刷新；
+  /// 渐变动画期间每帧收敛到真实值。长高时把列表压到底，保证最新内容
+  /// 不被增高的输入区盖住。
+  void _syncInputAreaHeight() {
     if (!mounted) return;
-    final text = _messageController.text;
-    int lines;
-    if (text.isEmpty) {
-      lines = 1;
-    } else {
-      const approxCharsPerLine = 25;
-      final splitLines = text.split('\n');
-      int totalLines = 0;
-      for (final line in splitLines) {
-        totalLines += (line.length / approxCharsPerLine).ceil().clamp(1, 4);
-      }
-      lines = totalLines.clamp(1, 4);
-    }
-    final extraHeight = (lines - 1) * _kTextLineHeight;
-    if (_textLinesExtraHeight != extraHeight) {
-      final isGrowing = extraHeight > _textLinesExtraHeight;
-      setState(() {
-        _textLinesExtraHeight = extraHeight;
+    final ctx = _inputAreaKey.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final h = box.size.height;
+    if ((_inputAreaHeight - h).abs() <= 0.5) return;
+    final grew = h > _inputAreaHeight;
+    setState(() {
+      _inputAreaHeight = h;
+    });
+    if (grew) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
       });
-      if (isGrowing) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          }
-        });
-      }
+    }
+  }
+
+  /// 根据输入框内部滚动位置刷新上下边缘淡出状态：
+  /// 仅在文字超出显示区域滚动时生效，且只淡出有剩余内容的一端
+  void _updateInputEdgeFade() {
+    if (!mounted || !_inputScrollController.hasClients) return;
+    final pos = _inputScrollController.position;
+    if (!pos.hasContentDimensions) return;
+    final maxExtent = pos.maxScrollExtent;
+    final next = (
+      top: pos.pixels > 0.5,
+      bottom: pos.pixels < maxExtent - 0.5,
+    );
+    if (_inputEdgeFade.value != next) {
+      _inputEdgeFade.value = next;
     }
   }
 
@@ -3541,7 +4116,6 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       _selectedImagePath = null;
       _selectedImageBase64 = null;
       _selectedImageAspectRatio = null;
-      _inputAreaExtraHeight = 0;
     });
   }
 
@@ -3662,6 +4236,13 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _removeMessageMenuOverlay();
     _messageMenuTimer?.cancel();
     _messageMenuTimer = null;
+    // 已保存会话菜单若仍打开：直接移除（State 销毁后无法再走收起动画）
+    _sessionsMenuOverlay?.remove();
+    _sessionsMenuOverlay = null;
+    _sessionsMenuCurved?.dispose();
+    _sessionsMenuCurved = null;
+    _sessionsMenuController?.dispose();
+    _sessionsMenuController = null;
     if (_scrollController.hasClients) {
       _persistentScrollOffset = _scrollController.offset;
     }
@@ -3670,8 +4251,11 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     StorageService.dataChangeListenable.removeListener(_handleStorageDataChanged);
     _cancelSlowResponseTimer();
     _cancelNoResponseTimer();
-    _messageController.removeListener(_updateTextLinesExtraHeight);
+    _messageController.removeListener(_onInputTextChanged);
     _messageController.dispose();
+    _inputScrollController.removeListener(_updateInputEdgeFade);
+    _inputScrollController.dispose();
+    _inputEdgeFade.dispose();
     _scrollController.dispose();
     _thinkingScrollController.dispose();
     _addMenuCurved?.dispose();
@@ -3701,11 +4285,19 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         final maxKeyboardHeight = mq.size.height * 0.8;
         final kb = kl.layoutHeight.clamp(0.0, maxKeyboardHeight);
         final double pageBottomInset = kb;
-        final double inputBottomPosition = max(8.0, 100.0 - kb);
+        // 静止底距 = 系统底边距 + 悬浮导航栏块高（15 外边距 + 64 栏体，
+        // 见 HomeScreen.navBarBlockHeight）+ 固定呼吸间距 8：原魔法数 100
+        // 未含系统底边距，手势条/三键导航机型会与导航栏部分重合。
+        // 键盘弹出（kb ≥ base−8）时自动落回 8dp，行为不变
+        final double inputBaseBottom =
+            bottomPadding + HomeScreen.navBarBlockHeight + 8;
+        final double inputBottomPosition = max(8.0, inputBaseBottom - kb);
         final double inputBounceOffset = kl.bounceOffset * 2.2;
         final double inputBottomWithBounce = max(0.0, inputBottomPosition - inputBounceOffset);
-        const double inputBaseHeight = 60;
-        final double listBottomPadding = inputBottomPosition + inputBaseHeight + _inputAreaExtraHeight + _textLinesExtraHeight + 8;
+        // 列表底部避让 = 输入框底距 + 输入区实测总高度 + 呼吸间隙。
+        // 高度为 post-frame 实测（SizeChangedLayoutNotification 驱动），
+        // 多行增长/图片预览/字体缩放自动跟随，无需估算
+        final double listBottomPadding = inputBottomPosition + _inputAreaHeight + 8;
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: const SystemUiOverlayStyle(
@@ -3998,13 +4590,48 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
                       children: [
-                        const Expanded(
-                          child: Text(
-                            '课表助手',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF1A1A2E),
+                        Expanded(
+                          // 会话标题生成后与默认文案"课表助手"模糊交叉切换
+                          // （动画参考设置页邮箱登录/注册副标题切换）
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 220),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeIn,
+                            // 左对齐布局：新旧标题交叉过渡时不偏离原左侧位置
+                            layoutBuilder: (currentChild, previousChildren) => Stack(
+                              alignment: Alignment.centerLeft,
+                              children: [
+                                ...previousChildren,
+                                if (currentChild != null) currentChild,
+                              ],
+                            ),
+                            transitionBuilder: (child, animation) => FadeTransition(
+                              opacity: animation,
+                              child: AnimatedBuilder(
+                                animation: animation,
+                                builder: (context, grandChild) => ImageFiltered(
+                                  imageFilter: ImageFilter.blur(
+                                    sigmaX: 6 * (1.0 - animation.value),
+                                    sigmaY: 6 * (1.0 - animation.value),
+                                  ),
+                                  child: Transform.scale(
+                                    scale: 0.92 + 0.08 * animation.value,
+                                    child: grandChild,
+                                  ),
+                                ),
+                                child: child,
+                              ),
+                            ),
+                            child: Text(
+                              _chatTitle ?? '课表助手',
+                              key: ValueKey<String>(_chatTitle ?? '课表助手'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF1A1A2E),
+                              ),
                             ),
                           ),
                         ),
@@ -4082,14 +4709,57 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                       ),
                                     ),
                                   ),
-                          if (_messages.isNotEmpty || _streamingContent.isNotEmpty)
-                            IconButton(
-                              onPressed: () {
-                                HapticFeedback.selectionClick();
-                                _clearChat();
-                              },
-                              icon: Icon(Icons.delete_outline, color: Colors.grey.shade600),
-                            ),
+                          BlurredPopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert, size: 22, color: Colors.grey.shade600),
+                            menuWidth: 170,
+                            items: [
+                              const BlurredPopupMenuItem(
+                                value: 'clear',
+                                icon: Icons.delete_outline,
+                                label: '清空当前对话',
+                                iconColor: Color(0xFF4A90E2),
+                              ),
+                              // 已关联保存会话（自动实时同步中）时手动保存无意义；
+                              // 首次保存完成后菜单项立即变为"已自动保存"
+                              if (_currentSavedSessionId == null)
+                                const BlurredPopupMenuItem(
+                                  value: 'save',
+                                  icon: Icons.bookmark_add_outlined,
+                                  label: '保存本次对话',
+                                  iconColor: Color(0xFF4A90E2),
+                                )
+                              else
+                                const BlurredPopupMenuItem(
+                                  value: 'autosave',
+                                  icon: Icons.bookmark,
+                                  label: '已自动保存',
+                                  iconColor: Colors.grey,
+                                  textColor: Colors.grey,
+                                ),
+                              const BlurredPopupMenuItem(
+                                value: 'history',
+                                icon: Icons.history,
+                                label: '已保存的会话',
+                                iconColor: Color(0xFF4A90E2),
+                              ),
+                            ],
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'clear':
+                                  HapticFeedback.selectionClick();
+                                  _clearChat();
+                                  toastNotification.show(context, '已清空当前对话');
+                                  break;
+                                case 'save':
+                                  _saveCurrentChat();
+                                  break;
+                                case 'history':
+                                  _showSavedSessionsMenu();
+                                  break;
+                                // 'autosave'：自动同步进行中，点击无操作
+                              }
+                            },
+                          ),
                         ],
                       ],
                     ),
@@ -4889,9 +5559,21 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       left: 16,
       right: 16,
       bottom: inputBottomPosition,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
+      // 输入区真实尺寸变化（换行增行、图片预览、字体缩放、AnimatedSize
+      // 渐变逐帧等）统一由 SizeChangedLayoutNotification 送达，
+      // post-frame 实测高度后驱动消息列表底部避让（见 _syncInputAreaHeight）
+      child: NotificationListener<SizeChangedLayoutNotification>(
+        onNotification: (_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _syncInputAreaHeight();
+          });
+          return false;
+        },
+        child: SizeChangedLayoutNotifier(
+          child: Stack(
+            key: _inputAreaKey,
+            clipBehavior: Clip.none,
+            children: [
           // shadow must sit outside ClipRRect: clipping eats shadows drawn inside
           // (same thin shadow as home-screen bottom nav)
           DecoratedBox(
@@ -5020,31 +5702,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         const SizedBox(width: 8),
                         Expanded(
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                            child: TextField(
-                              contextMenuBuilder: styledEditableContextMenu,
-                              controller: _messageController,
-                              focusNode: _focusNode,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                height: 1.4,
-                              ),
-                              decoration: InputDecoration(
-                                hintText: '输入消息...',
-                                hintStyle: TextStyle(
-                                  color: Colors.grey.shade400,
-                                  fontSize: 15,
-                                ),
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.zero,
-                                isDense: true,
-                                filled: true,
-                                fillColor: Colors.transparent,
-                              ),
-                              maxLines: 4,
-                              minLines: 1,
-                              onSubmitted: (_) => _sendMessage(),
-                            ),
+                            // 左内边距 4→2：文字起点再向 + 号靠拢一点（总间隙 16→10），
+                            // 保留最小呼吸感
+                            padding: const EdgeInsets.only(left: 2, right: 8, top: 10, bottom: 10),
+                            child: _buildFadingTextField(),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -5096,6 +5757,97 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             ),
           ),
         ],
+        ),
+        ),
+      ),
+    );
+  }
+
+  /// 输入框（多行 + 内部滚动 + 上下边缘淡出）
+  ///
+  /// maxLines 由 4 提到 5：视口上下各多出约半行作为淡出缓冲——文字超出
+  /// 显示区域内部滚动时，有剩余内容的一端在这半行内逐渐淡出（滚动到顶/
+  /// 底时只淡出另一端），替代原来的生硬裁切；内容未超出时全不透明渐变，
+  /// 视觉等价于无遮罩。淡出状态由 _updateInputEdgeFade 维护
+  /// （ValueNotifier 仅重建遮罩子树，滚动逐帧不触发整页重建）。
+  ///
+  /// 结构必须恒定：无论是否需要淡出都返回同型 ShaderMask→TextField 链。
+  /// 若按需切换返回类型（裸输入框 ↔ 遮罩包裹），内容 5↔6 行增减时会
+  /// 销毁重建 EditableTextState → 输入连接断开 → 键盘被强制收起（实测）
+  Widget _buildFadingTextField() {
+    return AnimatedSize(
+      // 输入/删行导致的框体高度变化平滑过渡（参数对齐图片预览区动画）。
+      // 顶部对齐：增行时新行向下揭示、删行时底部平滑收起，光标贴随文字；
+      // 溢出裁切由默认 hardEdge 承担。动画逐帧改变整体尺寸，实测避让
+      // （SizeChangedLayoutNotification 驱动）随之逐帧同步，列表不跳变
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      alignment: Alignment.topCenter,
+      child: ValueListenableBuilder<({bool top, bool bottom})>(
+      valueListenable: _inputEdgeFade,
+      builder: (context, fade, child) {
+        final halfLine =
+            MediaQuery.textScalerOf(context).scale(15.0) * 1.4 / 2;
+        return ShaderMask(
+          shaderCallback: (bounds) {
+            // 无淡出需求：全不透明渐变，保持树型稳定（见上注释）
+            if (!fade.top && !fade.bottom) {
+              return const LinearGradient(
+                colors: [Colors.white, Colors.white],
+              ).createShader(bounds);
+            }
+            final h = bounds.height;
+            final t = (halfLine / h).clamp(0.0, 0.45);
+            return LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                fade.top ? Colors.transparent : Colors.white,
+                Colors.white,
+                Colors.white,
+                fade.bottom ? Colors.transparent : Colors.white,
+              ],
+              stops: [
+                0.0,
+                fade.top ? t : 0.0,
+                fade.bottom ? 1 - t : 1.0,
+                1.0,
+              ],
+            ).createShader(bounds);
+          },
+          blendMode: BlendMode.dstIn,
+          child: child,
+        );
+      },
+      child: AppTextField(
+        contextMenuBuilder: styledEditableContextMenu,
+        controller: _messageController,
+        focusNode: _focusNode,
+        scrollController: _inputScrollController,
+        style: const TextStyle(
+          fontSize: 15,
+          height: 1.4,
+        ),
+        decoration: InputDecoration(
+          hintText: '输入消息...',
+          hintStyle: TextStyle(
+            color: Colors.grey.shade400,
+            fontSize: 15,
+          ),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.zero,
+          isDense: true,
+          filled: true,
+          fillColor: Colors.transparent,
+        ),
+        maxLines: 5,
+        minLines: 1,
+        // iOS 式超出回弹：内容超出视口后划到顶/底可带惯性冲出边界再弹回
+        // （默认 Clamping 到边硬停）。内容未超出时无可滚动范围，短文本
+        // 不会被误拖动
+        scrollPhysics: const BouncingScrollPhysics(),
+        onSubmitted: (_) => _sendMessage(),
+      ),
       ),
     );
   }

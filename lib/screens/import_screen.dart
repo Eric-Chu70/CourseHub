@@ -17,6 +17,7 @@ import '../models/course.dart';
 import '../utils/course_color_palette.dart';
 import '../widgets/blur_selection_menu.dart';
 import 'shiguang_school_select_screen.dart';
+import '../widgets/app_text_field.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -555,7 +556,7 @@ class _ImportScreenState extends State<ImportScreen> {
                             ),
                             const SizedBox(height: 20),
                             Expanded(
-                              child: TextField(
+                              child: AppTextField(
                                 contextMenuBuilder: styledEditableContextMenu,
                                 controller: controller,
                                 maxLines: null,

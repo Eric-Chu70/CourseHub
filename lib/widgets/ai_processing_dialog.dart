@@ -11,6 +11,7 @@ import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
 import 'glass_dialog.dart';
 import 'blur_selection_menu.dart';
+import 'app_text_field.dart';
 
 enum AIProcessingStep {
   parsing,
@@ -1336,7 +1337,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
           child: Row(
             children: [
               Expanded(
-                child: TextField(
+                child: AppTextField(
                   contextMenuBuilder: styledEditableContextMenu,
                   controller: _chatController,
                   decoration: InputDecoration(
@@ -1709,7 +1710,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 20),
-          TextField(
+          AppTextField(
             contextMenuBuilder: styledEditableContextMenu,
             controller: _nameController,
             decoration: InputDecoration(
@@ -1730,7 +1731,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
+          AppTextField(
             contextMenuBuilder: styledEditableContextMenu,
             controller: _teacherController,
             decoration: InputDecoration(
@@ -1751,7 +1752,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
+          AppTextField(
             contextMenuBuilder: styledEditableContextMenu,
             controller: _locationController,
             decoration: InputDecoration(
@@ -1787,7 +1788,11 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
                     isExpanded: true,
                     items: List.generate(7, (i) => DropdownMenuItem(
                       value: i,
-                      child: Text('周${_weekDayNames[i]}'),
+                      child: Text(
+                        '周${_weekDayNames[i]}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     )),
                     onChanged: (v) => setState(() => _selectedDay = v!),
                   ),
@@ -1805,9 +1810,16 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
                   child: BlurredDropdown<int>(
                     value: _selectedPeriod,
                     isExpanded: true,
+                    // 菜单与触发框同宽并居中对齐；大字号下菜单项由
+                    // FittedBox 等比缩小，不会截断
+                    centerMenu: true,
                     items: List.generate(12, (i) => DropdownMenuItem(
                       value: i + 1,
-                      child: Text('第${i + 1}节'),
+                      child: Text(
+                        '第${i + 1}节',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     )),
                     onChanged: (v) => setState(() => _selectedPeriod = v!),
                   ),
@@ -1828,7 +1840,11 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
               isExpanded: true,
               items: [1, 2, 3, 4].map((d) => DropdownMenuItem(
                 value: d,
-                child: Text('$d 节'),
+                child: Text(
+                  '$d 节',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               )).toList(),
               onChanged: (v) => setState(() => _selectedDuration = v!),
             ),

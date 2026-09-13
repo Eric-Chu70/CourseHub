@@ -266,6 +266,53 @@ class UpdateService {
     debugPrint('deleteInstaller: gave up on $filePath');
   }
 
+  /// 立即删除本地安装包（下载完成页「删除安装包」入口）。
+  /// 文件被占用等删除失败时静默返回 false，由调用方决定是否提示。
+  static Future<bool> deleteInstallerNow(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (file.existsSync()) {
+        await file.delete();
+      }
+      return true;
+    } catch (e) {
+      debugPrint('deleteInstallerNow error: $e');
+      return false;
+    }
+  }
+
+  /// 启动时清理残留安装包：Android 自更新成功后进程被系统杀死，
+  /// 「安装后延迟删除」在 Android 上永远来不及执行，安装包会一直留在
+  /// 缓存目录。改为下次启动时补删：删除版本号不高于当前版本的旧安装包
+  /// （已安装过，不再需要）与中断下载的 .part 半成品；
+  /// 版本号更新的安装包保留（用户取消安装后可复用，免重新下载）。
+  static Future<void> cleanupStaleInstallers(String currentVersion) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! File) continue;
+        final name = entity.uri.pathSegments.last;
+        try {
+          if (name.endsWith('.part')) {
+            await entity.delete();
+            continue;
+          }
+          final match =
+              RegExp(r'^coursehub_(.+)\.[A-Za-z0-9]+$').firstMatch(name);
+          if (match == null) continue;
+          if (compareVersions(match.group(1)!, currentVersion) <= 0) {
+            await entity.delete();
+            debugPrint('cleanupStaleInstallers: removed $name');
+          }
+        } catch (_) {
+          // 单个文件删除失败（占用等）不影响其余清理
+        }
+      }
+    } catch (e) {
+      debugPrint('cleanupStaleInstallers error: $e');
+    }
+  }
+
   /// 在系统文件管理器中显示已下载的文件（Windows 选中该文件）
   static Future<void> revealInFileManager(String filePath) async {
     try {

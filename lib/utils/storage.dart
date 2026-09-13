@@ -33,6 +33,7 @@ class StorageService {
   static late Box<Course> _coursesBox;
   static late Box<Task> _tasksBox;
   static late Box<dynamic> _settingsBox;
+  static late Box<dynamic> _chatsBox;
   
   static String _currentTimetableId = 'default';
   static final ValueNotifier<int> _dataChangeNotifier = ValueNotifier<int>(0);
@@ -49,6 +50,7 @@ class StorageService {
     _coursesBox = await Hive.openBox<Course>('courses');
     _tasksBox = await Hive.openBox<Task>('tasks');
     _settingsBox = await Hive.openBox('settings');
+    _chatsBox = await Hive.openBox('chats');
 
     _currentTimetableId = _settingsBox.get('currentTimetableId', defaultValue: 'default');
 
@@ -240,20 +242,82 @@ class StorageService {
     }).toList();
   }
 
+  // ========== AI 对话历史 ==========
+  static Future<void> saveChatSession(Map<String, dynamic> session) async {
+    await _chatsBox.put(session['id'] as String, session);
+  }
+
+  static List<Map<String, dynamic>> getChatSessions() {
+    final sessions = _chatsBox.values
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+    sessions.sort((a, b) {
+      final aAt = DateTime.tryParse(a['savedAt']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bAt = DateTime.tryParse(b['savedAt']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bAt.compareTo(aAt);
+    });
+    return sessions;
+  }
+
+  static Map<String, dynamic>? getChatSession(String id) {
+    final saved = _chatsBox.get(id);
+    if (saved is Map) return Map<String, dynamic>.from(saved);
+    return null;
+  }
+
+  static Future<void> deleteChatSession(String id) async {
+    await _chatsBox.delete(id);
+  }
+
   // ========== 时间段设置 ==========
-  static List<Map<String, String>> getDefaultTimeSlots() {
-    return [
+
+  /// 时间段预设（全局唯一数据源）：预设1 = 12 节；预设2 = 13 节，
+  /// 每节 45 分钟。预设选择与自定义配置的全局存储见下方
+  static const Map<String, List<Map<String, String>>> timeSlotPresets = {
+    '预设1': [
+      {'start': '08:30', 'end': '09:15'},
+      {'start': '09:20', 'end': '10:05'},
+      {'start': '10:20', 'end': '11:05'},
+      {'start': '11:10', 'end': '11:55'},
+      {'start': '14:30', 'end': '15:15'},
+      {'start': '15:20', 'end': '16:05'},
+      {'start': '16:20', 'end': '17:05'},
+      {'start': '17:10', 'end': '17:55'},
+      {'start': '19:30', 'end': '20:15'},
+      {'start': '20:20', 'end': '21:05'},
+      {'start': '21:10', 'end': '21:55'},
+      {'start': '22:00', 'end': '22:45'},
+    ],
+    '预设2': [
       {'start': '08:00', 'end': '08:45'},
-      {'start': '08:55', 'end': '09:40'},
-      {'start': '10:00', 'end': '10:45'},
-      {'start': '10:55', 'end': '11:40'},
-      {'start': '14:00', 'end': '14:45'},
+      {'start': '08:50', 'end': '09:35'},
+      {'start': '09:50', 'end': '10:35'},
+      {'start': '10:40', 'end': '11:25'},
+      {'start': '11:30', 'end': '12:15'},
+      {'start': '14:05', 'end': '14:50'},
       {'start': '14:55', 'end': '15:40'},
-      {'start': '16:00', 'end': '16:45'},
-      {'start': '16:55', 'end': '17:40'},
-      {'start': '19:00', 'end': '19:45'},
-      {'start': '19:55', 'end': '20:40'},
-    ];
+      {'start': '15:45', 'end': '16:30'},
+      {'start': '16:40', 'end': '17:25'},
+      {'start': '17:30', 'end': '18:15'},
+      {'start': '18:30', 'end': '19:15'},
+      {'start': '19:20', 'end': '20:05'},
+      {'start': '20:10', 'end': '20:55'},
+    ],
+  };
+
+  /// 新课表/未保存过时间段的课表的默认作息：
+  /// 优先用户保存过的自定义配置（全局，所有课表共享），否则使用预设1。
+  /// 旧的 10 节默认作息已废弃删除
+  static List<Map<String, String>> getDefaultTimeSlots() {
+    final custom = getCustomTimeSlots();
+    if (custom != null && custom.isNotEmpty) {
+      return custom;
+    }
+    return timeSlotPresets['预设1']!
+        .map((e) => Map<String, String>.from(e))
+        .toList();
   }
 
   static List<Map<String, String>> getTimeSlots() {
@@ -269,6 +333,33 @@ class StorageService {
   static Future<void> setTimeSlots(List<Map<String, String>> slots) async {
     await _settingsBox.put('${_currentTimetableId}_timeSlots', slots);
     _notifyDataChanged();
+  }
+
+  // ========== 时间段预设/自定义（全局，跨课表共享） ==========
+
+  /// 用户保存过的自定义时间段（全局存储，所有课表可读取）；
+  /// null = 尚无自定义配置
+  static List<Map<String, String>>? getCustomTimeSlots() {
+    final saved = _settingsBox.get('custom_time_slots');
+    if (saved == null) return null;
+    return List<Map<String, String>>.from(
+      (saved as List).map((item) => Map<String, String>.from(item)),
+    );
+  }
+
+  static Future<void> setCustomTimeSlots(List<Map<String, String>> slots) async {
+    await _settingsBox.put('custom_time_slots', slots);
+  }
+
+  /// 时间段预设选择状态（全局）：'自定义' / '预设1' / '预设2'，'' = 未选择。
+  /// 切换课表后对话框按此值回显上次的预设选择
+  static String getTimePresetSelection() {
+    final v = _settingsBox.get('time_preset_selection', defaultValue: '');
+    return v is String ? v : '';
+  }
+
+  static Future<void> setTimePresetSelection(String value) async {
+    await _settingsBox.put('time_preset_selection', value);
   }
 
   // ========== 学期设置 ==========
@@ -332,7 +423,10 @@ class StorageService {
 
   // ========== 每日课程节数 ==========
   static int getDailyPeriods() {
-    return _settingsBox.get('${_currentTimetableId}_dailyPeriods', defaultValue: 10);
+    final saved = _settingsBox.get('${_currentTimetableId}_dailyPeriods');
+    if (saved is int) return saved;
+    // 未保存时与时间段数量保持一致：自定义配置取其节数，否则预设1 = 12 节
+    return getTimeSlots().length;
   }
 
   static Future<void> setDailyPeriods(int periods) async {

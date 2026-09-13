@@ -15,14 +15,26 @@ import kotlin.system.exitProcess
 
 class MainActivity : FlutterActivity() {
 
+    /// 本实例领取的代数（onCreate 时赋值）。延迟杀进程任务执行前校验代数：
+    /// 不一致 = 期间有新实例启动，放弃杀进程
+    private var myGeneration = 0
+
     companion object {
         @Volatile
         var pendingWidgetRoute: String? = null
 
         // 上次退出（onStop/onDestroy 计划杀进程）遗留的任务；进程被复用重进时
-        // 由新实例 onCreate 取消，避免延迟的 exitProcess 杀掉复用进程里的新实例
+        // 由新实例 onCreate 取消，避免延迟的 exitProcess 杀掉复用进程里的新实例。
+        // 取消之外另有代数校验兜底（见 instanceGeneration）：覆盖「退出动画期间
+        // 立即重开 → 新实例 onCreate 先于旧实例 onDestroy 执行」的顺序——此时
+        // 取消逻辑尚无任务可取消，随后 onDestroy 又挂上新任务，到点会杀掉
+        // 正在运行的新实例（即退出后立即重开的闪退）
         @Volatile
         private var pendingExitTask: Runnable? = null
+
+        // MainActivity 实例代数：每个实例 onCreate 时自增并领取自己的代数
+        @Volatile
+        private var instanceGeneration = 0
 
         // 自定义退出动画基准时长（ms），必须与 res/anim/activity_close_exit.xml
         // 的 duration 一致。把品牌默认关闭动画统一成固定时长，杀进程延迟 =
@@ -32,6 +44,10 @@ class MainActivity : FlutterActivity() {
         // 动画结束到杀进程之间的安全缓冲（ms），吸收缩放取整与首帧启动误差
         private const val EXIT_ANIM_BUFFER_MS = 50L
 
+        // 高刷写入延迟投递时长（ms）：避开 onResume/onWindowFocusChanged 与
+        // Flutter Surface 重建重叠的窗口期后再执行幂等写入
+        private const val RESUME_APPLY_DELAY_MS = 250L
+
         // 必须是静态单例：Handler.removeCallbacks 按「Handler 实例 + Runnable」
         // 匹配消息，实例属性会导致新 Activity 实例取消不掉旧实例发出的
         // 延迟杀进程任务（进程复用重进时 exitProcess 误杀新实例 → 闪退）
@@ -40,6 +56,9 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 领取代数：使本实例创建之前挂起的杀进程任务全部失效
+        myGeneration = ++instanceGeneration
 
         // 进程复用重进（上次退出后进程未死、用户立即重开）：取消遗留的杀进程
         // 任务，防止延迟 exitProcess 误杀刚启动的新实例导致闪退
@@ -65,16 +84,26 @@ class MainActivity : FlutterActivity() {
         }
 
         setMiuiStatusBarLightMode(true)
-        // 冷启动首次高刷写入延迟：onCreate 阶段写 preferredDisplayModeId
-        // 会触发显示模式切换，与 Flutter 首帧 Surface 创建竞态，低概率
-        // 首帧永不上屏（白屏死机，多见于覆盖安装/重启后首次启动）。
-        // 延迟到首帧渲染窗口之后再应用；onResume 等后续调用同样等待该标志
+        // 高刷写入安全策略：写 preferredDisplayModeId 会触发显示模式切换，
+        // 与 Flutter Surface 创建/重建竞态可致光栅线程死等（白屏死机/一帧
+        // 后冻结）。固定延迟不足以防护——长后台后冷启动缓存全冷（叠加视频
+        // 壁纸的缩略图解码与解码器初始化），首帧可能晚于任何固定值，写入
+        // 恰好落在首帧 Surface 创建前后即触发竞态。因此统一锚定 Flutter
+        // 真实首帧（onFlutterUiDisplayed）后经延迟投递 + 幂等检查写入；
+        // 2s 兜底仅覆盖首帧回调未送达的极端情况
         mainHandler.postDelayed({
             allowRateApply = true
-            applyHighRefreshRateHint()
-        }, 400)
+            scheduleRateApply()
+        }, 2000)
 
         intent?.dataString?.let { pendingWidgetRoute = it }
+    }
+
+    override fun onFlutterUiDisplayed() {
+        super.onFlutterUiDisplayed()
+        // Flutter 首帧已实际上屏：Surface 进入稳定期，此后才允许写显示模式
+        allowRateApply = true
+        scheduleRateApply()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -123,7 +152,15 @@ class MainActivity : FlutterActivity() {
         // 兼容不同品牌动画时长差异，保证「动画播完立即杀」；进程复用重进时
         // 由新实例 onCreate 取消遗留任务兜底，避免延迟 exitProcess 误杀新实例。
         if (isFinishing) {
-            val exitTask = Runnable { exitProcess(0) }
+            val generation = myGeneration
+            val exitTask = Runnable {
+                // 执行前校验代数：期间有新实例启动（退出动画窗口内立即重开、
+                // 进程复用，且新实例 onCreate 先于本 onDestroy 执行时，onCreate
+                // 的取消逻辑扑空）则放弃杀进程，避免误杀正在运行的新实例
+                if (generation == instanceGeneration) {
+                    exitProcess(0)
+                }
+            }
             pendingExitTask = exitTask
             mainHandler.postDelayed(exitTask, computeExitDelay())
         }
@@ -158,7 +195,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (allowRateApply) applyHighRefreshRateHint()
+        // 恢复期与 Flutter Surface 重建同窗发生，绝不在 onResume 调用栈里
+        // 同步写 window.attributes：投递到主线程队列稍后执行（幂等检查
+        // 通常直接跳过，只有窗口属性被系统重置时才真正写入一次）
+        scheduleRateApply()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -166,16 +206,24 @@ class MainActivity : FlutterActivity() {
         if (hasFocus && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
         }
-        if (hasFocus && allowRateApply) {
-            applyHighRefreshRateHint()
+        if (hasFocus) {
+            scheduleRateApply()
         }
     }
 
-    /// 冷启动首帧窗口内禁止写显示模式（onCreate 延迟 400ms 后放开）
+    /// 冷启动首帧窗口内禁止写显示模式（首帧回调 / 2s 兜底后放开）
     @Volatile
     private var allowRateApply = false
 
+    /// 恢复/首帧后的写入一律延后投递：避开 onResume/onWindowFocusChanged
+    /// 与 Flutter Surface 重建重叠的窗口期
+    private fun scheduleRateApply() {
+        if (!allowRateApply) return
+        mainHandler.postDelayed({ applyHighRefreshRateHint() }, RESUME_APPLY_DELAY_MS)
+    }
+
     private fun applyHighRefreshRateHint() {
+        if (!allowRateApply) return
         try {
             val attrs = window.attributes
 
@@ -189,31 +237,30 @@ class MainActivity : FlutterActivity() {
 
                 val bestMode = activeDisplay?.supportedModes?.maxByOrNull { it.refreshRate }
                 if (bestMode != null) {
-                    // 去抖：模式未变化时跳过写入。每次 onResume/onWindowFocusChanged
-                    // 都无条件写 window.attributes 会触发窗口重排/显示模式切换，
-                    // 与长后台恢复时 Flutter Surface 重建竞态可致光栅线程死等
-                    // （白屏/画面冻结）。仅在目标模式与已应用值不同时写一次
-                    if (bestMode.modeId == lastAppliedModeId &&
-                        attrs.preferredDisplayModeId == bestMode.modeId
+                    // 幂等：窗口属性已带目标值时绝不重写。给 window.attributes
+                    // 赋值必触发 updateViewLayout 窗口重排，等值重写同样是多余
+                    // 的显示模式切换风险（此检查以窗口自身状态为准，Activity
+                    // 重建后的新窗口属性为 0，首帧后仍会正确写入一次）
+                    if (attrs.preferredDisplayModeId == bestMode.modeId &&
+                        attrs.preferredRefreshRate == bestMode.refreshRate
                     ) return
                     attrs.preferredDisplayModeId = bestMode.modeId
                     attrs.preferredRefreshRate = bestMode.refreshRate
                     window.attributes = attrs
-                    lastAppliedModeId = bestMode.modeId
                     Log.d("MainActivity", "Requested refresh mode=${bestMode.modeId}, rate=${bestMode.refreshRate}")
                     return
                 }
             }
 
+            // 回退分支（< API 23 或显示信息不可用）：仅在当前值非 0 时归零，
+            // 同样遵守幂等，禁止无条件重写
+            if (attrs.preferredRefreshRate == 0f) return
             attrs.preferredRefreshRate = 0f
             window.attributes = attrs
-            lastAppliedModeId = -1
         } catch (e: Exception) {
             Log.w("MainActivity", "applyHighRefreshRateHint failed", e)
         }
     }
-
-    private var lastAppliedModeId = -1
     
     private fun setMiuiStatusBarLightMode(lightMode: Boolean) {
         try {

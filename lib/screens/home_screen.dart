@@ -12,6 +12,12 @@ import '../utils/storage.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
+  /// 悬浮导航栏块总占位高度 = 底部外边距 15（Stack 里 Positioned
+  /// bottom: 15 + 系统底边距）+ 栏体高 64。
+  /// 「系统底边距 + 本值」即导航栏顶边位置，供对话页输入框等
+  /// 需要悬停在导航栏上方的布局作基准
+  static const double navBarBlockHeight = 15 + 64;
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -407,78 +413,84 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     return AnimatedBuilder(
       animation: _navBarAnimation,
       builder: (context, child) {
+        final t = _navBarAnimation.value;
         return Transform.translate(
-          offset: Offset(0, (1 - _navBarAnimation.value) * 100),
-          child: Opacity(
-            opacity: _navBarAnimation.value,
-            child: child,
+          offset: Offset(0, (1 - t) * 100),
+          // 外壳（毛玻璃）只位移、不参与淡出：Opacity 图层会隔离
+          // BackdropFilter 的背景采样，包在外壳上时动画全程失去模糊
+          // （Opacity(1.0) 被短路不建图层，静止时才恢复）。位移本身
+          // 不影响背景采样，100px 足以把整条栏送出屏幕外
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: _navPadding),
+            // 阴影须放在 ClipRRect 外层：裁剪会吃掉内部绘制的阴影，
+            // 之前阴影在内部容器上实际从未显示
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(32),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(32),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                child: Container(
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(32),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      width: 1.5,
+                    ),
+                  ),
+                  // 淡出只作用于图标内容层，毛玻璃壳体全程保持
+                  child: Opacity(
+                    opacity: t,
+                    child: child,
+                  ),
+                ),
+              ),
+            ),
           ),
         );
       },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: _navPadding),
-        // 阴影须放在 ClipRRect 外层：裁剪会吃掉内部绘制的阴影，
-        // 之前阴影在内部容器上实际从未显示
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(32),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(32),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
-            child: Container(
-              height: 64,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.45),
-                borderRadius: BorderRadius.circular(32),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.6),
-                  width: 1.5,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedPositioned(
+            duration: _isDragging ? Duration.zero : const Duration(milliseconds: 280),
+            curve: const Cubic(0.34, 1.15, 0.64, 1.0),
+            left: _getSliderLeft() + _dragOffset,
+            child: AnimatedScale(
+              scale: _pressedIndex == _currentIndex ? 1.10 : 1.0,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              child: Container(
+                width: _itemWidth,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4A90E2).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(26),
                 ),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  AnimatedPositioned(
-                    duration: _isDragging ? Duration.zero : const Duration(milliseconds: 280),
-                    curve: const Cubic(0.34, 1.15, 0.64, 1.0),
-                    left: _getSliderLeft() + _dragOffset,
-                    child: AnimatedScale(
-                      scale: _pressedIndex == _currentIndex ? 1.10 : 1.0,
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeOut,
-                      child: Container(
-                        width: _itemWidth,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF4A90E2).withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(26),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildNavItem(0, Icons.calendar_today_outlined, '课表'),
-                      _buildNavItem(1, Icons.local_fire_department_outlined, 'DDL'),
-                      _buildNavItem(2, Icons.chat_bubble_outline, '对话'),
-                      _buildNavItem(3, Icons.file_upload_outlined, '导入'),
-                      _buildNavItem(4, Icons.settings_outlined, '设置'),
-                    ],
-                  ),
-                ],
               ),
             ),
           ),
-        ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildNavItem(0, Icons.calendar_today_outlined, '课表'),
+              _buildNavItem(1, Icons.local_fire_department_outlined, 'DDL'),
+              _buildNavItem(2, Icons.chat_bubble_outline, '对话'),
+              _buildNavItem(3, Icons.file_upload_outlined, '导入'),
+              _buildNavItem(4, Icons.settings_outlined, '设置'),
+            ],
+          ),
+        ],
       ),
     );
   }

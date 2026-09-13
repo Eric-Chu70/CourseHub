@@ -24,6 +24,7 @@ import '../services/glm_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/blur_selection_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../widgets/app_text_field.dart';
 
 enum _CloudSyncAction {
   syncFromCloud,
@@ -1999,7 +2000,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  TextField(
+                  AppTextField(
                     contextMenuBuilder: styledEditableContextMenu,
                     controller: controller,
                     decoration: InputDecoration(
@@ -2308,7 +2309,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                               ),
                               const SizedBox(height: 20),
-                              TextField(
+                              AppTextField(
                                 contextMenuBuilder: styledEditableContextMenu,
                                 controller: urlController,
                                 decoration: InputDecoration(
@@ -2320,7 +2321,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              TextField(
+                              AppTextField(
                                 contextMenuBuilder: styledEditableContextMenu,
                                 controller: keyController,
                                 decoration: InputDecoration(
@@ -2332,7 +2333,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              TextField(
+                              AppTextField(
                                 contextMenuBuilder: styledEditableContextMenu,
                                 controller: modelController,
                                 decoration: InputDecoration(
@@ -2698,7 +2699,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// 时间段预设（定义见 StorageService.timeSlotPresets）：预设1（12 节）/
+  /// 预设2（13 节，每节 45 分钟）。选择预设整体覆盖时间段列表；手动编辑
+  /// 任意一节后脱离预设态
+  static const Map<String, List<Map<String, String>>> _timeSlotPresets =
+      StorageService.timeSlotPresets;
+
   Future<void> _showTimeSlotsDialog() async {
+    // 选择状态全局持久化：切换课表后仍回显上次选择；用户保存过自定义
+    // 配置时，下拉列表新增「自定义」项（全局配置，所有课表可读取套用）
+    String? selectedPreset;
+    final savedSelection = StorageService.getTimePresetSelection();
+    final hasCustomSlots =
+        StorageService.getCustomTimeSlots()?.isNotEmpty ?? false;
+    if (savedSelection == '预设1' || savedSelection == '预设2') {
+      selectedPreset = savedSelection;
+    } else if (savedSelection == '自定义' && hasCustomSlots) {
+      selectedPreset = '自定义';
+    }
     await showBouncyDialog(
       context: context,
       barrierLabel: '时间段设置',
@@ -2732,6 +2750,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
+                                const Spacer(),
+                                // 预设时间段选项框（参考 AI 配置页内置模型选项）：
+                                // 选择预设整体覆盖列表；手动编辑任一节后脱离
+                                // 预设态，回显「自定义」；保存过的自定义配置
+                                // 会作为「自定义」项进入下拉列表（全局共享）。
+                                // 宽度固定预留四字宽，选中态不随文字长短变化
+                                Container(
+                                  width: 100,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.4),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.grey.shade200),
+                                  ),
+                                  child: BlurredDropdown<String>(
+                                    value: selectedPreset,
+                                    isExpanded: true,
+                                    hint: Text(
+                                      '自定义',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.expand_more,
+                                      color: Color(0xFF4A90E2),
+                                      size: 18,
+                                    ),
+                                    menuWidth: 150,
+                                    items: [
+                                      ...['预设1', '预设2'].map(
+                                        (e) => DropdownMenuItem(
+                                          value: e,
+                                          child: Text(
+                                            e,
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                        ),
+                                      ),
+                                      if (hasCustomSlots)
+                                        const DropdownMenuItem(
+                                          value: '自定义',
+                                          child: Text(
+                                            '自定义',
+                                            style: TextStyle(fontSize: 14),
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (v) {
+                                      if (v == null) return;
+                                      setDialogState(() {
+                                        selectedPreset = v;
+                                        if (v == '自定义') {
+                                          final custom =
+                                              StorageService.getCustomTimeSlots();
+                                          if (custom != null && custom.isNotEmpty) {
+                                            _timeSlots = custom
+                                                .map((e) => Map<String, String>.from(e))
+                                                .toList();
+                                          }
+                                        } else {
+                                          _timeSlots = _timeSlotPresets[v]!
+                                              .map((e) => Map<String, String>.from(e))
+                                              .toList();
+                                        }
+                                      });
+                                    },
+                                  ),
+                                ),
                               ],
                             ),
                             const SizedBox(height: 16),
@@ -2748,11 +2836,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       decoration: BoxDecoration(
                                         color: Colors.white.withValues(alpha: 0.4),
                                         borderRadius: BorderRadius.circular(10),
-                                        // 灰描边仅减弱动态时显示：正常模式恢复白描边
+                                        // 非减弱动态：与右上角预设选择框一致
+                                        // 的浅灰描边（shade200）；减弱动态维持
+                                        // shade300 不变
                                         border: Border.all(
                                           color: _reduceMotionEnabled
                                               ? Colors.grey.shade300
-                                              : Colors.white.withValues(alpha: 0.4),
+                                              : Colors.grey.shade200,
                                         ),
                                       ),
                                       child: Row(
@@ -2787,7 +2877,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                   value: slot['start']!,
                                                   onChanged: (v) {
                                                     _timeSlots[index]['start'] = v;
-                                                    setDialogState(() {});
+                                                    // 手动编辑后脱离预设态，
+                                                    // 选项框回显占位文案
+                                                    setDialogState(() => selectedPreset = null);
                                                   },
                                                 ),
                                                 const Padding(
@@ -2798,7 +2890,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                   value: slot['end']!,
                                                   onChanged: (v) {
                                                     _timeSlots[index]['end'] = v;
-                                                    setDialogState(() {});
+                                                    // 手动编辑后脱离预设态，
+                                                    // 选项框回显占位文案
+                                                    setDialogState(() => selectedPreset = null);
                                                   },
                                                 ),
                                               ],
@@ -2832,6 +2926,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   child: ElevatedButton(
                                     onPressed: () async {
                                       await StorageService.setTimeSlots(_timeSlots);
+                                      // 每日节数与时间段数量保持一致
+                                      // （应用预设会改变数量：预设1=12 / 预设2=13）
+                                      await StorageService.setDailyPeriods(_timeSlots.length);
+                                      // 选择状态与自定义配置全局持久化（跨课表共享）：
+                                      // 非预设态保存即写入自定义配置，下拉列表从此
+                                      // 多出「自定义」项供所有课表套用；预设态仅记录选择
+                                      if (selectedPreset == null) {
+                                        await StorageService.setCustomTimeSlots(_timeSlots);
+                                        await StorageService.setTimePresetSelection('自定义');
+                                      } else {
+                                        await StorageService.setTimePresetSelection(selectedPreset!);
+                                      }
                                       if (mounted) {
                                         setState(() {});
                                       }
@@ -2880,11 +2986,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(8),
-          // 灰描边仅减弱动态时显示：正常模式恢复白描边
+          // 非减弱动态：与右上角预设选择框一致的浅灰描边（shade200）；
+          // 减弱动态维持 shade300 不变
           border: Border.all(
             color: _reduceMotionEnabled
                 ? Colors.grey.shade300
-                : Colors.white.withValues(alpha: 0.4),
+                : Colors.grey.shade200,
           ),
         ),
         child: Text(
@@ -3471,7 +3578,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 duration: const Duration(milliseconds: 180),
                                 curve: Curves.easeOut,
                                 alignment: Alignment.topCenter,
-                                child: TextField(
+                                child: AppTextField(
                                   contextMenuBuilder: styledEditableContextMenu,
                                   controller: emailController,
                                   keyboardType: TextInputType.emailAddress,
@@ -3495,7 +3602,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 duration: const Duration(milliseconds: 180),
                                 curve: Curves.easeOut,
                                 alignment: Alignment.topCenter,
-                                child: TextField(
+                                child: AppTextField(
                                   contextMenuBuilder: styledEditableContextMenu,
                                   controller: passwordController,
                                   keyboardType: TextInputType.visiblePassword,
@@ -3533,7 +3640,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     duration: const Duration(milliseconds: 180),
                                     curve: Curves.easeOut,
                                     alignment: Alignment.topCenter,
-                                    child: TextField(
+                                    child: AppTextField(
                                     contextMenuBuilder: styledEditableContextMenu,
                                     controller: confirmPasswordController,
                                     keyboardType: TextInputType.visiblePassword,

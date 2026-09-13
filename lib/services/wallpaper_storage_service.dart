@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -22,9 +23,14 @@ class WallpaperStorageService {
   static const _videoExts = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'];
   static const _dirName = 'wallpapers';
 
-  /// 图片压缩参数：长边上限 & JPEG 质量
-  static const _maxSide = 1440;
-  static const _jpegQuality = 85;
+  /// 小图直通阈值：小于该值的图片原样复制，不解码不重编码，保持原画质
+  static const int _noCompressBytes = 5 * 1024 * 1024;
+
+  /// 大图压缩目标长边取不到屏幕尺寸时的回退值
+  static const int _compressFallbackLongSide = 2560;
+
+  /// 大图压缩的 JPEG 质量
+  static const int _jpegQuality = 90;
 
   static Directory? _cachedDir;
 
@@ -47,33 +53,54 @@ class WallpaperStorageService {
   /// 视频壁纸首帧缩略图路径（与视频同目录、同名 + .thumb.png 后缀）
   static String thumbPathFor(String videoPath) => '$videoPath.thumb.png';
 
-  /// 持久化视频首帧缩略图（已存在则跳过，不覆盖已有版本）
+  /// 持久化视频首帧缩略图（仅限不存在时；规格标记供预载识别旧规格图）
   static Future<void> persistVideoThumb(String? videoPath, Uint8List pngBytes) async {
     if (videoPath == null) return;
     try {
       final thumb = File(thumbPathFor(videoPath));
       if (thumb.existsSync()) return;
       await thumb.writeAsBytes(pngBytes);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('wallpaper_thumb_h', thumbTargetHeight());
     } catch (_) {}
+  }
+
+  /// 视频首帧缩略图的目标高度：设备屏幕物理高度。
+  /// 预载图整屏 COVER 显示，低于屏幕分辨率会肉眼可见发虚；以屏幕物理
+  /// 分辨率封顶即"原画"观感（视频原始分辨率再高，显示端也用不上）
+  static int thumbTargetHeight() {
+    try {
+      final views = WidgetsBinding.instance.platformDispatcher.views;
+      if (views.isNotEmpty) {
+        final view = views.first;
+        if (view.devicePixelRatio > 0 && view.physicalSize.height > 0) {
+          return view.physicalSize.height.round();
+        }
+      }
+    } catch (_) {}
+    return 1920;
   }
 
   /// 生成视频首帧静态图并与视频文件绑定共存（<video>.thumb.png）
   ///
   /// 用 video_thumbnail 原生抽帧（Android MediaMetadataRetriever /
-  /// iOS AVAssetImageGenerator），不依赖 widget 渲染，导入时同步生成，
-  /// 启动预载直接读取秒显。缩略图已存在时跳过（幂等）。
+  /// iOS AVAssetImageGenerator），按屏幕物理分辨率出图（见
+  /// [thumbTargetHeight]）；导入时同步生成，启动预载直接读取秒显。
+  /// 缩略图已存在时跳过（幂等）；规格标记写入 prefs 供预载识别旧规格
   static Future<void> ensureVideoThumb(String videoPath) async {
     try {
       final thumb = File(thumbPathFor(videoPath));
       if (thumb.existsSync()) return;
+      final targetH = thumbTargetHeight();
       final bytes = await VideoThumbnail.thumbnailData(
         video: videoPath,
         imageFormat: ImageFormat.PNG,
-        maxHeight: 720,
-        quality: 80,
+        maxHeight: targetH,
       );
       if (bytes != null && bytes.isNotEmpty) {
         await thumb.writeAsBytes(bytes);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('wallpaper_thumb_h', targetH);
       }
     } catch (_) {
       // 原生抽帧失败：预载无缩略图，回退运行时捕获兜底
@@ -229,30 +256,76 @@ class WallpaperStorageService {
       return dest;
     }
 
-    // 图片：压缩瘦身
-    try {
-      final bytes = await File(pickedPath).readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded != null) {
-        var image = decoded;
-        // 只缩小不放大
-        final longSide = image.width >= image.height ? image.width : image.height;
-        if (longSide > _maxSide) {
-          final ratio = _maxSide / longSide;
-          image = img.copyResize(
-            image,
-            width: (image.width * ratio).round(),
-            height: (image.height * ratio).round(),
-          );
-        }
-        final encoded = img.encodeJpg(image, quality: _jpegQuality);
-        final dest = '${dir.path}/wallpaper_$timestamp.jpg';
-        await File(dest).writeAsBytes(encoded);
-        return dest;
-      }
-    } catch (_) {
-      // 解码失败走原样复制
+  // 图片：按文件大小分级处理
+  // < 5MB —— 原样复制：不解码、不重编码，保持原画质（杜绝一切缩放模糊）
+  // ≥ 5MB —— 原生按需解码到「屏幕物理长边」+ 后台隔离器 JPEG 编码：
+  //          解码/编码全部离开 UI 冻结路径（20MB 级照片 ANR 的修复），
+  //          画质上限为屏幕物理分辨率——COVER 显示下这就是可见像素上限，
+  //          不会比未压缩的小图更模糊
+  try {
+    final bytes = await File(pickedPath).readAsBytes();
+    if (bytes.length < _noCompressBytes) {
+      final dest = '${dir.path}/wallpaper_$timestamp.$ext';
+      await File(dest).writeAsBytes(bytes);
+      return dest;
     }
+
+    // 压缩目标长边 = 屏幕物理长边（取不到时回退 2560）
+    double capLongSide = _compressFallbackLongSide.toDouble();
+    try {
+      final views = WidgetsBinding.instance.platformDispatcher.views;
+      if (views.isNotEmpty) {
+        final view = views.first;
+        if (view.devicePixelRatio > 0) {
+          capLongSide =
+              math.max(view.physicalSize.width, view.physicalSize.height);
+        }
+      }
+    } catch (_) {}
+
+    // 1) 原生按需解码：ImageDescriptor 先解析头部拿到原始尺寸，再按缩放比
+    //    实例化编解码器、直接解码出目标尺寸——解码在引擎原生线程执行、
+    //    内存以目标尺寸为上限。旧实现在 UI 隔离器上用纯 Dart 解出全尺寸
+    //    位图（20MB 照片 ≈ 192MB RGBA + 数秒~数十秒 CPU），主线程全程冻结
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    final longSide = math.max(descriptor.width, descriptor.height);
+    final scale = longSide > capLongSide ? capLongSide / longSide : 1.0;
+    final targetW = (descriptor.width * scale).round();
+    final targetH = (descriptor.height * scale).round();
+    final codec = await descriptor.instantiateCodec(
+      targetWidth: targetW,
+      targetHeight: targetH,
+    );
+    final frame = await codec.getNextFrame();
+    final rgba = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    buffer.dispose();
+    descriptor.dispose();
+    codec.dispose();
+    frame.image.dispose();
+    if (rgba == null) {
+      throw Exception('原生解码失败');
+    }
+
+    // 2) JPEG 编码移入后台隔离器：纯 Dart 编码需数百毫秒，
+    //    UI 隔离器保持可响应
+    final encoded = await Isolate.run(() {
+      final image = img.Image.fromBytes(
+        width: targetW,
+        height: targetH,
+        bytes: rgba.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+      return img.encodeJpg(image, quality: _jpegQuality);
+    });
+
+    final dest = '${dir.path}/wallpaper_$timestamp.jpg';
+    await File(dest).writeAsBytes(encoded);
+    return dest;
+  } catch (_) {
+    // 解码失败走原样复制
+  }
 
     final dest = '${dir.path}/wallpaper_$timestamp.$ext';
     await File(pickedPath).copy(dest);
@@ -426,18 +499,31 @@ class WallpaperPreload {
 
       isVideo = WallpaperStorageService.isVideoPath(path!);
       if (isVideo) {
-        // 视频壁纸：秒显持久化首帧缩略图，视频控制器稍后异步接管
-        var thumbFile = File(WallpaperStorageService.thumbPathFor(path!));
-        if (!thumbFile.existsSync()) {
-          // 历史视频无缩略图（旧版本导入）：原生抽帧补生成（一次性，
-          // 之后绑定共存）；失败则回退运行时捕获兜底
-          await WallpaperStorageService.ensureVideoThumb(path!);
-          thumbFile = File(WallpaperStorageService.thumbPathFor(path!));
+        // 视频壁纸：秒显持久化首帧缩略图，视频控制器稍后异步接管。
+        // 缩略图带规格标记（wallpaper_thumb_h = 生成时的目标高度）：
+        // 低于当前屏幕分辨率的旧规格图（历史 720p / 半分辨率捕获）删除后
+        // 按新规格重建——仅一次性迁移，走 600ms 超时保护，超时则本次先走
+        // 异步路径，文件落盘后下次启动秒显高清版
+        final thumbFile = File(WallpaperStorageService.thumbPathFor(path!));
+        final targetH = WallpaperStorageService.thumbTargetHeight();
+        final stale = prefs.getInt('wallpaper_thumb_h') != targetH;
+        if (stale && thumbFile.existsSync()) {
+          try {
+            thumbFile.deleteSync();
+          } catch (_) {}
+          try {
+            await WallpaperStorageService.ensureVideoThumb(path!)
+                .timeout(const Duration(milliseconds: 600));
+          } catch (_) {}
         }
         if (thumbFile.existsSync()) {
           videoThumbBytes = await thumbFile.readAsBytes();
           await _decodeIntoImageCache(videoThumbBytes!);
         }
+        // 缩略图仍缺失（历史视频补生成超时失败）不在首帧前阻塞重试：
+        // video_thumbnail 在 Android 平台主线程跑 MediaMetadataRetriever，
+        // 首帧 Surface 创建期间叠加窗口/显示模式操作有白屏/冻结竞态风险。
+        // 走课表页异步路径，运行时 _captureFirstFrame 出画后补存缩略图
       } else {
         imageBytes = await File(path!).readAsBytes();
         await _decodeIntoImageCache(imageBytes!);

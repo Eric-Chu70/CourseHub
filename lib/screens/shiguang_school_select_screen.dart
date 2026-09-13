@@ -11,6 +11,7 @@ import '../widgets/blur_selection_menu.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
 import 'shiguang_web_import_screen.dart';
+import '../widgets/app_text_field.dart';
 
 /// 教务系统导入 - 学校选择页。
 ///
@@ -961,7 +962,7 @@ class _ShiguangSchoolSelectScreenState
   }
 
   Widget _buildSearchField() {
-    return TextField(
+    return AppTextField(
       contextMenuBuilder: styledEditableContextMenu,
       controller: _searchController,
       focusNode: _searchFocus,

@@ -8,6 +8,7 @@ import '../utils/storage.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/blur_selection_menu.dart';
+import '../widgets/app_text_field.dart';
 
 enum CourseEditFocusSection {
   basicInfo,
@@ -572,7 +573,7 @@ class _CourseDialogState extends State<CourseDialog> {
     bool isRequired = false,
     bool isSmallScreen = false,
   }) {
-    return TextFormField(
+    return AppTextFormField(
       contextMenuBuilder: styledEditableContextMenu,
       controller: controller,
       style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
@@ -649,6 +650,8 @@ class _CourseDialogState extends State<CourseDialog> {
                           child: Text(
                             '周${_weekDayNames[i]}',
                             style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         )),
                         onChanged: (v) {
@@ -691,6 +694,9 @@ class _CourseDialogState extends State<CourseDialog> {
                       child: BlurredDropdown<int>(
                         value: _selectedStartTime,
                         isExpanded: true,
+                        // 菜单与触发框同宽并居中对齐；大字号下菜单项由
+                        // FittedBox 等比缩小，不会截断
+                        centerMenu: true,
                         icon: Icon(Icons.expand_more, color: _selectedColor, size: isSmallScreen ? 18 : 20),
                         items: List.generate(
                           dailyPeriods,
@@ -699,6 +705,7 @@ class _CourseDialogState extends State<CourseDialog> {
                             child: Text(
                               '第${i + 1}节',
                               style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -743,7 +750,12 @@ class _CourseDialogState extends State<CourseDialog> {
                         items: [1, 2, 3, 4].map((d) {
                           return DropdownMenuItem(
                             value: d,
-                            child: Text('$d 节', style: TextStyle(fontSize: isSmallScreen ? 12 : 13)),
+                            child: Text(
+                              '$d 节',
+                              style: TextStyle(fontSize: isSmallScreen ? 12 : 13),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           );
                         }).toList(),
                         onChanged: (v) {

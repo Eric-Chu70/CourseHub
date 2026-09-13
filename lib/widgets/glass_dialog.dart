@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -195,6 +196,43 @@ class GlassDialog {
 // 模糊下拉选择框 & 弹出菜单
 // ============================================================
 
+/// 小控件切换过渡（三点菜单 ↔ 勾勾按钮、标题 ↔ 输入框等，配合
+/// AnimatedSwitcher 的 transitionBuilder 使用）：scale 缩放 + blur 模糊
+/// + 淡入淡出；[alignment] 控制缩放锚点（左对齐文本用 centerLeft）。
+///
+/// 动画结束后**保留包裹层**（sigma=0 / opacity=1 / scale=1，渲染与裸
+/// 子树一致）：builder 的返回结构一旦在动画收尾时从"包裹"切换为裸
+/// child，该子树会被销毁重建——若里面是刚拿到焦点的 EditableText，
+/// dispose 会顺带 clearClient 收掉键盘，而重建的新 State 继承仍持焦的
+/// FocusNode、没有焦点变化事件，永远不会重开连接（键盘消失且焦点
+/// 守卫无感知）。与 BouncyDialogHost 内容层同策略：包裹层恒定存在。
+Widget blurredMorphTransition(
+  Widget child,
+  Animation<double> animation, {
+  Alignment alignment = Alignment.center,
+}) {
+  return AnimatedBuilder(
+    animation: animation,
+    builder: (context, _) {
+      final t = animation.value.clamp(0.0, 1.0);
+      return FadeTransition(
+        opacity: animation,
+        child: ImageFiltered(
+          imageFilter: ImageFilter.blur(
+            sigmaX: 4 * (1.0 - t),
+            sigmaY: 4 * (1.0 - t),
+          ),
+          child: Transform.scale(
+            scale: 0.6 + 0.4 * t,
+            alignment: alignment,
+            child: child,
+          ),
+        ),
+      );
+    },
+  );
+}
+
 /// 统一的模糊菜单外壳：ClipRRect + BackdropFilter + 半透明白色。
 Widget _blurredMenuShell({
   required Widget child,
@@ -256,6 +294,8 @@ class BlurredDropdown<T> extends StatefulWidget {
   final double menuRadius;
   // 弹出菜单宽度：默认与触发框同宽，触发框较窄时可单独指定更宽的菜单
   final double? menuWidth;
+  // 菜单水平对齐：默认与触发框左对齐；true 时与触发框居中对齐
+  final bool centerMenu;
 
   const BlurredDropdown({
     super.key,
@@ -269,6 +309,7 @@ class BlurredDropdown<T> extends StatefulWidget {
     this.infoMessages,
     this.menuRadius = 16,
     this.menuWidth,
+    this.centerMenu = false,
   });
 
   @override
@@ -315,7 +356,15 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
                 const SizedBox(width: 6),
               ],
               if (widget.isExpanded)
-                Expanded(child: currentItem?.child ?? widget.hint ?? const SizedBox())
+                // 大字体/窄屏下选中值超出可用宽度时整体等比缩小，
+                // 保证单行完整显示（不换行、不消失）；仅缩不放
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerStart,
+                    child: currentItem?.child ?? widget.hint ?? const SizedBox(),
+                  ),
+                )
               else
                 currentItem?.child ?? widget.hint ?? const SizedBox(),
               const SizedBox(width: 4),
@@ -338,6 +387,7 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
       value: widget.value,
       menuRadius: widget.menuRadius,
       menuWidth: widget.menuWidth,
+      centerOnAnchor: widget.centerMenu,
       infoMessages: widget.infoMessages,
     );
 
@@ -356,6 +406,7 @@ Future<T?> showBlurredMenu<T>({
   T? value,
   double menuRadius = 16,
   double? menuWidth,
+  bool centerOnAnchor = false,
   Map<T, String>? infoMessages,
   double menuHorizontalShift = 0,
 }) async {
@@ -395,8 +446,12 @@ Future<T?> showBlurredMenu<T>({
   // 而不是被 clamp 推到紧贴屏幕边缘
   final rightBound =
       (screenWidth - width - 16).clamp(0.0, screenWidth - width);
-  final menuLeft =
-      (position.dx + menuHorizontalShift).clamp(0.0, rightBound);
+  // 居中对齐：菜单中心与锚点中心重合（仍受屏幕边距 clamp 约束）；
+  // 默认左对齐（可叠加 menuHorizontalShift 微调）
+  final menuLeft = (centerOnAnchor
+          ? position.dx + (size.width - width) / 2
+          : position.dx + menuHorizontalShift)
+      .clamp(0.0, rightBound);
 
   final result = await showGeneralDialog<T>(
     context: context,
@@ -471,7 +526,16 @@ Future<T?> showBlurredMenu<T>({
                                     horizontal: 16, vertical: 12),
                                 child: Row(
                                   children: [
-                                    Expanded(child: item.child),
+                                    // 大字号下菜单项超出可用宽度时整体等比
+                                    // 缩小，保证单行完整显示（不截断）；仅缩不放
+                                    Expanded(
+                                      child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment:
+                                            AlignmentDirectional.centerStart,
+                                        child: item.child,
+                                      ),
+                                    ),
                                     // 问号图标靠内（紧贴文字），不挤占右侧勾号槽位
                                     if (hasInfo) ...[
                                       const SizedBox(width: 6),
@@ -781,9 +845,16 @@ class BlurredPopupMenuButton<T> extends StatefulWidget {
 
 class _BlurredPopupMenuButtonState<T> extends State<BlurredPopupMenuButton<T>> {
   /// 焦点锚点：同 BlurredDropdown，打开菜单前转移焦点，避免子路由 pop 后
-  /// 焦点恢复钻回输入框导致键盘反复弹出
+  /// 焦点恢复到输入框导致键盘反复弹出
   final FocusNode _anchorNode =
       FocusNode(debugLabel: 'BlurredPopupMenuButtonAnchor');
+
+  /// 菜单锚定链：菜单子路由经 CompositedTransformFollower 实时跟随本按钮。
+  /// 旧实现在打开瞬间一次性测位并把菜单冻结在屏幕坐标上——当按钮所在
+  /// 对话框因键盘收起/弹出而平移（avoidKeyboard 的 AnimatedPadding）时，
+  /// 按钮已移动而菜单仍停在旧位置，视觉上"脱锚"悬在半空；改用跟随层后，
+  /// 菜单在合成阶段逐帧取按钮当帧位置对齐，零帧差、无需任何重建。
+  final LayerLink _menuLink = LayerLink();
 
   @override
   void dispose() {
@@ -796,12 +867,15 @@ class _BlurredPopupMenuButtonState<T> extends State<BlurredPopupMenuButton<T>> {
     return Focus(
       focusNode: _anchorNode,
       skipTraversal: true,
-      child: GestureDetector(
-        onTap: () => _showMenu(context),
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: widget.iconPadding,
-          child: widget.icon,
+      child: CompositedTransformTarget(
+        link: _menuLink,
+        child: GestureDetector(
+          onTap: () => _showMenu(context),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: widget.iconPadding,
+            child: widget.icon,
+          ),
         ),
       ),
     );
@@ -813,13 +887,24 @@ class _BlurredPopupMenuButtonState<T> extends State<BlurredPopupMenuButton<T>> {
     final renderBox = context.findRenderObject() as RenderBox;
     final position = renderBox.localToGlobal(Offset.zero);
     final size = renderBox.size;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
+    final mq = MediaQuery.of(context);
+    final screenWidth = mq.size.width;
+    final screenHeight = mq.size.height;
+    final menuHeight = widget.items.length * 48.0;
 
-    final left = (position.dx + size.width - widget.menuWidth)
-        .clamp(8.0, screenWidth - widget.menuWidth - 8);
-    final top = (position.dy + size.height + 4)
-        .clamp(0.0, screenHeight - widget.items.length * 48 - 16);
+    // 水平修正：默认菜单右缘与按钮右缘对齐，越界时按旧 clamp 平移。
+    // 键盘收起/弹出只让对话框纵向平移，横向修正量在打开时求一次即可。
+    final unclampedLeft = position.dx + size.width - widget.menuWidth;
+    final left = unclampedLeft.clamp(
+        8.0, math.max(8.0, screenWidth - widget.menuWidth - 8));
+    final horizontalShift = left - unclampedLeft;
+
+    // 上/下方摆放选择：以"键盘收起后"的锚点位置估算（avoidKeyboard
+    // 对话框在键盘收起时整体回落约键盘高度的一半），保证菜单跟随落位后
+    // 仍在屏幕内；上方放不下时放下方，下方放不下时放上方。
+    final settledAnchorBottom = position.dy + size.height + mq.viewInsets.bottom / 2;
+    final openBelow = settledAnchorBottom + 4 + menuHeight <= screenHeight - 8 ||
+        position.dy < menuHeight;
 
     final result = await showGeneralDialog<T>(
       context: context,
@@ -839,44 +924,55 @@ class _BlurredPopupMenuButtonState<T> extends State<BlurredPopupMenuButton<T>> {
                 onTap: () => Navigator.pop(context),
               ),
             ),
+            // Positioned(left:0, top:0) 只为给跟随层松约束（fill 会把全屏
+            // 紧约束传给菜单导致拉伸）；菜单元数据在合成阶段由 LeaderLayer
+            // 当帧位置换算，与跟随层自身在 Stack 中的摆放位置无关
             Positioned(
-              left: left,
-              top: top,
-              child: _MenuPopTransition(
-                animation: animation,
-                child: Material(
-                  color: Colors.transparent,
-                  child: _blurredMenuShell(
-                    radius: widget.radius,
-                    child: SizedBox(
-                      width: widget.menuWidth,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: widget.items.map((item) {
-                          return InkWell(
-                            onTap: () => Navigator.pop(context, item.value),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 12),
-                              child: Row(
-                                children: [
-                                  Icon(item.icon,
-                                      size: 20,
-                                      color: item.iconColor ??
-                                          const Color(0xFF4A90E2)),
-                                  const SizedBox(width: 12),
-                                  Text(
-                                    item.label,
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        color: item.textColor ??
-                                            const Color(0xFF333333)),
-                                  ),
-                                ],
+              left: 0,
+              top: 0,
+              child: CompositedTransformFollower(
+                link: _menuLink,
+                showWhenUnlinked: false,
+                targetAnchor: openBelow ? Alignment.bottomRight : Alignment.topRight,
+                followerAnchor:
+                    openBelow ? Alignment.topRight : Alignment.bottomRight,
+                offset: Offset(horizontalShift, openBelow ? 4 : -4),
+                child: _MenuPopTransition(
+                  animation: animation,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: _blurredMenuShell(
+                      radius: widget.radius,
+                      child: SizedBox(
+                        width: widget.menuWidth,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: widget.items.map((item) {
+                            return InkWell(
+                              onTap: () => Navigator.pop(context, item.value),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    Icon(item.icon,
+                                        size: 20,
+                                        color: item.iconColor ??
+                                            const Color(0xFF4A90E2)),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      item.label,
+                                      style: TextStyle(
+                                          fontSize: 15,
+                                          color: item.textColor ??
+                                              const Color(0xFF333333)),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        }).toList(),
+                            );
+                          }).toList(),
+                        ),
                       ),
                     ),
                   ),
@@ -932,6 +1028,7 @@ class BouncyDialogHost extends StatefulWidget {
     this.shellMaxHeight,
     this.shellConstraintsBuilder,
     this.reduceMotion = false,
+    this.onShellBackgroundTap,
   });
 
   final Animation<double> animation;
@@ -977,6 +1074,11 @@ class BouncyDialogHost extends StatefulWidget {
   /// 闭包内读取 MediaQuery 会在宿主上注册依赖，viewInsets 变化自动重建。
   /// 优先级高于 shellMaxWidth/shellMaxHeight。
   final BoxConstraints Function(BuildContext context)? shellConstraintsBuilder;
+
+  /// 点击壳内空白处（未被任何子控件接住的区域）时先于内置 unfocus 调用。
+  /// 供调用方解除"编辑期焦点守卫"等状态：守卫若不先解除，这里的
+  /// unfocus 会被守卫立刻抢回，键盘收不下去。
+  final VoidCallback? onShellBackgroundTap;
 
   @override
   State<BouncyDialogHost> createState() => _BouncyDialogHostState();
@@ -1140,7 +1242,10 @@ class _BouncyDialogHostState extends State<BouncyDialogHost> {
                           autofocus: true,
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
-                            onTap: () => FocusScope.of(context).unfocus(),
+                            onTap: () {
+                              widget.onShellBackgroundTap?.call();
+                              FocusScope.of(context).unfocus();
+                            },
                             child: AnimatedPadding(
                               duration: const Duration(milliseconds: 200),
                               curve: Curves.easeOut,
@@ -1220,6 +1325,7 @@ Future<T?> showBouncyDialog<T>({
   double? shellMaxHeight,
   BoxConstraints Function(BuildContext context)? shellConstraintsBuilder,
   bool? reduceMotion,
+  VoidCallback? onShellBackgroundTap,
 }) async {
   // 全局「减弱动态效果」：未显式指定时自动读取设置页开关——
   // 全应用对话框（含 GlassDialog.show / CourseDialog.show 等封装）
@@ -1252,6 +1358,7 @@ Future<T?> showBouncyDialog<T>({
         shellMaxHeight: shellMaxHeight,
         shellConstraintsBuilder: shellConstraintsBuilder,
         reduceMotion: effectiveReduceMotion,
+        onShellBackgroundTap: onShellBackgroundTap,
         child: Builder(builder: builder),
       );
     },

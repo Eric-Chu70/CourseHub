@@ -190,9 +190,11 @@ Future<void> showUpdateDialog(
           type: ToastType.error);
       return;
     }
-    // 安装器已成功拉起：自动清理本地安装包（Android 的安装包正被系统
-    // 安装器读取，不删；桌面安装包可能仍被安装进程占用，由服务端
-    // 延迟重试删除）。不 await，后台静默清理。
+    // 桌面平台：安装器拉起后延迟重试删除（安装进程可能仍占用文件）。
+    // Android 不在此删：安装确认后应用进程会被系统杀死，延迟删除来不及
+    // 执行；残留安装包由下次启动时 UpdateService.cleanupStaleInstallers
+    // 补删（自更新成功后 app 以新版本重启，旧包版本号 ≤ 当前版本即命中）。
+    // 不 await，后台静默清理。
     if (!Platform.isAndroid) {
       UpdateService.deleteInstallerLater(path);
     }
@@ -279,7 +281,11 @@ Future<void> showUpdateDialog(
                 ),
               ),
             ];
-            actions = [];
+            // 检查中同样保留「取消」按钮：按钮行高度与其他阶段一致，
+            // 避免重试时按钮行塌缩导致居中内容整体下移跳变
+            actions = [
+              buildSecondaryButton('取消', () => Navigator.pop(context)),
+            ];
 
           case UpdatePhase.upToDate:
             icon = Container(
@@ -520,6 +526,37 @@ Future<void> showUpdateDialog(
                     height: 1.5,
                   ),
                 ),
+                if (apkPath != null) ...[
+                  const SizedBox(height: 4),
+                  // 手动删除缓存安装包：小字 + 下划线，点击即删并回退到
+                  // 「发现新版本」（下次可重新下载）
+                  GestureDetector(
+                    onTap: () async {
+                      final bool deleted =
+                          await UpdateService.deleteInstallerNow(apkPath!);
+                      safeSetState(() {
+                        apkPath = null;
+                        phase = UpdatePhase.available;
+                      });
+                      if (context.mounted) {
+                        toastNotification.show(
+                          context,
+                          deleted ? '已删除' : '删除失败，文件可能被占用',
+                          type: deleted ? ToastType.success : ToastType.error,
+                        );
+                      }
+                    },
+                    child: Text(
+                      '删除安装包',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade500,
+                        decoration: TextDecoration.underline,
+                        decorationColor: Colors.grey.shade500,
+                      ),
+                    ),
+                  ),
+                ],
               ];
               actions = [
                 buildSecondaryButton('以后再说', () => Navigator.pop(context)),

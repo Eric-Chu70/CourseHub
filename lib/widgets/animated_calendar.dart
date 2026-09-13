@@ -27,6 +27,10 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
   final monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
   static const double _cellSize = 40.0;
   static const double _cellSpacing = 4.0;
+  /// 周标题行固定高（文字垂直居中），供网格总高精确计算
+  static const double _weekHeaderHeight = 20.0;
+  /// 最后一行日期与下方操作按钮之间的呼吸间距
+  static const double _gridBottomGap = 6.0;
 
   @override
   void initState() {
@@ -72,26 +76,39 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
   }
 
   Widget _buildCurrentMonthGrid() {
-    final pageIndex = _pageController.hasClients 
-        ? (_pageController.page?.round() ?? _initialPage) 
+    final pageIndex = _pageController.hasClients
+        ? (_pageController.page?.round() ?? _initialPage)
         : _initialPage;
     final month = _getMonthFromPageIndex(pageIndex);
     final weeksInMonth = _getWeeksInMonth(month);
-    final gridHeight = weeksInMonth * (_cellSize + _cellSpacing + 4) + 33;
-    
-    return SizedBox(
-      height: gridHeight,
-      child: PageView.builder(
-        controller: _pageController,
-        onPageChanged: (index) {
-          setState(() {});
-        },
-        itemBuilder: (context, index) {
-          final m = _getMonthFromPageIndex(index);
-          return _buildMonthGrid(m);
-        },
-      ),
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      // 格子是 childAspectRatio 1.0 的正方形，高度 = 宽度 =
+      // (可用宽 − 左右 padding 32 − 6×列间距)/7，随对话框宽度变化。
+      // 原实现按写死的 40px 估算行高，行数少、格子小的月份在最后一行
+      // 下方留出成片空白（对话框越窄越严重）——改为按实际格宽推导
+      final gridWidth = constraints.maxWidth;
+      final cellSize = gridWidth.isFinite
+          ? (gridWidth - 32 - 6 * _cellSpacing) / 7
+          : _cellSize;
+      final gridHeight = _weekHeaderHeight +
+          8 +
+          weeksInMonth * cellSize +
+          (weeksInMonth - 1) * _cellSpacing +
+          _gridBottomGap;
+      return SizedBox(
+        height: gridHeight,
+        child: PageView.builder(
+          controller: _pageController,
+          onPageChanged: (index) {
+            setState(() {});
+          },
+          itemBuilder: (context, index) {
+            final m = _getMonthFromPageIndex(index);
+            return _buildMonthGrid(m, cellSize);
+          },
+        ),
+      );
+    });
   }
 
   Widget _buildHeader() {
@@ -152,21 +169,32 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
     );
   }
 
-  Widget _buildMonthGrid(DateTime month) {
+  Widget _buildMonthGrid(DateTime month, double cellSize) {
     final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
     final firstDayOfMonth = DateTime(month.year, month.month, 1);
     final startWeekday = firstDayOfMonth.weekday % 7;
-    
+    final weeksInMonth = _getWeeksInMonth(month);
+
     final weekDays = ['日', '一', '二', '三', '四', '五', '六'];
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          _buildWeekDaysHeader(weekDays),
+          SizedBox(
+            height: _weekHeaderHeight,
+            child: _buildWeekDaysHeader(weekDays),
+          ),
           const SizedBox(height: 8),
-          Expanded(
-            child: _buildDaysGrid(month, daysInMonth, startWeekday),
+          // 日期网格精确到实际行高：当前页恰好铺满无留白；滑动经过
+          // 行数更多的相邻页时由 Flexible 兜底（网格临时内部滚动），
+          // 不产生布局溢出
+          Flexible(
+            child: SizedBox(
+              height:
+                  weeksInMonth * cellSize + (weeksInMonth - 1) * _cellSpacing,
+              child: _buildDaysGrid(month, daysInMonth, startWeekday),
+            ),
           ),
         ],
       ),
@@ -228,6 +256,7 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
     
     return GridView.count(
       crossAxisCount: 7,
+      physics: const NeverScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       mainAxisSpacing: _cellSpacing,
       crossAxisSpacing: _cellSpacing,

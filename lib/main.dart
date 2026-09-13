@@ -23,7 +23,7 @@ import 'widgets/glass_dialog.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
-const String appVersion = '1.0.7';
+const String appVersion = '1.0.8';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -70,6 +70,10 @@ void main() async {
   );
 
   runApp(const CourseHubApp());
+
+  // 补删历史更新残留的安装包（Android 自更新后进程被杀，装完没法即时删）：
+  // 版本号不高于当前版本的旧包与 .part 半成品；不阻塞启动
+  unawaited(UpdateService.cleanupStaleInstallers(appVersion));
 
   // 非关键初始化延迟到 runApp 之后执行
   WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -120,6 +124,12 @@ class CourseHubApp extends StatelessWidget {
           ),
           useMaterial3: true,
           fontFamily: 'Microsoft YaHei',
+          // 全局光标颜色兜底：统一封装 widgets/app_text_field.dart 已按输入框
+          // 设置主题蓝光标，此处覆盖未来未经封装的输入组件（选中高亮/拖拽手柄
+          // 不受影响，仍走主题色）
+          textSelectionTheme: const TextSelectionThemeData(
+            cursorColor: Color(0xFF4A90E2),
+          ),
           appBarTheme: const AppBarTheme(
             centerTitle: true,
             elevation: 0,
@@ -145,6 +155,16 @@ class CourseHubApp extends StatelessWidget {
             fillColor: Colors.grey[50],
           ),
         ),
+        // 全局钳制系统字体缩放：保留无障碍放大能力但设上限，
+        // 防止大字体设置下固定宽度布局溢出/换行（builder 包裹 Navigator，
+        // 对话框/菜单等 Overlay 路由同样生效）
+        builder: (context, child) {
+          return MediaQuery.withClampedTextScaling(
+            minScaleFactor: 0.85,
+            maxScaleFactor: 1.3,
+            child: child!,
+          );
+        },
         home: const MainScreen(),
       ),
     );
@@ -158,7 +178,8 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen>
+    with SingleTickerProviderStateMixin {
   /// 上次按系统返回的时间戳：2 秒内连按两次才退出应用
   int _lastBackPressTime = 0;
 
@@ -169,11 +190,45 @@ class _MainScreenState extends State<MainScreen> {
   /// 启动更新检查发现新版本时，等链结束后再弹绿色 toast，避免提示叠加
   final Completer<void> _startupPromptsDone = Completer<void>();
 
+  /// 启动淡入：原生闪屏（纯白）让位后，主页从白色背景淡入（400ms easeOut），
+  /// 消除白屏→主页的硬切。背景用与闪屏同色的纯白，过渡无缝。
+  /// 「减弱动态效果」开启时跳过动画直接显示。
+  late final AnimationController _launchFadeController;
+  late final Animation<double> _launchFade;
+
   @override
   void initState() {
     super.initState();
+    _launchFadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _launchFade = CurvedAnimation(
+      parent: _launchFadeController,
+      curve: Curves.easeOut,
+    );
+    _runLaunchFade();
     _checkAndShowWelcome();
     _checkUpdateOnStartup();
+  }
+
+  /// 等首帧（全白）上屏后再起播，保证从纯白开始渐显
+  Future<void> _runLaunchFade() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    if (prefs.getBool('reduce_motion_enabled') ?? false) {
+      _launchFadeController.value = 1;
+      return;
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    _launchFadeController.forward();
+  }
+
+  @override
+  void dispose() {
+    _launchFadeController.dispose();
+    super.dispose();
   }
 
   /// 启动静默检查更新（每次冷启动一次）：联网拉取 latest.json，
@@ -415,7 +470,15 @@ class _MainScreenState extends State<MainScreen> {
           toastNotification.show(context, '再按一次退出程序', type: ToastType.info);
         }
       },
-      child: const HomeScreen(),
+      // 白色底与原生闪屏同色：淡入期间未覆盖区域露出纯白，与闪屏无缝衔接；
+      // 淡入完成后被主页完全覆盖，无残留影响
+      child: ColoredBox(
+        color: Colors.white,
+        child: FadeTransition(
+          opacity: _launchFade,
+          child: const HomeScreen(),
+        ),
+      ),
     );
   }
 }

@@ -11,6 +11,7 @@ import '../widgets/animated_calendar.dart';
 import '../widgets/ddl_ai_insight_card.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/blur_selection_menu.dart';
+import '../widgets/app_text_field.dart';
 
 class HeatmapScreen extends StatefulWidget {
   const HeatmapScreen({super.key});
@@ -769,7 +770,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        TextField(
+                                        AppTextField(
                                           contextMenuBuilder: styledEditableContextMenu,
                                           decoration: InputDecoration(
                                             labelText: '任务名称',
@@ -1048,7 +1049,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                         ),
                                         SizedBox(
                                             height: isSmallScreen ? 12 : 16),
-                                        TextField(
+                                        AppTextField(
                                           contextMenuBuilder: styledEditableContextMenu,
                                           maxLines: 1,
                                           decoration: InputDecoration(
@@ -1915,7 +1916,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        TextField(
+                                        AppTextField(
                                           contextMenuBuilder: styledEditableContextMenu,
                                           controller: nameController,
                                           decoration: InputDecoration(
@@ -2194,7 +2195,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                         ),
                                         SizedBox(
                                             height: isSmallScreen ? 12 : 16),
-                                        TextField(
+                                        AppTextField(
                                           contextMenuBuilder: styledEditableContextMenu,
                                           controller: noteController,
                                           maxLines: 1,

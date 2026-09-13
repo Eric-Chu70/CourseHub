@@ -18,7 +18,9 @@ import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/keyboard_keeper.dart';
 import '../widgets/blur_selection_menu.dart';
+import '../widgets/app_text_field.dart';
 
 class TimetableScreen extends StatefulWidget {
   final Function(bool) onScrollDirectionChanged;
@@ -89,6 +91,10 @@ class TimetableScreenState extends State<TimetableScreen>
   String? _wallpaperBytesPath;
   /// 冷启动首帧同步初始化只执行一次（防止刷新时把旧预载值覆盖到新 prefs 上）
   bool _wallpaperSyncInitDone = false;
+  /// 视频控制器换装序号：每次控制器变更（载入/切换/恢复重建）自增，
+  /// 初始化完成时校验——期间发生其它变更则本次结果作废销毁，
+  /// 防止并发的换装互相覆盖（最后一个开始的不一定最后完成）
+  int _wallpaperLoadSeq = 0;
   final Map<int, double> _pageScrollOffsets = {};
 
   // 长按课程块弹出的操作菜单（Overlay 浮层）
@@ -321,9 +327,11 @@ class TimetableScreenState extends State<TimetableScreen>
       } catch (_) {}
       final replacement = VideoPlayerController.file(File(path));
       try {
-        await replacement.initialize();
+        // 限时初始化：长后台后系统可能已回收解码器，ExoPlayer 可能永远
+        // 到不了 READY，悬挂的 Future 会让恢复流程滞留、后续恢复全部失效
+        await replacement.initialize().timeout(const Duration(seconds: 5));
       } catch (_) {
-        // 初始化失败（文件被清/解码器异常）：放弃重建，避免反复失败
+        // 初始化失败/超时（文件被清/解码器异常）：放弃重建，避免反复失败
         await replacement.dispose();
         return;
       }
@@ -331,13 +339,21 @@ class TimetableScreenState extends State<TimetableScreen>
         await replacement.dispose();
         return;
       }
-      controller.dispose();
       _videoController = replacement;
+      // 换装序号：作废并发的 _loadWallpaper 换装，防止覆盖刚重建的控制器
+      ++_wallpaperLoadSeq;
       replacement.setLooping(true);
       replacement.setVolume(_videoSoundEnabled ? 1 : 0);
       await replacement.seekTo(Duration.zero);
       await replacement.play();
       if (mounted) setState(() {});
+      // 新纹理上屏后再释放旧控制器：dispose（ExoPlayer.release）在平台
+      // 主线程同步执行，换装前调用会让过渡帧失去纹理；post-frame 释放
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try {
+          controller.dispose();
+        } catch (_) {}
+      });
       return;
     }
     try {
@@ -467,21 +483,50 @@ class TimetableScreenState extends State<TimetableScreen>
       if (isVideo) {
         _isVideoWallpaper = true;
         _currentVideoPath = path;
-        _videoController?.dispose();
-        _videoController = VideoPlayerController.file(File(path));
-        await _videoController!.initialize();
-        _videoController!.setLooping(true);
-        _videoController!.setVolume(_videoSoundEnabled ? 1 : 0);
+        // 换装序号：本次初始化完成前若发生其它控制器变更（壁纸再次切换、
+        // 生命周期恢复重建），后完成者胜出，本次结果作废销毁
+        final seq = ++_wallpaperLoadSeq;
+        // 先建新控制器、就绪后再换装释放旧控制器：旧顺序先 dispose 再
+        // initialize，初始化悬挂/失败时旧视频已被销毁，且与生命周期恢复
+        // 的 _resumeVideoWallpaper 存在双控制器竞态。
+        // 超时保护：长后台后系统可能回收解码器，ExoPlayer 可能永远到不了
+        // READY，悬挂的 Future 会卡住后续一切换装——限时放弃，保持缩略图兜底
+        final oldController = _videoController;
+        VideoPlayerController? replacement = VideoPlayerController.file(File(path));
+        try {
+          await replacement.initialize().timeout(const Duration(seconds: 5));
+        } catch (_) {
+          await replacement.dispose();
+          replacement = null;
+        }
+        if (replacement == null || !mounted || seq != _wallpaperLoadSeq) {
+          // 初始化失败/超时/已被更新操作取代：销毁本控制器并维持现状
+          // （失败时旧控制器未动，仍在播放则继续播放）
+          await replacement?.dispose();
+          return;
+        }
+        _videoController = replacement;
+        replacement.setLooping(true);
+        replacement.setVolume(_videoSoundEnabled ? 1 : 0);
         // 先播放再捕获首帧
-        _videoController!.seekTo(Duration.zero);
-        _videoController!.play();
+        replacement.seekTo(Duration.zero);
+        replacement.play();
         // 捕获首帧作为过渡背景
         _captureFirstFrame();
         if (mounted) setState(() {});
+        // 新纹理上屏后再释放旧控制器，避免过渡帧纹理缺失
+        if (oldController != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            try {
+              oldController.dispose();
+            } catch (_) {}
+          });
+        }
       } else {
         _isVideoWallpaper = false;
         _currentVideoPath = null;
         _videoFirstFrameBytes = null;
+        ++_wallpaperLoadSeq;
         _videoController?.dispose();
         _videoController = null;
         // 预载已读取且路径未变时跳过重复读盘（字节与 ImageCache 同源）
@@ -500,6 +545,7 @@ class TimetableScreenState extends State<TimetableScreen>
       _isVideoWallpaper = false;
       _currentVideoPath = null;
       _videoFirstFrameBytes = null;
+      ++_wallpaperLoadSeq;
       _videoController?.dispose();
       _videoController = null;
     }
@@ -539,19 +585,17 @@ class TimetableScreenState extends State<TimetableScreen>
         setState(() {
           _videoFirstFrameBytes = byteData.buffer.asUint8List();
         });
-        // 持久化半分辨率首帧缩略图（仅首次生成）：
-        // 下次启动由预载秒显，视频初始化期间不再露底
+        // 持久化首帧缩略图（仅首次生成，规格标记见 thumbTargetHeight）：
+        // 下次冷启动由预载秒显，视频初始化期间不再露底。
+        // 直接复用上方 1.0× 捕获结果——原半分辨率（0.5×）二次捕获已废弃，
+        // 低分辨率图整屏 COVER 显示会肉眼发虚
         final videoPath = _currentVideoPath;
         if (videoPath != null) {
           try {
-            final small = await boundary.toImage(pixelRatio: 0.5);
-            final smallData = await small.toByteData(format: ImageByteFormat.png);
-            if (smallData != null) {
-              await WallpaperStorageService.persistVideoThumb(
-                videoPath,
-                smallData.buffer.asUint8List(),
-              );
-            }
+            await WallpaperStorageService.persistVideoThumb(
+              videoPath,
+              byteData.buffer.asUint8List(),
+            );
           } catch (_) {}
         }
       } catch (_) {
@@ -593,13 +637,51 @@ class TimetableScreenState extends State<TimetableScreen>
     final FocusNode nameFocusNode = FocusNode();
     String? editingId;
     final TextEditingController editController = TextEditingController();
+    final FocusNode editFocusNode = FocusNode(debugLabel: 'timetableRename');
+    // 焦点守卫（编辑期持续武装）：进入编辑后焦点被意外抢走（菜单路由 pop
+    // 的焦点恢复、框架内隐式 unfocus 等）自动抢回，保证"从菜单点重命名
+    // 后键盘弹出并保持"。用户主动转移焦点的入口各自显式解除守卫：
+    // - 点按另一个课表的三点（锚点抢焦点，键盘随菜单打开正常收起）
+    // - 点击底部"新建课表名称"输入框（nameFocusNode 获焦即解除）
+    // - 点击壳内空白处（onShellBackgroundTap，先解除再 unfocus）
+    // - 对话框 pop / 被其他路由覆盖：对话框不再是栈顶，焦点转移属正常
+    //   交还，监听器经 switcherRoute.isCurrent 识别后不抢回
+    bool renameFocusGuardActive = false;
+    bool switcherDialogOpen = true;
+    // 键盘守护：自愈"焦点在但键盘连接被框架重建销毁"的键盘消失
+    // （键盘弹出过程的重建可能把刚拿到焦点的 EditableText 连同存活
+    // 连接销毁重建，新 State 继承焦点却不会重开连接）
+    KeyboardKeeper? keyboardKeeper;
+    Route<Object?>? switcherRoute;
+    bool guardShouldFight() {
+      if (!switcherDialogOpen || editingId == null) return false;
+      if (!renameFocusGuardActive || editFocusNode.hasFocus) return false;
+      // 编辑框节点已从树上摘除（对话框正在关闭等）时不抢
+      if (editFocusNode.context == null) return false;
+      if (!(switcherRoute?.isCurrent ?? false)) return false;
+      return true;
+    }
+
+    editFocusNode.addListener(() {
+      if (!guardShouldFight()) return;
+      Future.delayed(const Duration(milliseconds: 60), () {
+        if (!guardShouldFight()) return;
+        editFocusNode.requestFocus();
+      });
+    });
+    // 用户点按底部"新建课表名称"输入框：主动转移焦点，解除守卫
+    nameFocusNode.addListener(() {
+      if (nameFocusNode.hasFocus) {
+        renameFocusGuardActive = false;
+      }
+    });
 
     void showTimetableTip(String message, {ToastType type = ToastType.info}) {
       if (!mounted) return;
       toastNotification.show(context, message, type: type);
     }
     
-    showBouncyDialog(
+    final switcherDialogFuture = showBouncyDialog(
       context: context,
       barrierLabel: '切换课表',
       margin: EdgeInsets.zero,
@@ -614,7 +696,12 @@ class TimetableScreenState extends State<TimetableScreen>
         ),
       ],
       avoidKeyboard: true,
-      builder: (context) => StatefulBuilder(
+      // 壳内空白处点击：先解除编辑期焦点守卫再 unfocus，否则守卫会把
+      // 键盘立刻抢回，"点空白收键盘"失效
+      onShellBackgroundTap: () => renameFocusGuardActive = false,
+      builder: (dialogContext) {
+        switcherRoute = ModalRoute.of(dialogContext);
+        return StatefulBuilder(
                     builder: (context, setDialogState) {
                       final mediaQuery = MediaQuery.of(context);
                       final keyboardHeight = mediaQuery.viewInsets.bottom;
@@ -692,59 +779,90 @@ class TimetableScreenState extends State<TimetableScreen>
                                           size: 20,
                                         ),
                                       ),
-                                      title: isEditing
-                                          ? Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
-                                                borderRadius: BorderRadius.circular(8),
-                                              ),
-                                              child: TextField(
-                                                contextMenuBuilder: styledEditableContextMenu,
-                                                controller: editController,
-                                                autofocus: true,
-                                                style: TextStyle(
-                                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                  color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
-                                                ),
-                                                decoration: const InputDecoration(
-                                                  isDense: true,
-                                                  contentPadding: EdgeInsets.zero,
-                                                  border: InputBorder.none,
-                                                ),
-                                                onSubmitted: (value) async {
-                                                  if (value.trim().isNotEmpty) {
-                                                    await StorageService.renameTimetable(timetable.id, value.trim());
-                                                    setDialogState(() {
-                                                      timetables[index] = TimetableInfo(
-                                                        id: timetable.id,
-                                                        name: value.trim(),
-                                                        createdAt: timetable.createdAt,
-                                                      );
-                                                      editingId = null;
-                                                    });
-                                                    showTimetableTip('课表已重命名：${value.trim()}');
-                                                  }
-                                                },
-                                              ),
-                                            )
-                                          : Text(
-                                              timetable.name,
-                                              style: TextStyle(
-                                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
-                                              ),
+                                      title: AnimatedSwitcher(
+                                        duration: const Duration(milliseconds: 220),
+                                        switchInCurve: Curves.easeOut,
+                                        switchOutCurve: Curves.easeIn,
+                                        // 左锚点 morph + 左对齐布局：AnimatedSwitcher
+                                        // 默认会把收缩宽度的子项居中堆叠
+                                        transitionBuilder: (child, animation) =>
+                                            blurredMorphTransition(
+                                              child,
+                                              animation,
+                                              alignment: Alignment.centerLeft,
                                             ),
+                                        layoutBuilder: (currentChild, previousChildren) => Stack(
+                                          alignment: Alignment.centerLeft,
+                                          children: [
+                                            ...previousChildren,
+                                            if (currentChild != null) currentChild,
+                                          ],
+                                        ),
+                                        child: isEditing
+                                            ? SizedBox(
+                                                key: const ValueKey('edit'),
+                                                width: double.infinity,
+                                                // 无底板的通透输入框（去蓝色底板，
+                                                // 并显式关闭全局 grey50 填充）
+                                                child: Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                                child: AppTextField(
+                                                  contextMenuBuilder: styledEditableContextMenu,
+                                                  controller: editController,
+                                                  focusNode: editFocusNode,
+                                                  autofocus: true,
+                                                    style: TextStyle(
+                                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                                      color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+                                                    ),
+                                                    decoration: const InputDecoration(
+                                                      isDense: true,
+                                                      filled: false,
+                                                      contentPadding: EdgeInsets.zero,
+                                                      border: InputBorder.none,
+                                                    ),
+                                                    onSubmitted: (value) async {
+                                                      if (value.trim().isNotEmpty) {
+                                                        await StorageService.renameTimetable(timetable.id, value.trim());
+                                                        setDialogState(() {
+                                                          timetables[index] = TimetableInfo(
+                                                            id: timetable.id,
+                                                            name: value.trim(),
+                                                            createdAt: timetable.createdAt,
+                                                          );
+                                                          editingId = null;
+                                                        });
+                                                        showTimetableTip('课表已重命名：${value.trim()}');
+                                                      }
+                                                    },
+                                                  ),
+                                                ),
+                                              )
+                                            : SizedBox(
+                                                key: const ValueKey('title'),
+                                                width: double.infinity,
+                                                child: Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                                  child: Text(
+                                                    timetable.name,
+                                                    style: TextStyle(
+                                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                                      color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                      ),
                                       trailing: timetable.id != 'default'
                                           ? AnimatedSwitcher(
-                                              duration: const Duration(milliseconds: 200),
-                                              transitionBuilder: (child, animation) {
-                                                return ScaleTransition(scale: animation, child: child);
-                                              },
+                                              duration: const Duration(milliseconds: 220),
+                                              switchInCurve: Curves.easeOut,
+                                              switchOutCurve: Curves.easeIn,
+                                              transitionBuilder: blurredMorphTransition,
                                               child: isEditing
                                                   ? Padding(
                                                       key: const ValueKey('check'),
-                                                      padding: const EdgeInsets.only(right: 8),
+                                                      padding: EdgeInsets.zero,
                                                       child: GestureDetector(
                                                         onTap: () async {
                                                           final value = editController.text;
@@ -761,14 +879,22 @@ class TimetableScreenState extends State<TimetableScreen>
                                                             showTimetableTip('课表已重命名：${value.trim()}');
                                                           }
                                                         },
-                                                        child: Container(
-                                                          width: 32,
-                                                          height: 32,
-                                                          decoration: BoxDecoration(
-                                                            color: const Color(0xFF4A90E2),
-                                                            borderRadius: BorderRadius.circular(8),
+                                                        // 36x36 槽位与三点按钮（图标20+左右各8内边距）等大，
+                                                        // morph 后三点落位与勾勾完全一致
+                                                        child: SizedBox(
+                                                          width: 36,
+                                                          height: 36,
+                                                          child: Center(
+                                                            child: Container(
+                                                              width: 32,
+                                                              height: 32,
+                                                              decoration: BoxDecoration(
+                                                                color: const Color(0xFF4A90E2),
+                                                                borderRadius: BorderRadius.circular(8),
+                                                              ),
+                                                              child: const Icon(Icons.check, color: Colors.white, size: 18),
+                                                            ),
                                                           ),
-                                                          child: const Icon(Icons.check, color: Colors.white, size: 18),
                                                         ),
                                                       ),
                                                     )
@@ -777,7 +903,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                                       padding: EdgeInsets.zero,
                                                       child: Listener(
                                                         behavior: HitTestBehavior.translucent,
-                                                        onPointerDown: (_) => HapticFeedback.selectionClick(),
+                                                        onPointerDown: (_) {
+                                                          HapticFeedback.selectionClick();
+                                                          // 解除焦点守卫：编辑态下打开另一个三点菜单时
+                                                          // 键盘随锚点抢焦正常收起，而不是被守卫抢回
+                                                          renameFocusGuardActive = false;
+                                                        },
                                                         child: BlurredPopupMenuButton<String>(
                                                           icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
                                                           items: const [
@@ -800,6 +931,31 @@ class TimetableScreenState extends State<TimetableScreen>
                                                               editController.text = timetable.name;
                                                               setDialogState(() {
                                                                 editingId = timetable.id;
+                                                              });
+                                                              // 武装焦点守卫（编辑期持续有效）+ 聚焦新编辑框
+                                                              // （450ms 后聚焦避开菜单路由 pop 过程中的焦点
+                                                              // 恢复竞态；窗口内的意外抢焦由守卫自动纠正，
+                                                              // 键盘弹出后不再"0.5s 意外收起"）
+                                                              renameFocusGuardActive = true;
+                                                              keyboardKeeper?.dispose();
+                                                              keyboardKeeper = KeyboardKeeper(
+                                                                isFocused: () => switcherDialogOpen &&
+                                                                    editingId == timetable.id &&
+                                                                    editFocusNode.hasFocus,
+                                                                refocus: () {
+                                                                  editFocusNode.unfocus();
+                                                                  // 必须隔帧再聚焦：同帧 unfocus+requestFocus
+                                                                  // 会被框架合并成一次焦点应用（起止相同=
+                                                                  // 无变化事件），连接不会重开
+                                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                                    editFocusNode.requestFocus();
+                                                                  });
+                                                                },
+                                                              )..arm(dialogContext);
+                                                              Future.delayed(const Duration(milliseconds: 450), () {
+                                                                if (editingId == timetable.id) {
+                                                                  editFocusNode.requestFocus();
+                                                                }
                                                               });
                                                             } else if (value == 'delete') {
                                                               final confirmed = await _confirmDeleteTimetable(timetable.name);
@@ -987,7 +1143,7 @@ class TimetableScreenState extends State<TimetableScreen>
                               ),
                             ),
                             const SizedBox(height: 12),
-                            TextField(
+                            AppTextField(
                               contextMenuBuilder: styledEditableContextMenu,
                               controller: nameController,
                               focusNode: nameFocusNode,
@@ -1077,8 +1233,15 @@ class TimetableScreenState extends State<TimetableScreen>
                         ),
                       );
                     },
-                  ),
+                  );
+      },
     );
+    // 对话框关闭（遮罩点击/切换课表/返回键等任何 pop 路径）后，
+    // 焦点守卫随对话框生命周期一并失效，不再抢回焦点
+    switcherDialogFuture.whenComplete(() {
+      switcherDialogOpen = false;
+      keyboardKeeper?.dispose();
+    });
   }
 
   /// 新增课表项出现动画（删除动画的逆过程，严格镜像对称）：
@@ -1191,47 +1354,43 @@ class TimetableScreenState extends State<TimetableScreen>
   }
 
   Widget _buildPinnedHeader(double topPadding, double timeColumnWidth, {bool hasWallpaper = false}) {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: BoxDecoration(
-            color: hasWallpaper
-                ? Colors.white.withValues(alpha: 0.35)
-                : const Color(0xFFF8F9FC).withValues(alpha: 0.75),
-            border: Border(
-              bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+    // 结构拆分：毛玻璃背景带（ClipRRect 仅作模糊区域与带体边界）与内容层
+    // 分离。原实现把内容包进同一个 ClipRRect——其底边恰好压在日期行下缘，
+    // 左右滑切换周时日期/周数文字墨迹随「设备回退字体度量 × 系统字体缩放」
+    // 膨胀（主题字体未打包，各机型回退字体行高 1.4~1.55em 不等），底部会被
+    // 裁剪切掉。拆分后内容层不再有纵向裁剪（横向由外层 Stack 的屏幕边界
+    // 裁剪，与原行为一致——原裁剪框即全屏宽）；毛玻璃带的矩形、模糊区域、
+    // 底部分割线逐像素保持原样，静止视效不变。
+    return Stack(
+      children: [
+        ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              // 高度 = 原「边框上下 0.5×2 + topPadding + 周选择行 48 + 日期行 52」
+              height: topPadding + 48 + 52 + 1.0,
+              decoration: BoxDecoration(
+                color: hasWallpaper
+                    ? Colors.white.withValues(alpha: 0.35)
+                    : const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+                border: Border(
+                  bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                ),
+              ),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(height: topPadding),
-              Stack(
-                children: [
-                  _buildWeekSelectorRow(),
-                  // 视频壁纸设置按钮（与切换课表按钮对称，仅视频壁纸时显示）
-                  if (_isVideoWallpaper)
-                    Positioned(
-                      left: 8,
-                      top: 0,
-                      bottom: 0,
-                      child: Center(
-                        child: IconButton(
-                          icon: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.equalizer, color: Color(0xFF4A90E2), size: 18),
-                          ),
-                          onPressed: _showVideoWallpaperSettings,
-                        ),
-                      ),
-                    ),
+        ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(height: topPadding),
+            Stack(
+              children: [
+                _buildWeekSelectorRow(),
+                // 视频壁纸设置按钮（与切换课表按钮对称，仅视频壁纸时显示）
+                if (_isVideoWallpaper)
                   Positioned(
-                    right: 8,
+                    left: 8,
                     top: 0,
                     bottom: 0,
                     child: Center(
@@ -1242,24 +1401,41 @@ class TimetableScreenState extends State<TimetableScreen>
                             color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: const Icon(Icons.swap_horiz, color: Color(0xFF4A90E2), size: 18),
+                          child: const Icon(Icons.equalizer, color: Color(0xFF4A90E2), size: 18),
                         ),
-                        onPressed: _showTimetableSwitcher,
+                        onPressed: _showVideoWallpaperSettings,
                       ),
                     ),
                   ),
-                ],
-              ),
-              AnimatedBuilder(
-                animation: _pageController,
-                builder: (context, _) {
-                  return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _wallpaperIsLight);
-                },
-              ),
-            ],
-          ),
+                Positioned(
+                  right: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.swap_horiz, color: Color(0xFF4A90E2), size: 18),
+                      ),
+                      onPressed: _showTimetableSwitcher,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            AnimatedBuilder(
+              animation: _pageController,
+              builder: (context, _) {
+                return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _wallpaperIsLight);
+              },
+            ),
+          ],
         ),
-      ),
+      ],
     );
   }
 
@@ -1310,7 +1486,10 @@ class TimetableScreenState extends State<TimetableScreen>
             ),
             SizedBox(
               width: 21,
-              height: 24,
+              // 高度 28 给滑动数字的墨迹留余量：height:1.0 行盒在 OEM 高行高
+              // 回退字体 + 大字体缩放下，墨迹会溢出行盒下方（48 行内居中，
+              // 视觉位置不变）
+              height: 28,
               child: AnimatedBuilder(
                 animation: _pageController,
                 builder: (context, _) => _buildAnimatedWeekNumber(totalWeeks, headerTextColor),
@@ -1341,15 +1520,19 @@ class TimetableScreenState extends State<TimetableScreen>
     final pageOffset = page.clamp(0.0, (totalWeeks - 1).toDouble());
     final integerPart = pageOffset.floor();
     final fractionalPart = pageOffset - integerPart;
-    
+
     final currentNum = integerPart + 1;
     final nextNum = currentNum + 1;
-    
+
     final displayCurrent = currentNum.clamp(1, totalWeeks);
     final displayNext = nextNum.clamp(1, totalWeeks);
-    
+
     final canShowNext = currentNum < totalWeeks;
-    
+
+    // 淡入淡出用文字颜色透明度而非 Opacity：Opacity 的 saveLayer 图层边界
+    // = 文字布局盒，height:1.0 / 合成加粗的墨迹会溢出盒外 1-2px，滑动期间
+    // 被图层裁掉（文字底部缺一截）；颜色透明度不建图层，墨迹完整。静止时
+    // Opacity(1.0) 本就被短路，两者视觉一致。
     return GestureDetector(
       onTap: _showWeekPickerDialog,
       child: Stack(
@@ -1358,19 +1541,18 @@ class TimetableScreenState extends State<TimetableScreen>
         children: [
           Transform.translate(
             offset: Offset(-fractionalPart * 21, 0),
-            child: Opacity(
-              opacity: (1.0 - fractionalPart).clamp(0.0, 1.0),
-              child: SizedBox(
-                width: 21,
-                child: Text(
-                  '$displayCurrent',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                    fontSize: 16,
-                    height: 1.0,
+            child: SizedBox(
+              width: 21,
+              child: Text(
+                '$displayCurrent',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: textColor.withValues(
+                    alpha: (1.0 - fractionalPart).clamp(0.0, 1.0),
                   ),
+                  fontSize: 16,
+                  height: 1.0,
                 ),
               ),
             ),
@@ -1378,19 +1560,18 @@ class TimetableScreenState extends State<TimetableScreen>
           if (canShowNext && fractionalPart > 0.01)
             Transform.translate(
               offset: Offset(21 - fractionalPart * 21, 0),
-              child: Opacity(
-                opacity: fractionalPart.clamp(0.0, 1.0),
-                child: SizedBox(
-                  width: 21,
-                  child: Text(
-                    '$displayNext',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: textColor,
-                      fontSize: 16,
-                      height: 1.0,
+              child: SizedBox(
+                width: 21,
+                child: Text(
+                  '$displayNext',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: textColor.withValues(
+                      alpha: fractionalPart.clamp(0.0, 1.0),
                     ),
+                    fontSize: 16,
+                    height: 1.0,
                   ),
                 ),
               ),
@@ -1421,6 +1602,37 @@ class TimetableScreenState extends State<TimetableScreen>
       dateNumberColor = Colors.grey.shade800;
     }
     
+    // 淡入淡出用文字颜色透明度而非 Opacity（原因见 _buildAnimatedWeekNumber
+    // 注释）：避免滑动期间 saveLayer 图层边界裁掉文字墨迹底部 1-2px
+    Widget buildDateColumn(DateTime date, int dayIndex, double fade) {
+      final isToday = _isToday(date);
+      Color withFade(Color color) => color.withValues(alpha: fade);
+      return SizedBox(
+        width: dayWidth,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '周${_weekDays[dayIndex]}',
+              style: TextStyle(
+                fontSize: 12,
+                color: withFade(isToday ? const Color(0xFF4A90E2) : dayLabelColor),
+                fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+            Text(
+              '${date.month}/${date.day}',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: withFade(isToday ? const Color(0xFF4A90E2) : dateNumberColor),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       height: 52,
       clipBehavior: Clip.none,
@@ -1430,68 +1642,25 @@ class TimetableScreenState extends State<TimetableScreen>
         children: [
           Positioned(
             left: timeWidth - fractionalPart * dayWidth * 7,
+            // 日期两行（含周几）整体下移 6px：原 topStart 对齐内容偏上，
+            // 底部富余偏大；数值即下移量，可按观感调整
+            top: 6,
             child: Row(
               children: [
                 ...List.generate(7, (dayIndex) {
                   final date = currentStartOfWeek.add(Duration(days: dayIndex));
-                  final isToday = _isToday(date);
-                  return SizedBox(
-                    width: dayWidth,
-                    child: Opacity(
-                      opacity: (1.0 - fractionalPart).clamp(0.0, 1.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            '周${_weekDays[dayIndex]}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isToday ? const Color(0xFF4A90E2) : dayLabelColor,
-                              fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                          Text(
-                            '${date.month}/${date.day}',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: isToday ? const Color(0xFF4A90E2) : dateNumberColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  return buildDateColumn(
+                    date,
+                    dayIndex,
+                    (1.0 - fractionalPart).clamp(0.0, 1.0),
                   );
                 }),
                 ...List.generate(7, (dayIndex) {
                   final date = nextStartOfWeek.add(Duration(days: dayIndex));
-                  final isToday = _isToday(date);
-                  return SizedBox(
-                    width: dayWidth,
-                    child: Opacity(
-                      opacity: fractionalPart.clamp(0.0, 1.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            '周${_weekDays[dayIndex]}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isToday ? const Color(0xFF4A90E2) : dayLabelColor,
-                              fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                          Text(
-                            '${date.month}/${date.day}',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: isToday ? const Color(0xFF4A90E2) : dateNumberColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  return buildDateColumn(
+                    date,
+                    dayIndex,
+                    fractionalPart.clamp(0.0, 1.0),
                   );
                 }),
               ],
@@ -4341,7 +4510,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                   mainAxisSize: MainAxisSize.min,
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    TextField(
+                                    AppTextField(
                                       contextMenuBuilder: styledEditableContextMenu,
                                       controller: nameController,
                                       decoration: InputDecoration(
@@ -4486,7 +4655,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       }).toList(),
                                     ),
                                     const SizedBox(height: 16),
-                                    TextField(
+                                    AppTextField(
                                       contextMenuBuilder: styledEditableContextMenu,
                                       controller: noteController,
                                       maxLines: 1,
@@ -4676,7 +4845,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    TextField(
+                                    AppTextField(
                                       contextMenuBuilder: styledEditableContextMenu,
                                       controller: nameController,
                                       decoration: InputDecoration(
@@ -4836,7 +5005,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       }).toList(),
                                     ),
                                     SizedBox(height: isSmallScreen ? 12 : 16),
-                                    TextField(
+                                    AppTextField(
                                       contextMenuBuilder: styledEditableContextMenu,
                                       controller: noteController,
                                       maxLines: 1,
@@ -6221,7 +6390,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            TextField(
+                            AppTextField(
                               contextMenuBuilder: styledEditableContextMenu,
                               controller: widget.nameController,
                               decoration: InputDecoration(
@@ -6384,7 +6553,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               }).toList(),
                             ),
                             SizedBox(height: isSmallScreen ? 10 : 16),
-                            TextField(
+                            AppTextField(
                               contextMenuBuilder: styledEditableContextMenu,
                               controller: widget.noteController,
                               maxLines: 1,

@@ -22,6 +22,7 @@ import '../widgets/blur_selection_menu.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/shiguang_import_preview_dialog.dart';
 import '../widgets/toast_notification.dart';
+import '../widgets/app_text_field.dart';
 
 /// 教务系统导入 - WebView 页。
 ///
@@ -1023,7 +1024,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               ),
             ],
             const SizedBox(height: 16),
-            TextField(
+            AppTextField(
               controller: controller,
               autofocus: true,
               decoration: InputDecoration(
@@ -1631,29 +1632,30 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         ),
         // 实心黑锁：真浏览器行为——解析中 / http / 输入聚焦时无锁，
         // https 加载完成后出现。图标「原地」scale + 淡入 [+ 模糊]：
-        // OverflowBox 不裁切（无 Clip），图标固定在最终位置（左缘 +12）
-        // 只做自身出现动画，不随宽度裁切产生扫出效果；宽度 = 27 * t
+        // OverflowBox 不裁切（无 Clip），图标固定在最终位置（左缘 +2）
+        // 只做自身出现动画，不随宽度裁切产生扫出效果；宽度 = 22 * t
         // 与图标共用同一动画值逐帧驱动——地址栏文本随宽度连续右移避让
         // / 左移回填，任何子树重建（形态切换）读当前 t 即无跳变。
         // 焦点 / 加载态切换统一由 _computeLockTarget 驱动 forward/reverse。
+        // 锁盒 22 = 左距 2 + 图标 13 + 右距 2 + 锁↔网址间距 5
         AnimatedBuilder(
           animation: _lockCurved,
           child: IgnorePointer(
             child: OverflowBox(
               alignment: Alignment.centerLeft,
-              maxWidth: 27,
+              maxWidth: 22,
               child: _LockAppear(
                 animation: _lockCurved,
                 reduceMotion: _reduceMotion,
                 child: const Padding(
-                  padding: EdgeInsets.only(left: 12, right: 2),
+                  padding: EdgeInsets.only(left: 2, right: 2),
                   child: Icon(Icons.lock, size: 13, color: black),
                 ),
               ),
             ),
           ),
           builder: (context, child) => SizedBox(
-            width: 27.0 * _lockCurved.value,
+            width: 22.0 * _lockCurved.value,
             height: 50,
             child: child,
           ),
@@ -1661,7 +1663,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         // 无边框网址输入框：右侧刷新按钮
         // （加载中转 🔄，完成后静止 🔄，点击刷新或前往新输入的网址）。
         Expanded(
-          child: TextField(
+          child: AppTextField(
             contextMenuBuilder: styledEditableContextMenu,
             controller: _urlController,
             focusNode: _urlFocus,
@@ -1680,8 +1682,13 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                 fontSize: 12.5,
               ),
               isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(vertical: 13, horizontal: 4),
+              // 聚焦态（后退/前进收起、无锁）时网址文字距左缘过挤，
+              // 增至 14px 向右挪动；非聚焦态左侧有锁与导航键占位，维持 4px，
+              // 长网址起始位置不受影响
+              contentPadding: EdgeInsets.symmetric(
+                vertical: 13,
+                horizontal: focused ? 14 : 4,
+              ),
               // 覆盖全局主题的灰色填充（filled grey[50]），参考对话页输入框。
               filled: true,
               fillColor: Colors.transparent,

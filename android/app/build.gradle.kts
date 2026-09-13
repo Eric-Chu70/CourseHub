@@ -28,8 +28,8 @@ android {
         applicationId = "com.coursehub.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 8
+        versionName = "1.0.8"
     }
 
     buildTypes {
