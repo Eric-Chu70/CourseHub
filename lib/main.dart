@@ -23,7 +23,7 @@ import 'widgets/glass_dialog.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
-const String appVersion = '1.0.8';
+const String appVersion = '1.0.9';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
