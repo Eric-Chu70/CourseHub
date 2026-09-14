@@ -1,3 +1,4 @@
+import 'package:coursehub/widgets/blur_selection_menu.dart';
 import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 
@@ -10,21 +11,8 @@ const Radius _kCursorRadius = Radius.circular(1.0);
 const double _kCursorHeight = 17.0;
 const Color _kCursorColor = Color(0xFF4A90E2);
 
-/// 与 SDK 私有默认实现等价的上下文菜单构建（公开 API 复刻，行为一致）。
-/// SDK 构造函数的默认值引用私有符号，子类无法直接转发，此处按原逻辑重写。
-Widget _defaultContextMenuBuilder(
-  BuildContext context,
-  EditableTextState editableTextState,
-) {
-  if (SystemContextMenu.isSupportedByField(editableTextState)) {
-    return SystemContextMenu.editableText(editableTextState: editableTextState);
-  }
-  return AdaptiveTextSelectionToolbar.editableText(
-    editableTextState: editableTextState,
-  );
-}
-
-/// 统一样式的 [TextField]：仅覆盖光标默认值，其余参数全部原样转发。
+/// 统一样式的 [TextField]：覆盖光标默认值与上下文菜单（全局玻璃菜单），
+/// 其余参数全部原样转发。
 ///
 /// 参数列表与 Flutter 3.41 的 TextField 构造函数逐一对应（省略两个已废弃
 /// 参数 toolbarOptions / scribbleEnabled，项目未使用）；默认值与 SDK 一致，
@@ -95,7 +83,7 @@ class AppTextField extends TextField {
     super.restorationId,
     super.stylusHandwritingEnabled = EditableText.defaultStylusHandwritingEnabled,
     super.enableIMEPersonalizedLearning = true,
-    super.contextMenuBuilder = _defaultContextMenuBuilder,
+    super.contextMenuBuilder = styledEditableContextMenu,
     super.canRequestFocus = true,
     super.spellCheckConfiguration,
     super.magnifierConfiguration,
@@ -169,7 +157,7 @@ class AppTextFormField extends TextFormField {
     super.restorationId,
     super.enableIMEPersonalizedLearning = true,
     super.mouseCursor,
-    super.contextMenuBuilder = _defaultContextMenuBuilder,
+    super.contextMenuBuilder = styledEditableContextMenu,
     super.spellCheckConfiguration,
     super.magnifierConfiguration,
     super.undoController,

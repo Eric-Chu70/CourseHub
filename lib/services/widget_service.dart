@@ -100,15 +100,24 @@ class WidgetService {
       final tomorrow = now.add(const Duration(days: 1));
       final tomorrowDayIndex = tomorrow.weekday - 1;
       final tomorrowWeekDays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-      tomorrowLabel = '${tomorrowWeekDays[tomorrowDayIndex]} · 第$currentWeek周';
-      final tomorrowCourses = courses.where((c) {
-        if (c.day != tomorrowDayIndex) return false;
-        if (c.weeks != null && c.weeks!.isNotEmpty) {
-          return _isCourseInWeek(c.weeks!, currentWeek);
-        }
-        return true;
-      }).toList()
-        ..sort((a, b) => a.time.compareTo(b.time));
+      // 周日→周一跨周：明日属于下一周次，按本周周次筛选会漏掉下周才上
+      // 的课、多出本周最后一次上的课（与原生 loadTodayDataAuto 同规则）
+      final tomorrowWeek = dayIndex == 6 ? currentWeek + 1 : currentWeek;
+      final tomorrowIsHoliday = tomorrowWeek > semesterWeeks;
+      tomorrowLabel = '${tomorrowWeekDays[tomorrowDayIndex]} · 第$tomorrowWeek周';
+      final List<Course> tomorrowCourses;
+      if (tomorrowIsHoliday) {
+        tomorrowCourses = [];
+      } else {
+        tomorrowCourses = courses.where((c) {
+          if (c.day != tomorrowDayIndex) return false;
+          if (c.weeks != null && c.weeks!.isNotEmpty) {
+            return _isCourseInWeek(c.weeks!, tomorrowWeek);
+          }
+          return true;
+        }).toList()
+          ..sort((a, b) => a.time.compareTo(b.time));
+      }
       tomorrowCoursesJson = tomorrowCourses
           .map((c) => _courseToJson(c, timeSlots, includeDay: false))
           .toList();
@@ -215,15 +224,12 @@ class WidgetService {
 
     final label = '第$currentWeek周';
 
-    // 过滤本周课程
-    final weekCourses = courses.where((c) {
-      if (c.weeks != null && c.weeks!.isNotEmpty) {
-        return _isCourseInWeek(c.weeks!, currentWeek);
-      }
-      return true;
-    }).toList();
-
-    final coursesJson = weekCourses
+    // 全量课程（不按本周预过滤）：原生自治路径要按"今日/明日各自的周次"
+    // 筛选课程。周日→周一跨周时单双周课程与本周集合不同，按本周预过滤
+    // 会让 4x4 的"明日课程"漏课（下周一才上的课）或多课（本周最后一次
+    // 上课被当成明日有课）；同时携带开学日期，供原生在 app 跨周未启动时
+    // 重算当前周次
+    final coursesJson = courses
         .map((c) => _courseToJson(c, timeSlots, includeDay: true))
         .toList();
 
@@ -239,6 +245,8 @@ class WidgetService {
       'dailyPeriods': dailyPeriods,
       'currentWeek': currentWeek,
       'semesterWeeks': semesterWeeks,
+      'semesterStartMillis':
+          StorageService.getSemesterStartDate().millisecondsSinceEpoch,
       'courses': coursesJson,
       'timeSlots': timeSlotsJson,
     };
@@ -277,6 +285,8 @@ class WidgetService {
       'endTime': endTime,
       'periodStart': periodStart,
       'periodEnd': periodEnd,
+      // 上课周次串：原生自治路径需按"今日/明日各自的周次"筛选课程
+      'weeks': course.weeks ?? '',
       'isCurrent': isCurrent,
     };
     if (includeDay) {

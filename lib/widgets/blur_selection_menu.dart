@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -17,6 +18,16 @@ import 'package:flutter/scheduler.dart';
 /// contextMenuBuilder 返回的只是一个"生命周期探针"（空 widget + 会话），
 /// 真正的菜单画在自管理的 OverlayEntry 里：探针 dispose 时通知会话播放
 /// 退场动画，动画结束后再摘掉自己的 entry。
+///
+/// 两处真机问题修正：
+/// 1. 收起内容冻结——SDK 移除菜单 entry 的同一帧选区往往已折叠，若重建时
+///    活取 SDK 按钮列表，收起动画播的会是内容被抽换后的菜单；配置在探针
+///    重建时刻物化成快照（见 _MenuConfig.items），退场内容与展示时一致。
+/// 2. 乐观粘贴——SDK 用 Clipboard.hasStrings 决定「粘贴」是否出现，部分
+///    ROM 对前台应用也返回 false（状态恒 notPasteable），剪贴板有内容却
+///    不给粘贴按钮；输入框可写而列表缺「粘贴」时本地合成（见
+///    _withOptimisticPaste），并在弹出时主动刷新一次剪贴板状态
+///    （见 _refreshClipboardIfNeeded）。
 ///
 /// 用法：
 ///   TextField(contextMenuBuilder: styledEditableContextMenu, ...)
@@ -42,7 +53,19 @@ bool get _isDesktop => switch (defaultTargetPlatform) {
 Widget styledEditableContextMenu(BuildContext context, EditableTextState editableTextState) {
   return _SelectionMenuLauncher(
     anchors: editableTextState.contextMenuAnchors,
-    buttonItems: editableTextState.contextMenuButtonItems,
+    // 实时取按钮项而非快照：空输入框长按时「粘贴」按钮依赖剪贴板状态
+    // 异步查询，首次构建可能拿不到，菜单需在状态就绪后自行重建。
+    // mounted 守卫：输入框先行销毁而菜单还在收起动画中时，
+    // 取值会访问已失效的 RenderEditable
+    itemsGetter: () => editableTextState.mounted
+        ? editableTextState.contextMenuButtonItems
+        : const <ContextMenuButtonItem>[],
+    clipboardStatus: editableTextState.clipboardStatus,
+    // 粘贴动作：SDK 的 clipboardStatus 通道失灵（部分 ROM 对前台应用也返回
+    // false，状态恒为 notPasteable）时，菜单用它本地合成乐观粘贴按钮
+    onPaste: editableTextState.widget.readOnly
+        ? null
+        : () => editableTextState.pasteText(SelectionChangedCause.toolbar),
     // 桌面端 SDK 全选后只 hideToolbar 不回弹菜单，这里补一次回弹
     onSelectAll: () {
       editableTextState.selectAll(SelectionChangedCause.toolbar);
@@ -64,7 +87,7 @@ Widget styledSelectableRegionContextMenu(
 ) {
   return _SelectionMenuLauncher(
     anchors: selectableRegionState.contextMenuAnchors,
-    buttonItems: selectableRegionState.contextMenuButtonItems,
+    itemsGetter: () => selectableRegionState.contextMenuButtonItems,
     // 带 toolbar cause 的全选会在 SDK 内部重新弹出菜单（移动端同款路径）
     onSelectAll: () => selectableRegionState.selectAll(SelectionChangedCause.toolbar),
     // 桌面端 SDK 复制后只收菜单不清除选中，这里补齐；移动端 SDK 已按平台
@@ -73,18 +96,29 @@ Widget styledSelectableRegionContextMenu(
   );
 }
 
-/// 菜单配置：锚点 + 按钮项 + 平台行为修正回调。SDK 每次重建菜单（如拖动
-/// 选区）时都会调 contextMenuBuilder，探针据此把最新配置同步给菜单。
+/// 菜单配置：锚点 + 按钮项获取器 + 平台行为修正回调。SDK 每次重建菜单
+/// （如拖动选区）时都会调 contextMenuBuilder，探针据此把最新配置同步给
+/// 菜单；菜单自身也监听剪贴板状态，粘贴按钮可用性变化时即时重建。
+///
+/// [items] 在构造时把 [itemsGetter] 的结果物化成快照：SDK 移除菜单 entry
+/// （点外部收起）的同一帧里，选区往往已折叠，此时任何重建若再活取 SDK
+/// 状态，收起动画播的就会是内容被抽换后的菜单（复制/剪切/全选消失）。
+/// 物化后菜单只渲染探针重建时刻的按钮，收起动画内容与展示时一致。
 class _MenuConfig {
-  const _MenuConfig(
-    this.anchors,
-    this.buttonItems, {
+  _MenuConfig({
+    required this.anchors,
+    required this.itemsGetter,
+    this.clipboardStatus,
+    this.onPaste,
     this.onSelectAll,
     this.onCopyDone,
-  });
+  }) : items = itemsGetter();
 
   final TextSelectionToolbarAnchors anchors;
-  final List<ContextMenuButtonItem> buttonItems;
+  final List<ContextMenuButtonItem> Function() itemsGetter;
+  final List<ContextMenuButtonItem> items;
+  final Listenable? clipboardStatus;
+  final VoidCallback? onPaste;
   final VoidCallback? onSelectAll;
   final VoidCallback? onCopyDone;
 }
@@ -94,13 +128,17 @@ class _MenuConfig {
 class _SelectionMenuLauncher extends StatefulWidget {
   const _SelectionMenuLauncher({
     required this.anchors,
-    required this.buttonItems,
+    required this.itemsGetter,
+    this.clipboardStatus,
+    this.onPaste,
     this.onSelectAll,
     this.onCopyDone,
   });
 
   final TextSelectionToolbarAnchors anchors;
-  final List<ContextMenuButtonItem> buttonItems;
+  final List<ContextMenuButtonItem> Function() itemsGetter;
+  final Listenable? clipboardStatus;
+  final VoidCallback? onPaste;
   final VoidCallback? onSelectAll;
   final VoidCallback? onCopyDone;
 
@@ -112,8 +150,10 @@ class _SelectionMenuLauncherState extends State<_SelectionMenuLauncher> {
   _MenuSession? _session;
 
   _MenuConfig get _currentConfig => _MenuConfig(
-        widget.anchors,
-        widget.buttonItems,
+        anchors: widget.anchors,
+        itemsGetter: widget.itemsGetter,
+        clipboardStatus: widget.clipboardStatus,
+        onPaste: widget.onPaste,
         onSelectAll: widget.onSelectAll,
         onCopyDone: widget.onCopyDone,
       );
@@ -159,6 +199,7 @@ class _MenuSession {
   final ValueNotifier<_MenuConfig?> _configNotifier;
   final ValueNotifier<bool> _dismissedNotifier = ValueNotifier<bool>(false);
   OverlayEntry? _entry;
+  Timer? _fallbackTimer;
 
   void mount(OverlayState overlay) {
     if (_dismissedNotifier.value) {
@@ -174,6 +215,26 @@ class _MenuSession {
     }
   }
 
+  /// 剪贴板状态变化后的定向刷新：只重新物化按钮项，锚点与回调保持不变。
+  /// 收起中不刷新，保证退场动画内容冻结在最后展示的状态。
+  void refreshItems() {
+    if (_dismissedNotifier.value) {
+      return;
+    }
+    final _MenuConfig? config = _configNotifier.value;
+    if (config == null) {
+      return;
+    }
+    _configNotifier.value = _MenuConfig(
+      anchors: config.anchors,
+      itemsGetter: config.itemsGetter,
+      clipboardStatus: config.clipboardStatus,
+      onPaste: config.onPaste,
+      onSelectAll: config.onSelectAll,
+      onCopyDone: config.onCopyDone,
+    );
+  }
+
   /// 触发收起：菜单widget 监听到信号后反向播放动画，结束后自行摘除 entry。
   void dismiss() {
     if (_dismissedNotifier.value) {
@@ -182,10 +243,12 @@ class _MenuSession {
     _dismissedNotifier.value = true;
     // 兜底：极端时序下菜单 widget 可能已不在树上听不到信号，
     // 超时后强制移除 entry，避免残留
-    Future<void>.delayed(const Duration(milliseconds: 500), _removeEntry);
+    _fallbackTimer = Timer(const Duration(milliseconds: 500), _removeEntry);
   }
 
   void _removeEntry() {
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
     final OverlayEntry? entry = _entry;
     _entry = null;
     if (entry != null && entry.mounted) {
@@ -224,6 +287,8 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
     _controller.forward();
     widget.session._dismissedNotifier.addListener(_handleDismissed);
     widget.session._configNotifier.addListener(_handleConfigChanged);
+    widget.session._configNotifier.value?.clipboardStatus?.addListener(_handleClipboardChanged);
+    _refreshClipboardIfNeeded();
   }
 
   void _handleDismissed() {
@@ -238,10 +303,37 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
     }
   }
 
+  /// 剪贴板状态就绪（unknown → pasteable/notPasteable）时重建菜单：
+  /// 空输入框长按场景下「粘贴」按钮是否可用取决于这次异步查询结果，
+  /// SDK 不会为它主动重建 context menu
+  void _handleClipboardChanged() {
+    if (mounted && !widget.session._dismissedNotifier.value) {
+      widget.session.refreshItems();
+    }
+  }
+
+  /// SDK 只在部分路径（showToolbar）刷新剪贴板状态；应用内「复制」按钮
+  /// 直接写 Clipboard 不经过它，状态可能停留在旧的 notPasteable，导致
+  /// 明明有内容可贴却不出粘贴按钮。菜单弹出时若缺粘贴按钮则主动刷新一次。
+  void _refreshClipboardIfNeeded() {
+    final _MenuConfig? config = widget.session._configNotifier.value;
+    if (config == null || config.onPaste == null) {
+      return;
+    }
+    final bool hasPaste = config.items.any(
+      (ContextMenuButtonItem item) => item.type == ContextMenuButtonType.paste,
+    );
+    if (!hasPaste && config.clipboardStatus is ClipboardStatusNotifier) {
+      (config.clipboardStatus as ClipboardStatusNotifier).update();
+    }
+  }
+
   @override
   void dispose() {
     widget.session._dismissedNotifier.removeListener(_handleDismissed);
     widget.session._configNotifier.removeListener(_handleConfigChanged);
+    widget.session._configNotifier.value?.clipboardStatus
+        ?.removeListener(_handleClipboardChanged);
     _animation.dispose();
     _controller.dispose();
     super.dispose();
@@ -250,9 +342,12 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
   @override
   Widget build(BuildContext context) {
     final _MenuConfig? config = widget.session._configNotifier.value;
+    if (config == null) {
+      return const SizedBox.shrink();
+    }
     final List<ContextMenuButtonItem> items =
-        _orderedItems(config?.buttonItems ?? const <ContextMenuButtonItem>[]);
-    if (config == null || items.isEmpty) {
+        _withOptimisticPaste(_orderedItems(config.items), config);
+    if (items.isEmpty) {
       return const SizedBox.shrink();
     }
 
@@ -275,8 +370,8 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
       ));
     }
 
-    // 默认展示宽度只预留前三个按钮（复制/分享/全选）的长度，第三方接口
-    // 等其余按钮向后排布，需左右滑动才可见；同时不超过屏幕宽度减去
+    // 默认展示宽度只预留前三个按钮（复制/剪切/全选）的长度，分享等
+    // 其余按钮向后排布，需左右滑动才可见；同时不超过屏幕宽度减去
     // 两侧预留边距，避免菜单顶到屏幕两端
     final double maxWidth = math.min(
       _measureButtonsWidth(context, items.take(3).toList()),
@@ -380,13 +475,13 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
     );
   }
 
-  /// 调整按钮顺序：复制、分享、全选三个核心按钮排在最前
-  /// （与 Android 惯例顺序一致），第三方接口等其余按钮自然向后排布，
+  /// 调整按钮顺序：复制、剪切、全选三个核心按钮排在最前
+  /// （与 Android 惯例顺序一致），分享等其余按钮自然向后排布，
   /// 需要滑动菜单才可见。
   List<ContextMenuButtonItem> _orderedItems(List<ContextMenuButtonItem> items) {
     const List<ContextMenuButtonType> leadingTypes = <ContextMenuButtonType>[
       ContextMenuButtonType.copy,
-      ContextMenuButtonType.share,
+      ContextMenuButtonType.cut,
       ContextMenuButtonType.selectAll,
     ];
     final Map<ContextMenuButtonType, ContextMenuButtonItem> leading =
@@ -406,6 +501,33 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
       for (final ContextMenuButtonType type in leadingTypes)
         if (leading[type] != null) leading[type]!,
       ...rest,
+    ];
+  }
+
+  /// 乐观粘贴：SDK 用 Clipboard.hasStrings 决定「粘贴」是否出现，部分 ROM
+  /// （如 MIUI 的剪贴板隐私限制）对前台应用也返回 false，状态恒为
+  /// notPasteable——剪贴板明明有内容却永远不给粘贴按钮。输入框可写而按钮
+  /// 列表缺「粘贴」时本地补一个，点击走 pasteText（真读不到内容时它自行
+  /// no-op，无副作用）。SDK 自己给出粘贴按钮时（hasPaste）不做任何干预。
+  List<ContextMenuButtonItem> _withOptimisticPaste(
+    List<ContextMenuButtonItem> items,
+    _MenuConfig config,
+  ) {
+    if (config.onPaste == null) {
+      return items;
+    }
+    final bool hasPaste = items.any(
+      (ContextMenuButtonItem item) => item.type == ContextMenuButtonType.paste,
+    );
+    if (hasPaste) {
+      return items;
+    }
+    return <ContextMenuButtonItem>[
+      ...items,
+      ContextMenuButtonItem(
+        type: ContextMenuButtonType.paste,
+        onPressed: config.onPaste,
+      ),
     ];
   }
 

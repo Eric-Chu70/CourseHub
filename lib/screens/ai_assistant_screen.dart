@@ -2729,6 +2729,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     _currentSavedSessionId = id;
     _persistentSavedSessionId = id;
     if (!mounted) return;
+    // 顶栏三点菜单按 _currentSavedSessionId 切换"保存/已自动保存"菜单项，
+    // 保存后需重建才能立即生效
+    setState(() {});
     HapticFeedback.selectionClick();
     toastNotification.show(context, '已保存对话');
   }

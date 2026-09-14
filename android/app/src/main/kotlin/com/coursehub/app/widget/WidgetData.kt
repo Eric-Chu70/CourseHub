@@ -21,6 +21,7 @@ object WidgetData {
     private const val PREFS_NAME = "HomeWidgetPreferences"
     private const val KEY_TODAY = "widget_today_data"
     private const val KEY_WEEK = "widget_week_data"
+    private const val DAY_MILLIS = 24L * 60 * 60 * 1000
 
     /** 单节课信息 */
     data class Course(
@@ -33,6 +34,7 @@ object WidgetData {
         val periodStart: Int,
         val periodEnd: Int,
         val day: Int = -1,         // 仅本周课表使用，0=周一
+        val weeks: String = "",    // 上课周次串（如 "1-16"、"1,3,5"），空=每周都上
         val isCurrent: Boolean = false
     )
 
@@ -61,6 +63,7 @@ object WidgetData {
         val dailyPeriods: Int,
         val currentWeek: Int = 1,
         val semesterWeeks: Int = 20,
+        val semesterStartMillis: Long = 0L, // 开学日期时间戳；>0 时原生可重算当前周次
         val courses: List<Course>,
         val timeSlots: List<TimeSlot>
     )
@@ -133,11 +136,13 @@ object WidgetData {
      * 自行计算今日课程。解决跨天不更新问题：即使 app 多日未启动，也能显示正确的今日课程。
      *
      * 计算流程：
-     * 1. 读取 widget_week_data（含全部课程、时间槽、当前周次、学期周数）
-     * 2. 根据当前日期判断今天星期几 → 过滤今日课程
-     * 3. 根据当前时间过滤已结束课程 + 重新计算 isCurrent
-     * 4. 计算明日课程（处理跨周边界）
-     * 5. 回退：如果 widget_week_data 为空或解析失败，回退到 loadTodayDataFiltered
+     * 1. 读取 widget_week_data（全量课程 + 时间槽 + 开学日期）
+     * 2. 由开学日期原生重算当前周次（推送的 currentWeek 在 app 跨周未
+     *    启动后已过期），缺失时退回推送值
+     * 3. 根据当前日期判断星期几 + 当前周次 → 过滤今日课程
+     * 4. 根据当前时间过滤已结束课程 + 重新计算 isCurrent
+     * 5. 计算明日课程（跨周边界：周次 +1，且按明日周次筛选单双周课程）
+     * 6. 回退：如果 widget_week_data 为空或解析失败，回退到 loadTodayDataFiltered
      */
     fun loadTodayDataAuto(context: Context): TodayData {
         val weekData = loadWeekData(context)
@@ -153,12 +158,21 @@ object WidgetData {
         val todayDayOfWeek = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7
         val nowMinutes = getCurrentMinutes()
 
-        // 假期判断：Flutter 侧已计算 isHoliday（含学期开始前），此处作为主依据；
-        // currentWeek > semesterWeeks 作为兜底（app 长期未运行时周次可能已超）
-        val isHoliday = weekData.isHoliday || weekData.currentWeek > weekData.semesterWeeks
+        // 当前周次：优先由开学日期原生重算；无法计算时退回推送的 currentWeek
+        val nativeWeek = computeCurrentWeek(weekData.semesterStartMillis)
+        val currentWeek = if (nativeWeek > 0) nativeWeek else weekData.currentWeek
+
+        // 假期判断：开学日期可用时以原生重算为准（推送的 isHoliday 只是
+        // 上次 app 运行时的快照，跨假期边界会失真）；缺失时用推送值 + 超周兜底
+        val isHoliday = if (weekData.semesterStartMillis > 0L) {
+            System.currentTimeMillis() < mondayOfWeek1Millis(weekData.semesterStartMillis) ||
+                currentWeek > weekData.semesterWeeks
+        } else {
+            weekData.isHoliday || currentWeek > weekData.semesterWeeks
+        }
 
         val weekDays = arrayOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-        val label = "${weekDays[todayDayOfWeek]} · 第${weekData.currentWeek}周"
+        val label = "${weekDays[todayDayOfWeek]} · 第${currentWeek}周"
 
         // 假期时直接返回空课程，不显示任何课程信息
         if (isHoliday) {
@@ -174,9 +188,11 @@ object WidgetData {
             )
         }
 
-        // 过滤今日课程（根据 day 字段 + 周次）
+        // 过滤今日课程（day + 当前周次；weekData.courses 已是全量课程，
+        // 单双周课程必须按周次判断，空 weeks 视为每周都上）
         val todayCourses = weekData.courses.filter { c ->
-            c.day == todayDayOfWeek
+            c.day == todayDayOfWeek &&
+                (c.weeks.isBlank() || isCourseInWeek(c.weeks, currentWeek))
         }.map { c ->
             // 根据时间槽计算 startTime/endTime
             fillCourseTime(c, weekData.timeSlots)
@@ -207,16 +223,21 @@ object WidgetData {
         val tomorrowDayOfWeek = (tomorrowCal.get(Calendar.DAY_OF_WEEK) + 5) % 7
         // 跨周：今天周日(6) → 明天周一(0)，周次+1
         val tomorrowWeek = if (todayDayOfWeek == 6 && tomorrowDayOfWeek == 0) {
-            weekData.currentWeek + 1
+            currentWeek + 1
         } else {
-            weekData.currentWeek
+            currentWeek
         }
         val tomorrowIsHoliday = tomorrowWeek > weekData.semesterWeeks
         val tomorrowLabel = "${weekDays[tomorrowDayOfWeek]} · 第${tomorrowWeek}周"
+        // 明日课程按"明天的周次"筛选：周日晚上看周一，单双周课程与本周
+        // 集合不同（下周一才上的课要出现，本周最后一次上的课不能出现）
         val tomorrowCourses = if (tomorrowIsHoliday) {
             emptyList()
         } else {
-            weekData.courses.filter { c -> c.day == tomorrowDayOfWeek }.map { c ->
+            weekData.courses.filter { c ->
+                c.day == tomorrowDayOfWeek &&
+                    (c.weeks.isBlank() || isCourseInWeek(c.weeks, tomorrowWeek))
+            }.map { c ->
                 fillCourseTime(c, weekData.timeSlots)
             }.sortedBy { it.periodStart }
         }
@@ -266,6 +287,54 @@ object WidgetData {
         return 0
     }
 
+    /**
+     * 判断课程周次串是否包含指定周（与 Flutter 侧 _isCourseInWeek 同规则，
+     * 支持 "1-16"、"1,3,5"、"1-16连" 等）。空串返回 false，调用方需先按
+     * "空=每周都上"处理
+     */
+    fun isCourseInWeek(weeks: String, week: Int): Boolean {
+        val cleaned = weeks.replace("连", "").replace("周", "").replace(" ", "")
+        for (part in cleaned.split(",")) {
+            val p = part.trim()
+            if (p.contains("-")) {
+                val range = p.split("-")
+                if (range.size == 2) {
+                    val start = range[0].trim().toIntOrNull()
+                    val end = range[1].trim().toIntOrNull()
+                    if (start != null && end != null && week >= start && week <= end) {
+                        return true
+                    }
+                }
+            } else {
+                if (p.toIntOrNull() == week) return true
+            }
+        }
+        return false
+    }
+
+    /** 开学日期所在周的周一（保留开学时刻，与 Flutter 侧 getCurrentWeek 的锚点一致） */
+    private fun mondayOfWeek1Millis(semesterStartMillis: Long): Long {
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = semesterStartMillis
+            // DAY_OF_WEEK: 1=周日..7=周六 → (value + 5) % 7 得周一偏移量，回退到周一
+            add(Calendar.DAY_OF_MONTH, -((get(Calendar.DAY_OF_WEEK) + 5) % 7))
+        }
+        return cal.timeInMillis
+    }
+
+    /**
+     * 由开学日期原生重算当前周次（app 跨周未启动时推送的 currentWeek 已过期）。
+     * 与 Flutter 侧 getCurrentWeek 同规则：周一锚点 + 整天差整除 7 + 1。
+     * 返回 -1 表示无法计算（semesterStartMillis 缺失），调用方退回推送值。
+     */
+    fun computeCurrentWeek(semesterStartMillis: Long): Int {
+        if (semesterStartMillis <= 0L) return -1
+        val diffMillis = System.currentTimeMillis() - mondayOfWeek1Millis(semesterStartMillis)
+        // Long 除法向零截断，与 Dart Duration.inDays 一致；负值（开学前）在下方归 1
+        val week = (diffMillis / (DAY_MILLIS * 7)).toInt() + 1
+        return if (week < 1) 1 else week
+    }
+
     // ===== 从 HomeWidgetGlanceState 读取（向后兼容） =====
 
     /** 从 home_widget 状态中读取今日数据 */
@@ -306,7 +375,7 @@ object WidgetData {
 
     private fun parseWeekJson(json: String?): WeekData {
         if (json.isNullOrBlank()) {
-            return WeekData("CourseHub", false, 10, 1, 20, emptyList(), emptyList())
+            return WeekData("CourseHub", false, 10, 1, 20, 0L, emptyList(), emptyList())
         }
         return try {
             val obj = JSONObject(json)
@@ -315,11 +384,13 @@ object WidgetData {
             val dailyPeriods = obj.optInt("dailyPeriods", 10)
             val currentWeek = obj.optInt("currentWeek", 1)
             val semesterWeeks = obj.optInt("semesterWeeks", 20)
+            val semesterStartMillis = obj.optLong("semesterStartMillis", 0L)
             val courses = parseCourseArray(obj.optJSONArray("courses"))
             val timeSlots = parseTimeSlotArray(obj.optJSONArray("timeSlots"))
-            WeekData(label, isHoliday, dailyPeriods, currentWeek, semesterWeeks, courses, timeSlots)
+            WeekData(label, isHoliday, dailyPeriods, currentWeek, semesterWeeks,
+                semesterStartMillis, courses, timeSlots)
         } catch (e: Exception) {
-            WeekData("CourseHub", false, 10, 1, 20, emptyList(), emptyList())
+            WeekData("CourseHub", false, 10, 1, 20, 0L, emptyList(), emptyList())
         }
     }
 
@@ -357,6 +428,7 @@ object WidgetData {
             periodStart = obj.optInt("periodStart", 0),
             periodEnd = obj.optInt("periodEnd", 0),
             day = obj.optInt("day", -1),
+            weeks = obj.optString("weeks", ""),
             isCurrent = obj.optBoolean("isCurrent", false)
         )
     }

@@ -54,6 +54,10 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
 
   // 条目三点子菜单（本 Stack 内渲染，最多同时一个）
   int? _itemMenuIndex;
+  /// 命中三点时记录的图标屏上位置（本 Stack 本地坐标）。列表条数超过
+  /// _maxVisible 可上下滚动，行内 index 推不出真实位置（滚动后按
+  /// index 定位会向下错位一格），必须以实际渲染盒锚定
+  Rect? _itemMenuAnchor;
   bool _itemMenuOpen = false;
   AnimationController? _itemMenuController;
   CurvedAnimation? _itemMenuCurved;
@@ -135,12 +139,31 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
 
   // ==================== 条目三点子菜单 ====================
 
-  void _toggleItemMenu(int index) {
+  void _toggleItemMenu(int index, BuildContext anchorContext) {
     if (_itemMenuOpen && _itemMenuIndex == index) {
       _closeItemMenu();
       return;
     }
+    _captureMenuAnchor(anchorContext);
     _openItemMenu(index);
+  }
+
+  /// 记录三点图标的真实屏上位置：localToGlobal 已把列表滚动位移与
+  /// 面板入场变换计入，转回本 Stack 本地坐标后供子菜单定位。
+  /// 紧随其后的 _openItemMenu 会触发重建，这里无需 setState
+  void _captureMenuAnchor(BuildContext anchorContext) {
+    final anchorBox = anchorContext.findRenderObject();
+    final stackBox = context.findRenderObject();
+    if (anchorBox is! RenderBox ||
+        stackBox is! RenderBox ||
+        !anchorBox.attached ||
+        !anchorBox.hasSize ||
+        !stackBox.attached) {
+      return;
+    }
+    _itemMenuAnchor =
+        stackBox.globalToLocal(anchorBox.localToGlobal(Offset.zero)) &
+            anchorBox.size;
   }
 
   void _openItemMenu(int index) {
@@ -468,15 +491,32 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
     ];
   }
 
-  /// 子菜单定位：锚定目标行下方右侧；底部空间不足时改为行上方
+  /// 子菜单定位：以命中时记录的三点真实屏上位置（_itemMenuAnchor）
+  /// 锚定所在行下方右侧；底部空间不足时改为行上方。
+  /// 列表可上下滚动（条数超过 _maxVisible），按 index 估算会在滚动后
+  /// 向下错位一格，故必须用实际渲染盒位置。
   Widget _buildPositionedItemMenu(double panelTop) {
     final mq = MediaQuery.of(context);
     const menuHeight = _itemMenuRowHeight * 2 + 8;
-    final index = _itemMenuIndex ?? 0;
-    final rowBottom = panelTop + 8 + (index + 1) * _itemHeight + 4;
-    var top = rowBottom;
+    final anchor = _itemMenuAnchor;
+    if (anchor == null) {
+      // 理论上不可达（命中时渲染盒必已布局）；兜底退化为 index 估算
+      final index = _itemMenuIndex ?? 0;
+      final fallbackRowBottom = panelTop + 8 + (index + 1) * _itemHeight + 4;
+      var fallbackTop = fallbackRowBottom;
+      if (fallbackTop + menuHeight > mq.size.height - 16) {
+        fallbackTop = panelTop + 8 + index * _itemHeight - 4 - menuHeight;
+      }
+      fallbackTop = fallbackTop.clamp(8.0, mq.size.height - menuHeight - 8);
+      return Positioned(top: fallbackTop, right: 54, child: _buildItemMenu());
+    }
+    // 三点图标在行内垂直居中：由图标中心反推行上下沿，与行的间距
+    // 保持原样（行底 +4 / 行顶 -4）
+    final rowTop = anchor.center.dy - _itemHeight / 2;
+    final rowBottom = rowTop + _itemHeight;
+    var top = rowBottom + 4;
     if (top + menuHeight > mq.size.height - 16) {
-      top = panelTop + 8 + index * _itemHeight - 4 - menuHeight;
+      top = rowTop - 4 - menuHeight;
     }
     top = top.clamp(8.0, mq.size.height - menuHeight - 8);
     return Positioned(top: top, right: 54, child: _buildItemMenu());
@@ -798,18 +838,25 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                           width: 40,
                           height: 40,
                           child: Center(
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () => _toggleItemMenu(index),
-                              child: SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: Icon(
-                                  Icons.more_vert,
-                                  size: 18,
-                                  color: _itemMenuOpen && _itemMenuIndex == index
-                                      ? Colors.black
-                                      : Colors.grey.shade500,
+                            // Builder 提供三点自身的 context：命中时取其
+                            // 渲染盒作为菜单锚点（列表可滚动，index 推
+                            // 不出真实屏上位置，见 _captureMenuAnchor）
+                            child: Builder(
+                              builder: (anchorContext) => GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () =>
+                                    _toggleItemMenu(index, anchorContext),
+                                child: SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: Icon(
+                                    Icons.more_vert,
+                                    size: 18,
+                                    color: _itemMenuOpen &&
+                                            _itemMenuIndex == index
+                                        ? Colors.black
+                                        : Colors.grey.shade500,
+                                  ),
                                 ),
                               ),
                             ),
