@@ -2270,7 +2270,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
               padding: const EdgeInsets.symmetric(
                   horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: AppColors.of(context).borderWeak),
                 boxShadow: [
