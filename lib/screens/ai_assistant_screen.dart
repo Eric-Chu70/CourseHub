@@ -4308,12 +4308,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         final double listBottomPadding = inputBottomPosition + _inputAreaHeight + 8;
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: const SystemUiOverlayStyle(
+          value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: Brightness.dark,
-            statusBarBrightness: Brightness.light,
+            statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+            statusBarBrightness: Theme.of(context).brightness,
             systemNavigationBarColor: Colors.transparent,
-            systemNavigationBarIconBrightness: Brightness.dark,
+            systemNavigationBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
           ),
           child: Scaffold(
             backgroundColor: Theme.of(context).brightness == Brightness.dark
