@@ -820,22 +820,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _buildSectionTitle('学期设置'),
                         const SizedBox(height: 12),
                         _buildSettingsGroup([
+                          // 图标语义区分：开学日期=单日标记（event），
+                          // 学期周数=周视图日历，当前周次=当前位置旗标
                           _buildSettingsItem(
-                            icon: Icons.calendar_today_outlined,
+                            icon: Icons.event_outlined,
                             title: '开学日期',
                             subtitle: '${_semesterStartDate.year}年${_semesterStartDate.month}月${_semesterStartDate.day}日',
                             onTap: _selectSemesterStartDate,
                           ),
                           _buildDivider(),
                           _buildSettingsItem(
-                            icon: Icons.date_range_outlined,
+                            icon: Icons.calendar_view_week_outlined,
                             title: '学期周数',
                             subtitle: '$_semesterWeeks 周',
                             onTap: _selectSemesterWeeks,
                           ),
                           _buildDivider(),
                           _buildSettingsItem(
-                            icon: Icons.view_week_outlined,
+                            icon: Icons.flag_outlined,
                             title: '当前周次',
                             trailing: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -865,8 +867,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _buildSectionTitle('课程时间'),
                         const SizedBox(height: 12),
                         _buildSettingsGroup([
+                          // 每日节数是数量概念：编号列表；时钟只留给
+                          // 时间段设置，避免两行同为表盘图标
                           _buildSettingsItem(
-                            icon: Icons.access_time_outlined,
+                            icon: Icons.format_list_numbered_outlined,
                             title: '每日节数',
                             subtitle: '$_dailyPeriods 节',
                             onTap: _selectDailyPeriods,
@@ -879,7 +883,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           _buildDivider(),
                           _buildSettingsItem(
-                            icon: Icons.event_busy_outlined,
+                            icon: Icons.visibility_outlined,
                             title: '显示非本周课程',
                             trailing: Switch(
                               value: _showInactiveCourses,
@@ -904,7 +908,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Consumer<AuthService>(
                             builder: (context, auth, child) {
                               return _buildSettingsItem(
-                                icon: Icons.code_rounded,
+                                icon: Icons.mail_outline,
                                 title: '电子邮箱登录',
                                 subtitle: auth.isAuthenticated 
                                     ? '已登录 (${auth.userName ?? auth.userEmail ?? "用户"})'
@@ -1015,8 +1019,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _buildSectionTitle('AI设置'),
                         const SizedBox(height: 12),
                         _buildSettingsGroup([
+                          // 星芒是简约风格的通用 AI 表意（原头脑齿轮偏厚重）
                           _buildSettingsItem(
-                            icon: Icons.psychology_outlined,
+                            icon: Icons.auto_awesome_outlined,
                             title: 'AI 功能',
                             trailing: Switch(
                               value: _aiEnabled,
@@ -1054,7 +1059,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           _buildDivider(),
                           _buildSettingsItem(
-                            icon: Icons.settings_outlined,
+                            icon: Icons.tune_outlined,
                             title: 'AI配置',
                             // 小字按当前提供商显示具体模型（节点/模型名），
                             // 未开启时提示开启后可用
@@ -1403,9 +1408,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool isDestructive = false,
     VoidCallback? onTap,
   }) {
+    // 行内边距与图标底座参照系统设置收紧：默认 16px 左右内边距 + 36px
+    // 底座会把带开关/滑块的行标题挤成省略号，这里整体让出文字宽度
     return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      horizontalTitleGap: 12,
       leading: Container(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(
           color: isDestructive
               ? Colors.red.withValues(alpha: 0.1)
@@ -1415,7 +1424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Icon(
           icon,
           color: isDestructive ? Colors.red : const Color(0xFF4A90E2),
-          size: 20,
+          size: 18,
         ),
       ),
       title: titleWidget ??
@@ -1446,7 +1455,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildDivider() {
     return Divider(
       height: 1,
-      indent: 56,
+      // 与行内文字左缘对齐：contentPadding 12 + 图标底座 30 + 标题间距 12
+      indent: 54,
       color: AppColors.of(context).borderWeak,
     );
   }
@@ -1464,10 +1474,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// 「个性化 → 界面风格」三段可拖动滑块：浅色 / 深色 / 跟随
-  /// （复用与思考强度/视觉能力支持同款的 SegmentedSelector）
+  /// （复用与思考强度/视觉能力支持同款的 SegmentedSelector）。
+  /// 宽度按三段两字标签收缩（150），给标题让位，避免「界面风格」截断
   Widget _buildThemeModeSelector() {
     return SizedBox(
-      width: 172,
+      width: 150,
       child: SegmentedSelector<ThemeMode>(
         whiteKnobInLight: true,
         items: const [
@@ -1565,7 +1576,7 @@ Future<bool> _showAIConsentDialog() async {
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Icon(
-                                    Icons.code,
+                                    Icons.auto_awesome,
                                     size: 24,
                                     color: AppColors.of(context).textPrimary,
                                   ),

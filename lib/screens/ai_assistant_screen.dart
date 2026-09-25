@@ -5155,6 +5155,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       child: SelectionArea(
                         contextMenuBuilder: _messageSelectionMenuBuilder,
                         child: _buildMarkdownContent(
+                          context: context,
                           message.content,
                           style: TextStyle(
                             fontSize: 14,
@@ -5345,6 +5346,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     SelectionArea(
                       contextMenuBuilder: _messageSelectionMenuBuilder,
                       child: _buildMarkdownContent(
+                        context: context,
                         _streamingContent,
                         style: TextStyle(
                           fontSize: 14,
@@ -5427,6 +5429,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           child: SelectionArea(
                             contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
+                              context: context,
                               _thinkingContent,
                               style: TextStyle(
                                 fontSize: 12,
@@ -5547,6 +5550,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           child: SelectionArea(
                             contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
+                              context: context,
                               message.thinkingContent!,
                               style: TextStyle(
                                 fontSize: 12,
@@ -6551,7 +6555,7 @@ String _convertLatexForRendering(String content) {
   return result;
 }
 
-Widget _buildMarkdownContent(String content, {TextStyle? style}) {
+Widget _buildMarkdownContent(String content, {required BuildContext context, TextStyle? style}) {
   var processedContent = _convertLatexForRendering(content);
   
   processedContent = processedContent
@@ -6562,6 +6566,11 @@ Widget _buildMarkdownContent(String content, {TextStyle? style}) {
   
   final markdown = GptMarkdown(
     processedContent,
+    // 亮度 key：切界面模式时强制重新生成样式 span——gpt_markdown 的
+    // MdWidget 只在 initState/didUpdateWidget(exp 或 config 变化) 时
+    // 解析标题等组件样式，纯主题翻转（exp 不变、部分 config 相同）
+    // 会漏更新，标题就停留在旧主题的颜色上
+    key: ValueKey(Theme.of(context).brightness),
     style: style ?? const TextStyle(fontSize: 14, height: 1.5),
     useDollarSignsForLatex: true,
     tableBuilder: (context, rows, textStyle, config) {
