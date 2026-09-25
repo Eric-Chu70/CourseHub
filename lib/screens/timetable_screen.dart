@@ -2670,14 +2670,20 @@ class TimetableScreenState extends State<TimetableScreen>
   }) {
     final inactiveT = hasWallpaper ? transparencyFactor : 0.4;
     final palette = AppColors.of(context);
-    // 与非本周卡片完全一致：同底色渐变、同描边策略（深色无白描边）、
-    // 加号与卡片标题同级（textPrimary）
-    final backgroundStart = palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!);
-    final backgroundEnd = palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!);
+    // 与非本周卡片完全一致：浅色沿用 GitHub 原版色值与配比，
+    // 深色用令牌版（无白描边），加号与卡片标题同级
+    final backgroundStart = AppColors.isDark(context)
+        ? palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!)
+        : const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!);
+    final backgroundEnd = AppColors.isDark(context)
+        ? palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!)
+        : const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!);
     final borderColor = AppColors.isDark(context)
         ? Colors.transparent
-        : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!);
-    final iconColor = palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
+        : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
+    final iconColor = AppColors.isDark(context)
+        ? palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
+        : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
 
     return Positioned(
       top: period * cellHeight + 2,
@@ -2979,31 +2985,36 @@ class TimetableScreenState extends State<TimetableScreen>
       triangleColor = displayColor;
       borderColor = displayColor.withValues(alpha: lerpDouble(0.2, 0.06, effectiveT)!);
     } else {
-      // 非本周设计：去色表达"本周不重要"，文字保持高对比保证可读
+      // 非本周设计：去色表达"本周不重要"。浅色模式沿用 GitHub 原版的
+      // 色值与透明度配比；深色模式用令牌版（文字不随透明度衰减）
       final inactiveT = hasWallpaper ? t : 0.4;
       final palette = AppColors.of(context);
+      final isDark = AppColors.isDark(context);
       gradient = LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [
-          palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
-          palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
-        ],
+        colors: isDark
+            ? [
+                palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+                palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
+              ]
+            : [
+                const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
+                const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+              ],
       );
-      // 文字色分模式：浅色用深一档的灰（textSecondary）保证可读，
-      // 深色保持近白高对比（灰字在深底上会糊）
-      titleColor = (AppColors.isDark(context)
-              ? palette.textPrimary
-              : palette.textSecondary)
-          .withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
-      metaColor = (AppColors.isDark(context)
-              ? palette.textSecondary
-              : palette.textTertiary)
-          .withValues(alpha: lerpDouble(0.80, 0.30, inactiveT)!);
-      triangleColor = palette.textTertiary.withValues(alpha: lerpDouble(0.90, 0.35, inactiveT)!);
-      borderColor = AppColors.isDark(context)
+      titleColor = isDark
+          ? palette.textPrimary
+          : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
+      metaColor = isDark
+          ? palette.textSecondary
+          : const Color(0xFFA2A8B0).withValues(alpha: lerpDouble(1.0, 0.6, inactiveT)!);
+      triangleColor = isDark
+          ? palette.textTertiary
+          : const Color(0xFFCDD2D9).withValues(alpha: lerpDouble(1.0, 0.65, inactiveT)!);
+      borderColor = isDark
           ? Colors.transparent
-          : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!);
+          : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
     }
 
     return Container(
@@ -3077,25 +3088,37 @@ class TimetableScreenState extends State<TimetableScreen>
     final t = hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0;
     final inactiveT = hasWallpaper ? t : 0.4;
     final palette = AppColors.of(context);
+    final isDarkL = AppColors.isDark(context);
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
-            palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
-          ],
+          colors: isDarkL
+              ? [
+                  palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+                  palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
+                ]
+              : [
+                  const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
+                  const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+                ],
         ),
         border: Border.all(
-          color: AppColors.isDark(context)
+          color: isDarkL
               ? Colors.transparent
-              : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!),
+              : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!),
         ),
         borderRadius: BorderRadius.circular(5),
       ),
       child: Center(
-        child: Icon(Icons.add, size: 24, color: palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)),
+        child: Icon(
+          Icons.add,
+          size: 24,
+          color: isDarkL
+              ? palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
+              : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!),
+        ),
       ),
     );
   }
