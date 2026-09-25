@@ -17,6 +17,8 @@ import 'services/notification_service.dart';
 import 'services/update_service.dart';
 import 'services/wallpaper_storage_service.dart';
 import 'services/widget_service.dart';
+import 'theme/app_theme.dart';
+import 'theme/theme_controller.dart';
 import 'utils/storage.dart';
 import 'widgets/toast_notification.dart';
 import 'widgets/glass_dialog.dart';
@@ -40,6 +42,9 @@ void main() async {
   Hive.registerAdapter(TaskAdapter());
   
   await StorageService.init();
+
+  // 主题模式（浅色默认）：runApp 前读取，MaterialApp.themeMode 监听
+  await ThemeController.instance.load();
 
   // 旧版拼写迁移（Anges → Agnes）：同步旧 prefs 键与 provider 值
   await AIService.migrateLegacyAgnesKeys();
@@ -103,58 +108,36 @@ class CourseHubApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: AuthService.instance),
+        ChangeNotifierProvider.value(value: ThemeController.instance),
       ],
-      child: MaterialApp(
+      child: const _AppRoot(),
+    );
+  }
+}
+
+/// MaterialApp 壳：监听主题模式切换深浅（provider 须在上方，故从
+/// CourseHubApp 拆出）
+class _AppRoot extends StatelessWidget {
+  const _AppRoot();
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
         title: 'CourseHub',
         debugShowCheckedModeBanner: false,
         localizationsDelegates: const [
           GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
         ],
         supportedLocales: const [
           Locale('zh', 'CN'),
           Locale('en', 'US'),
         ],
         locale: const Locale('zh', 'CN'),
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF4A90E2),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          fontFamily: 'Microsoft YaHei',
-          // 全局光标颜色兜底：统一封装 widgets/app_text_field.dart 已按输入框
-          // 设置主题蓝光标，此处覆盖未来未经封装的输入组件（选中高亮/拖拽手柄
-          // 不受影响，仍走主题色）
-          textSelectionTheme: const TextSelectionThemeData(
-            cursorColor: Color(0xFF4A90E2),
-          ),
-          appBarTheme: const AppBarTheme(
-            centerTitle: true,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            systemOverlayStyle: SystemUiOverlayStyle(
-              statusBarColor: Colors.transparent,
-              statusBarIconBrightness: Brightness.dark,
-              statusBarBrightness: Brightness.light,
-              systemStatusBarContrastEnforced: true,
-            ),
-          ),
-          cardTheme: const CardThemeData(
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12)),
-            ),
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            filled: true,
-            fillColor: Colors.grey[50],
-          ),
-        ),
+        themeMode: context.watch<ThemeController>().mode,
+        theme: buildAppTheme(Brightness.light),
+        darkTheme: buildAppTheme(Brightness.dark),
         // 全局钳制系统字体缩放：保留无障碍放大能力但设上限，
         // 防止大字体设置下固定宽度布局溢出/换行（builder 包裹 Navigator，
         // 对话框/菜单等 Overlay 路由同样生效）
@@ -166,7 +149,6 @@ class CourseHubApp extends StatelessWidget {
           );
         },
         home: const MainScreen(),
-      ),
     );
   }
 }
@@ -331,10 +313,10 @@ class _MainScreenState extends State<MainScreen>
                       children: [
                         Text(
                           isUpdate ? '✅ 更新已完成！v$appVersion' : '👋 欢迎使用 CourseHub',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
+                            color: AppColors.of(context).textPrimary,
                           ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -345,7 +327,7 @@ class _MainScreenState extends State<MainScreen>
                             'v$appVersion',
                             style: TextStyle(
                               fontSize: 13,
-                              color: Colors.grey[400],
+                              color: AppColors.of(context).textTertiary,
                             ),
                           ),
                           const SizedBox(height: 24),
@@ -427,10 +409,10 @@ class _MainScreenState extends State<MainScreen>
       children: [
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF333333),
+            color: AppColors.of(context).textPrimary,
           ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -440,7 +422,7 @@ class _MainScreenState extends State<MainScreen>
           description,
           style: TextStyle(
             fontSize: 13,
-            color: Colors.grey[600],
+            color: AppColors.of(context).textSecondary,
             height: 1.4,
           ),
           maxLines: 3,
@@ -470,10 +452,12 @@ class _MainScreenState extends State<MainScreen>
           toastNotification.show(context, '再按一次退出程序', type: ToastType.info);
         }
       },
-      // 白色底与原生闪屏同色：淡入期间未覆盖区域露出纯白，与闪屏无缝衔接；
-      // 淡入完成后被主页完全覆盖，无残留影响
+      // 底色与原生闪屏同色：淡入期间未覆盖区域露出同色，与闪屏无缝衔接；
+      // 淡入完成后被主页完全覆盖，无残留影响。深色模式用近黑底。
       child: ColoredBox(
-        color: Colors.white,
+        color: ThemeController.instance.mode == ThemeMode.dark
+            ? const Color(0xFF111114)
+            : Colors.white,
         child: FadeTransition(
           opacity: _launchFade,
           child: const HomeScreen(),

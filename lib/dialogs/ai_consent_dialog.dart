@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/glass_dialog.dart';
+import '../theme/app_theme.dart';
 
 class AIConsentDialog {
   static Future<bool> show(BuildContext context) async {
@@ -57,10 +58,10 @@ class AIConsentDialog {
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.4),
+                                    color: AppColors.of(context).panel(0.4),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Column(
+                                  child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
@@ -72,7 +73,7 @@ class AIConsentDialog {
                                         style: TextStyle(
                                           fontSize: 13,
                                           height: 1.5,
-                                          color: Color(0xFF333333),
+                                          color: AppColors.of(context).textPrimary,
                                         ),
                                       ),
                                       Text(
@@ -127,7 +128,7 @@ class AIConsentDialog {
                                       padding: const EdgeInsets.symmetric(vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: AppColors.of(context).borderWeak),
                                       ),
                                     ),
                                     child: const Text('取消'),

@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
@@ -35,7 +36,9 @@ class _ImportScreenState extends State<ImportScreen> {
     final topPadding = MediaQuery.of(context).padding.top;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FC),
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? AppPalette.dark.scaffold
+          : const Color(0xFFF8F9FC),
       body: Stack(
         children: [
           CustomScrollView(
@@ -127,16 +130,16 @@ class _ImportScreenState extends State<ImportScreen> {
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
               ),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(height: topPadding),
-                const SizedBox(
+                SizedBox(
                   height: 56,
                   child: Center(
                     child: Text(
@@ -144,7 +147,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A1A2E),
+                        color: AppColors.of(context).textPrimary,
                       ),
                     ),
                   ),
@@ -211,7 +214,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       subtitle,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                   ],
@@ -220,7 +223,7 @@ class _ImportScreenState extends State<ImportScreen> {
               Icon(
                 Icons.chevron_right,
                 color:
-                    onTap == null ? Colors.grey.shade300 : Colors.grey.shade400,
+                    onTap == null ? AppColors.of(context).borderWeak : AppColors.of(context).textTertiary,
               ),
             ],
           ),
@@ -233,23 +236,23 @@ class _ImportScreenState extends State<ImportScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
+        color: AppColors.bannerBg(context, Colors.blue),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.blue.shade100),
+        border: Border.all(color: AppColors.bannerBorder(context, Colors.blue)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+              Icon(Icons.info_outline, color: AppColors.bannerText(context, Colors.blue), size: 20),
               const SizedBox(width: 8),
               Text(
                 '使用说明',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: Colors.blue.shade700,
+                  color: AppColors.bannerText(context, Colors.blue),
                 ),
               ),
             ],
@@ -276,7 +279,7 @@ class _ImportScreenState extends State<ImportScreen> {
             width: 4,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.blue.shade400,
+              color: AppColors.bannerText(context, Colors.blue),
               shape: BoxShape.circle,
             ),
           ),
@@ -286,7 +289,7 @@ class _ImportScreenState extends State<ImportScreen> {
               text,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.blue.shade700,
+                color: AppColors.bannerText(context, Colors.blue),
               ),
             ),
           ),
@@ -307,10 +310,11 @@ class _ImportScreenState extends State<ImportScreen> {
             filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
+                color: AppColors.of(context).glassShell
+                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.8),
+                  color: AppColors.of(context).glassBorder,
                   width: 1.5,
                 ),
                 boxShadow: [
@@ -349,11 +353,11 @@ class _ImportScreenState extends State<ImportScreen> {
                               width: 32,
                               height: 32,
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
+                                color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(Icons.close,
-                                  size: 18, color: Colors.grey.shade600),
+                                  size: 18, color: AppColors.of(context).textSecondary),
                             ),
                           ),
                         ],
@@ -551,7 +555,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 14,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -564,10 +568,10 @@ class _ImportScreenState extends State<ImportScreen> {
                                 decoration: InputDecoration(
                                   hintText: '在此粘贴 JSON 数据...',
                                   hintStyle:
-                                      TextStyle(color: Colors.grey.shade400),
+                                      TextStyle(color: AppColors.of(context).textTertiary),
                                   filled: true,
                                   fillColor:
-                                      Colors.white.withValues(alpha: 0.4),
+                                      AppColors.of(context).panel(0.4),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
@@ -588,7 +592,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                         side: BorderSide(
-                                            color: Colors.grey.shade300),
+                                            color: AppColors.of(context).borderWeak),
                                       ),
                                     ),
                                     child: const Text('取消'),
@@ -726,7 +730,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             side: BorderSide(
-                                                color: Colors.grey.shade300),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                         ),
                                         child: const Text('取消'),
@@ -780,10 +784,10 @@ class _ImportScreenState extends State<ImportScreen> {
         decoration: BoxDecoration(
           color: isSelected
               ? color.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.4),
+              : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? color : Colors.grey.shade200,
+            color: isSelected ? color : AppColors.of(context).borderWeak,
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -808,7 +812,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? color : Colors.black87,
+                      color: isSelected ? color : AppColors.of(context).textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -816,7 +820,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     subtitle,
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ],
@@ -935,7 +939,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 14,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -984,7 +988,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                     side:
-                                        BorderSide(color: Colors.grey.shade300),
+                                        BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('关闭'),
@@ -1048,7 +1052,7 @@ class _ImportScreenState extends State<ImportScreen> {
                         subtitle,
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.grey.shade600,
+                          color: AppColors.of(context).textSecondary,
                         ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -1056,7 +1060,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
               ],
             ),
           ),
@@ -1247,7 +1251,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                   '可多选，未选中的课表不会上传',
                                   style: TextStyle(
                                     fontSize: 13,
-                                    color: Colors.grey.shade600,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                                 const SizedBox(height: 12),
@@ -1327,7 +1331,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             side: BorderSide(
-                                                color: Colors.grey.shade300),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                         ),
                                         child: const Text('取消'),
@@ -1548,7 +1552,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                   '云端更新时间：${_formatDateTime(updatedAt)}',
                                   style: TextStyle(
                                     fontSize: 13,
-                                    color: Colors.grey.shade600,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                                 const SizedBox(height: 12),
@@ -1626,7 +1630,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             side: BorderSide(
-                                                color: Colors.grey.shade300),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                         ),
                                         child: const Text('取消'),
@@ -1768,7 +1772,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               '云端更新时间：${_formatDateTime(updatedAt)}',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                             const SizedBox(height: 16),
@@ -1813,7 +1817,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                     side:
-                                        BorderSide(color: Colors.grey.shade300),
+                                        BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -1878,7 +1882,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               '已选择课表：$timetableName',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey.shade700,
+                                color: AppColors.of(context).textSecondary,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -1887,7 +1891,7 @@ class _ImportScreenState extends State<ImportScreen> {
                               '云端更新时间：${_formatDateTime(updatedAt)}',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -1919,7 +1923,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                     side:
-                                        BorderSide(color: Colors.grey.shade300),
+                                        BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -1942,16 +1946,17 @@ class _ImportScreenState extends State<ImportScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
+        key: ValueKey(Theme.of(context).brightness),
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: selected
               ? selectedColor.withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.4),
+              : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? selectedColor : Colors.grey.shade300,
+            color: selected ? selectedColor : AppColors.of(context).borderWeak,
             width: selected ? 1.6 : 1.0,
           ),
         ),
@@ -1964,7 +1969,7 @@ class _ImportScreenState extends State<ImportScreen> {
                 color: selected ? selectedColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
-                  color: selected ? selectedColor : Colors.grey.shade400,
+                  color: selected ? selectedColor : AppColors.of(context).textTertiary,
                 ),
               ),
               child: selected
@@ -1981,7 +1986,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: selected ? selectedColor : Colors.black87,
+                      color: selected ? selectedColor : AppColors.of(context).textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -1989,7 +1994,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     subtitle,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ],
@@ -2025,10 +2030,11 @@ class _ImportScreenState extends State<ImportScreen> {
             filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
+                color: AppColors.of(context).glassShell
+                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.8),
+                  color: AppColors.of(context).glassBorder,
                   width: 1.5,
                 ),
                 boxShadow: [
@@ -2067,11 +2073,11 @@ class _ImportScreenState extends State<ImportScreen> {
                               width: 32,
                               height: 32,
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
+                                color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(Icons.close,
-                                  size: 18, color: Colors.grey.shade600),
+                                  size: 18, color: AppColors.of(context).textSecondary),
                             ),
                           ),
                         ],
@@ -2303,7 +2309,7 @@ class _ShiguangHelpIconState extends State<_ShiguangHelpIcon> {
       child: Icon(
         Icons.help_outline,
         size: 16,
-        color: Colors.grey.shade500,
+        color: AppColors.of(context).textTertiary,
       ),
     );
   }
@@ -2406,7 +2412,7 @@ class _ShiguangHelpTipState extends State<_ShiguangHelpTip>
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppColors.of(context).borderWeak),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.15),
@@ -2429,7 +2435,7 @@ class _ShiguangHelpTipState extends State<_ShiguangHelpTip>
                     '适配作者鸣谢：GitHub@shiguang_warehouse',
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey.shade500,
+                      color: AppColors.of(context).textTertiary,
                     ),
                   ),
                 ],

@@ -9,6 +9,7 @@ import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/blur_selection_menu.dart';
 import '../widgets/app_text_field.dart';
+import '../theme/app_theme.dart';
 
 enum CourseEditFocusSection {
   basicInfo,
@@ -114,13 +115,90 @@ class _CourseDialogState extends State<CourseDialog> {
   late int _selectedStartTime;
   late int _selectedDuration;
   late Color _selectedColor;
+
+  /// 进入对话框时的初始颜色：判断颜色是否被修改过（决定
+  /// "应用到同名课程"选项是否弹出）
+  late Color _originalColor;
+
+  /// "应用到同名课程"开关，颜色修改后弹出的选项中默认选中
+  bool _applyToSameNameCourses = true;
   late Set<int> _selectedWeeks;
   CourseEditFocusSection? _highlightedSection;
   Timer? _highlightTimer;
 
   List<Map<String, String>> _timeSlots = [];
 
-  final List<Color> _colorOptions = CourseColorPalette.primaryColors;
+  /// 课程对话框色板：去掉末位棕色（#6D4C41），该格由自定义颜色轮替代。
+  /// 完整 15 色仍保留在 CourseColorPalette 供 AI 识别导入等场景使用。
+  final List<Color> _colorOptions =
+      CourseColorPalette.primaryColors.sublist(0, CourseColorPalette.primaryColors.length - 1);
+
+  /// 自定义模式是否正在被拖动（用于滑块的按压缩放反馈）
+  bool _isDraggingBar = false;
+
+  /// 自定义模式下色条位置的缓存。色相是环形量（360°≡0°），从颜色反推
+  /// 位置时最右端会塌缩成 0 导致滑块跳到最左，因此拖动期间以该值为准；
+  /// 选预设色时置空，回落到按色相反推。
+  double? _customBarFraction;
+
+  /// 滑块当前位置：优先用拖动缓存，否则由当前颜色色相反推
+  double get _barHandleFraction =>
+      _customBarFraction ?? _colorBarFraction(_selectedColor);
+
+  /// 真彩色条的优化 HSL 色阶（色相, 饱和度, 亮度）。饱和度/亮度收敛在
+  /// 预设色板同一档（低饱和的紫/蓝略降饱和，黄/橙压亮防发白），
+  /// 任意位置取色都保持白字课表卡片的对比度与底板可视程度，
+  /// 同时也避开 CourseColorPalette.normalizeHexColor 的"过浅拒收"阈值。
+  static const List<(double, double, double)> _barHslStops = [
+    (0, 0.72, 0.52),
+    (30, 0.85, 0.50),
+    (50, 0.90, 0.47),
+    (90, 0.62, 0.42),
+    (145, 0.62, 0.42),
+    (170, 0.68, 0.42),
+    (192, 0.95, 0.38),
+    (215, 0.70, 0.58),
+    (255, 0.55, 0.55),
+    (285, 0.45, 0.53),
+    (320, 0.70, 0.50),
+    (340, 0.78, 0.50),
+    (360, 0.72, 0.52),
+  ];
+
+  /// 在优化色阶上按 0-1 位置取色（HSL 插值）
+  Color _barColorAt(double fraction) {
+    final pos = fraction.clamp(0.0, 1.0) * 360.0;
+    for (var i = 0; i < _barHslStops.length - 1; i++) {
+      final (h0, s0, l0) = _barHslStops[i];
+      final (h1, s1, l1) = _barHslStops[i + 1];
+      if (pos <= h1) {
+        final t = (pos - h0) / (h1 - h0);
+        return HSLColor.fromAHSL(
+          1.0,
+          h0 + (h1 - h0) * t,
+          s0 + (s1 - s0) * t,
+          l0 + (l1 - l0) * t,
+        ).toColor();
+      }
+    }
+    return HSLColor.fromAHSL(1.0, 0, _barHslStops.first.$2, _barHslStops.first.$3).toColor();
+  }
+
+  /// 颜色映射到色条位置（按色相 0-360 → 0-1）
+  double _colorBarFraction(Color color) => HSLColor.fromColor(color).hue / 360.0;
+
+  /// 按色条横向坐标取色并进入自定义模式
+  void _updateBarColor(double dx, double trackWidth) {
+    if (trackWidth <= 0) return;
+    final fraction = (dx / trackWidth).clamp(0.0, 1.0);
+    final next = _barColorAt(fraction);
+    if (next.toARGB32() != _selectedColor.toARGB32() || _customBarFraction != fraction) {
+      setState(() {
+        _selectedColor = next;
+        _customBarFraction = fraction;
+      });
+    }
+  }
 
   final List<String> _weekDayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
@@ -138,6 +216,7 @@ class _CourseDialogState extends State<CourseDialog> {
     _selectedColor = widget.course != null
         ? _parseColor(widget.course!.color)
         : const Color(0xFF4A90E2);
+    _originalColor = _selectedColor;
     _selectedWeeks = _parseWeeks(widget.course?.weeks ?? '');
     _removeConflictingWeeksFromSelection();
 
@@ -356,7 +435,7 @@ class _CourseDialogState extends State<CourseDialog> {
               Container(
                 decoration: BoxDecoration(
                   border: Border(
-                    top: BorderSide(color: Colors.grey.shade200),
+                    top: BorderSide(color: AppColors.of(context).borderWeak),
                   ),
                 ),
                 child: _buildBottomButtons(isSmallScreen),
@@ -500,7 +579,7 @@ class _CourseDialogState extends State<CourseDialog> {
           style: TextStyle(
             fontSize: isSmallScreen ? 13 : 15,
             fontWeight: FontWeight.w600,
-            color: Colors.grey.shade800,
+            color: AppColors.of(context).textPrimary,
           ),
         ),
       ],
@@ -579,17 +658,17 @@ class _CourseDialogState extends State<CourseDialog> {
       style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, size: isSmallScreen ? 16 : 20, color: Colors.grey.shade500),
+        prefixIcon: Icon(icon, size: isSmallScreen ? 16 : 20, color: AppColors.of(context).textTertiary),
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.4),
+        fillColor: AppColors.of(context).panel(0.4),
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
+          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
+          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -616,7 +695,7 @@ class _CourseDialogState extends State<CourseDialog> {
       decoration: BoxDecoration(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         children: [
@@ -630,16 +709,16 @@ class _CourseDialogState extends State<CourseDialog> {
                       '星期',
                       style: TextStyle(
                         fontSize: isSmallScreen ? 12 : 13,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                     SizedBox(height: isSmallScreen ? 6 : 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.4),
+                        color: AppColors.of(context).panel(0.4),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey.shade300),
+                        border: Border.all(color: AppColors.of(context).borderWeak),
                       ),
                       child: BlurredDropdown<int>(
                         value: _selectedDay,
@@ -680,16 +759,16 @@ class _CourseDialogState extends State<CourseDialog> {
                       '开始节次',
                       style: TextStyle(
                         fontSize: isSmallScreen ? 12 : 13,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                     SizedBox(height: isSmallScreen ? 6 : 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.4),
+                        color: AppColors.of(context).panel(0.4),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey.shade300),
+                        border: Border.all(color: AppColors.of(context).borderWeak),
                       ),
                       child: BlurredDropdown<int>(
                         value: _selectedStartTime,
@@ -732,16 +811,16 @@ class _CourseDialogState extends State<CourseDialog> {
                       '课程时长',
                       style: TextStyle(
                         fontSize: isSmallScreen ? 12 : 13,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                     SizedBox(height: isSmallScreen ? 6 : 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.4),
+                        color: AppColors.of(context).panel(0.4),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey.shade300),
+                        border: Border.all(color: AppColors.of(context).borderWeak),
                       ),
                       child: BlurredDropdown<int>(
                         value: _selectedDuration,
@@ -815,7 +894,7 @@ class _CourseDialogState extends State<CourseDialog> {
       decoration: BoxDecoration(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -870,13 +949,13 @@ class _CourseDialogState extends State<CourseDialog> {
                   height: isSmallScreen ? 32 : 36,
                   decoration: BoxDecoration(
                     color: isDisabled
-                        ? Colors.white.withValues(alpha: 0.4)
-                        : (isSelected ? _selectedColor : Colors.white.withValues(alpha: 0.4)),
+                        ? AppColors.of(context).panel(0.4)
+                        : (isSelected ? _selectedColor : AppColors.of(context).panel(0.4)),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
                       color: isDisabled
-                          ? Colors.grey.shade300
-                          : (isSelected ? _selectedColor : Colors.grey.shade300),
+                          ? AppColors.of(context).borderWeak
+                          : (isSelected ? _selectedColor : AppColors.of(context).borderWeak),
                       width: isSelected ? 2 : 1,
                     ),
                     boxShadow: isDisabled
@@ -898,8 +977,8 @@ class _CourseDialogState extends State<CourseDialog> {
                         fontSize: isSmallScreen ? 11 : 13,
                         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                         color: isDisabled
-                            ? Colors.grey.shade400
-                            : (isSelected ? Colors.white : Colors.grey.shade700),
+                            ? AppColors.of(context).textTertiary
+                            : (isSelected ? Colors.white : AppColors.of(context).textSecondary),
                       ),
                     ),
                   ),
@@ -913,20 +992,20 @@ class _CourseDialogState extends State<CourseDialog> {
               margin: EdgeInsets.only(bottom: isSmallScreen ? 8 : 10),
               padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.4),
+                color: AppColors.of(context).panel(0.4),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppColors.of(context).borderWeak),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.block, size: isSmallScreen ? 14 : 16, color: Colors.grey.shade600),
+                  Icon(Icons.block, size: isSmallScreen ? 14 : 16, color: AppColors.of(context).textSecondary),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       '以下周次该时段已有课程，已禁选：${occupiedWeeks.toList()..sort()}',
                       style: TextStyle(
                         fontSize: isSmallScreen ? 11 : 12,
-                        color: Colors.grey.shade700,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                   ),
@@ -936,9 +1015,9 @@ class _CourseDialogState extends State<CourseDialog> {
           Container(
             padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.4),
+              color: AppColors.of(context).panel(0.4),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: AppColors.of(context).borderWeak),
             ),
             child: Row(
               children: [
@@ -949,7 +1028,7 @@ class _CourseDialogState extends State<CourseDialog> {
                     '已选: ${_selectedWeeks.isEmpty ? "未选择" : _weeksToString()} 周',
                     style: TextStyle(
                       fontSize: isSmallScreen ? 11 : 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ),
@@ -993,7 +1072,7 @@ class _CourseDialogState extends State<CourseDialog> {
       decoration: BoxDecoration(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         children: [
@@ -1003,12 +1082,15 @@ class _CourseDialogState extends State<CourseDialog> {
               final spacing = isSmallScreen ? 8.0 : 10.0;
               final itemExtent = ((constraints.maxWidth - spacing * (crossAxisCount - 1)) / crossAxisCount)
                   .clamp(isSmallScreen ? 32.0 : 36.0, isSmallScreen ? 40.0 : 44.0);
+              // 选中色不在预设里 → 自定义模式，颜色轮呈选中态
+              final isCustomActive =
+                  !_colorOptions.any((c) => c.toARGB32() == _selectedColor.toARGB32());
 
               return GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 padding: EdgeInsets.zero,
-                itemCount: _colorOptions.length,
+                itemCount: _colorOptions.length + 1,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: crossAxisCount,
                   crossAxisSpacing: spacing,
@@ -1016,10 +1098,17 @@ class _CourseDialogState extends State<CourseDialog> {
                   mainAxisExtent: itemExtent,
                 ),
                 itemBuilder: (context, index) {
+                  // 末格：自定义颜色轮（原末位棕色位置）
+                  if (index == _colorOptions.length) {
+                    return _buildCustomColorWheel(isSmallScreen, itemExtent, isCustomActive);
+                  }
                   final color = _colorOptions[index];
                   final isSelected = _selectedColor.toARGB32() == color.toARGB32();
                   return GestureDetector(
-                    onTap: () => setState(() => _selectedColor = color),
+                    onTap: () => setState(() {
+                      _selectedColor = color;
+                      _customBarFraction = null;
+                    }),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       width: itemExtent,
@@ -1027,9 +1116,11 @@ class _CourseDialogState extends State<CourseDialog> {
                       decoration: BoxDecoration(
                         color: color,
                         shape: BoxShape.circle,
+                        // 未选中也有细白描边，选中态通过 AnimatedContainer
+                        // 连贯过渡到粗白环（宽度与透明度同步渐变）
                         border: Border.all(
-                          color: isSelected ? Colors.white : Colors.transparent,
-                          width: isSelected ? 3 : 0,
+                          color: Colors.white.withValues(alpha: isSelected ? 1.0 : 0.4),
+                          width: isSelected ? 3 : 1.5,
                         ),
                         boxShadow: isSelected
                             ? [
@@ -1057,36 +1148,216 @@ class _CourseDialogState extends State<CourseDialog> {
             },
           ),
           SizedBox(height: isSmallScreen ? 10 : 12),
-          Container(
-            padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-            decoration: BoxDecoration(
-              color: _selectedColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: isSmallScreen ? 16 : 20,
-                  height: isSmallScreen ? 16 : 20,
-                  decoration: BoxDecoration(
-                    color: _selectedColor,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  '当前颜色: #${_selectedColor.toARGB32().toRadixString(16).substring(2).toUpperCase()}',
+          _buildTrueColorBar(isSmallScreen),
+          // 颜色被修改过才弹出：应用到同名课程（出现动画参考
+          // 课表选择对话框的新增课表动画）
+          _AppearSection(
+            visible: _selectedColor.toARGB32() != _originalColor.toARGB32(),
+            child: _buildApplySameNameOption(isSmallScreen),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "应用到同名课程"选项：左侧文案，右侧小号圆形复选框
+  /// （选中时填充当前目标颜色、白色对勾，无边框），整行可点按切换
+  Widget _buildApplySameNameOption(bool isSmallScreen) {
+    return Padding(
+      padding: EdgeInsets.only(top: isSmallScreen ? 8 : 10),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () =>
+            setState(() => _applyToSameNameCourses = !_applyToSameNameCourses),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: isSmallScreen ? 10 : 12,
+            vertical: isSmallScreen ? 6 : 7,
+          ),
+          decoration: BoxDecoration(
+            color: _selectedColor.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '应用到同名课程',
                   style: TextStyle(
                     fontSize: isSmallScreen ? 11 : 12,
-                    color: _selectedColor.withValues(alpha: 0.9),
+                    color: AppColors.of(context).textSecondary,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              AnimatedContainer(
+                key: ValueKey(Theme.of(context).brightness),
+                duration: const Duration(milliseconds: 160),
+                width: isSmallScreen ? 15 : 17,
+                height: isSmallScreen ? 15 : 17,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  // 无边框：选中填充目标颜色，未选中为浅色底
+                  color: _applyToSameNameCourses
+                      ? _selectedColor
+                      : AppColors.of(context).chipIdle,
+                ),
+                child: _applyToSameNameCourses
+                    ? Icon(Icons.check,
+                        size: isSmallScreen ? 10 : 12, color: Colors.white)
+                    : null,
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+
+  /// 自定义颜色轮：真彩圆盘（每个半径扇区一个色相），中心留白色圆心。
+  /// 选中时圆心放大为白色圆并显示对勾，外圈白环 + 当前颜色光晕。
+  Widget _buildCustomColorWheel(bool isSmallScreen, double size, bool isSelected) {
+    final wheelColors = List.generate(
+      12,
+      (i) => HSLColor.fromAHSL(1.0, i * 30.0, 0.72, 0.50).toColor(),
+    );
+    return GestureDetector(
+      onTap: () {
+        if (isSelected) return;
+        setState(() {
+          // 以当前颜色的色相落入优化色条，脱离预设进入自定义模式
+          _selectedColor = _barColorAt(_colorBarFraction(_selectedColor));
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: SweepGradient(colors: [...wheelColors, wheelColors.first]),
+          // 与预设色块一致：未选中细白描边，选中连贯过渡到粗白环
+          border: Border.all(
+            color: Colors.white.withValues(alpha: isSelected ? 1.0 : 0.4),
+            width: isSelected ? 3 : 1.5,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: _selectedColor.withValues(alpha: 0.5),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+        ),
+        child: isSelected
+            ? Center(
+                child: Container(
+                  width: size * 0.44,
+                  height: size * 0.44,
+                  decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white),
+                  child: Icon(Icons.check, size: size * 0.28, color: _selectedColor),
+                ),
+              )
+            : null,
+      ),
+    );
+  }
+
+  /// 长条形真彩颜色选择器：优化色谱 + 白色半透明镂空壳滑块。
+  /// 整条区域可点按跳转/拖动，拖动时滑块轻微放大、跟手无吸附。
+  Widget _buildTrueColorBar(bool isSmallScreen) {
+    const gradientSamples = 25;
+    final handleWidth = isSmallScreen ? 22.0 : 26.0;
+    final handleHeight = isSmallScreen ? 30.0 : 34.0;
+    return Padding(
+      // 让滑块在最左/最右时仍不越过色条容器
+      padding: EdgeInsets.symmetric(horizontal: handleWidth / 2 + 2),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final trackWidth = constraints.maxWidth;
+          final fraction = _barHandleFraction;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (d) {
+              setState(() => _isDraggingBar = true);
+              _updateBarColor(d.localPosition.dx, trackWidth);
+            },
+            onTapUp: (_) => setState(() => _isDraggingBar = false),
+            onTapCancel: () => setState(() => _isDraggingBar = false),
+            onHorizontalDragStart: (d) {
+              setState(() => _isDraggingBar = true);
+              _updateBarColor(d.localPosition.dx, trackWidth);
+            },
+            onHorizontalDragUpdate: (d) =>
+                _updateBarColor(d.localPosition.dx, trackWidth),
+            onHorizontalDragEnd: (_) => setState(() => _isDraggingBar = false),
+            onHorizontalDragCancel: () => setState(() => _isDraggingBar = false),
+            child: SizedBox(
+              height: isSmallScreen ? 36 : 40,
+              width: double.infinity,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    height: isSmallScreen ? 20 : 22,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      gradient: LinearGradient(
+                        colors: List.generate(
+                          gradientSamples,
+                          (i) => _barColorAt(i / (gradientSamples - 1)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  AnimatedAlign(
+                    // 拖动时零时长贴手；点选预设色/色轮时平滑滑向新位置
+                    duration: _isDraggingBar
+                        ? Duration.zero
+                        : const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment(fraction * 2 - 1, 0),
+                    child: AnimatedScale(
+                      scale: _isDraggingBar ? 1.12 : 1.0,
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeOut,
+                      child: Container(
+                        width: handleWidth,
+                        height: handleHeight,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(handleWidth * 0.38),
+                          // 半透明白壳：仅淡淡一层白雾，中心镂空透出色条当前颜色
+                          color: Colors.white.withValues(alpha: 0.16),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            width: 3.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.18),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1104,11 +1375,11 @@ class _CourseDialogState extends State<CourseDialog> {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                side: BorderSide(color: Colors.grey.shade300),
+                side: BorderSide(color: AppColors.of(context).borderWeak),
               ),
               child: Text(
                 '取消',
-                style: TextStyle(color: Colors.grey.shade700, fontSize: isSmallScreen ? 13 : 14),
+                style: TextStyle(color: AppColors.of(context).textSecondary, fontSize: isSmallScreen ? 13 : 14),
               ),
             ),
           ),
@@ -1186,6 +1457,26 @@ class _CourseDialogState extends State<CourseDialog> {
         } else {
           StorageService.updateCourse(course);
         }
+        // 颜色被修改且勾选"应用到同名课程"：把新颜色同步到当前
+        // 课表中所有同名课程（排除正在保存的这条）
+        if (_applyToSameNameCourses &&
+            _selectedColor.toARGB32() != _originalColor.toARGB32()) {
+          for (final other in StorageService.getCourses()) {
+            if (other.name == course.name && other.id != course.id) {
+              StorageService.updateCourse(Course(
+                id: other.id,
+                name: other.name,
+                teacher: other.teacher,
+                location: other.location,
+                day: other.day,
+                time: other.time,
+                duration: other.duration,
+                weeks: other.weeks,
+                color: course.color,
+              ));
+            }
+          }
+        }
       }
 
       Navigator.pop(context, course);
@@ -1200,5 +1491,80 @@ class _CourseDialogState extends State<CourseDialog> {
         });
       }
     }
+  }
+}
+
+/// 参考课表选择对话框"新增课表"的出现动画（220ms easeOutCubic：
+/// 模糊 14→0 + 缩放 0.55→1 + 淡入），叠加 SizeTransition 高度展开；
+/// visible 切换时正向/反向播放，隐藏时不占高度也不接收点击
+class _AppearSection extends StatefulWidget {
+  final bool visible;
+  final Widget child;
+
+  const _AppearSection({required this.visible, required this.child});
+
+  @override
+  State<_AppearSection> createState() => _AppearSectionState();
+}
+
+class _AppearSectionState extends State<_AppearSection>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.visible) _controller.value = 1.0;
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppearSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible != oldWidget.visible) {
+      if (widget.visible) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        return ClipRect(
+          child: SizeTransition(
+            sizeFactor: AlwaysStoppedAnimation(t),
+            axisAlignment: -1.0,
+            child: Opacity(
+              opacity: t,
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(
+                  sigmaX: 14 * (1.0 - t),
+                  sigmaY: 14 * (1.0 - t),
+                ),
+                child: Transform.scale(
+                  scale: 0.55 + 0.45 * t,
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      child: widget.child,
+    );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'glass_dialog.dart';
+import '../theme/app_theme.dart';
 
 class TimePickerResult {
   final int hour;
@@ -55,10 +56,10 @@ Future<TimePickerResult?> show3DTimePicker({
                         children: [
                           Text(
                             title,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF1A1A2E),
+                              color: AppColors.of(context).textPrimary,
                             ),
                           ),
                           const SizedBox(height: 20),
@@ -92,7 +93,7 @@ Future<TimePickerResult?> show3DTimePicker({
                                           style: TextStyle(
                                             fontSize: isSelected ? 24 : 18,
                                             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                            color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                            color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                           ),
                                         ),
                                       );
@@ -108,7 +109,7 @@ Future<TimePickerResult?> show3DTimePicker({
                                   style: TextStyle(
                                     fontSize: 24,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.grey.shade700,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ),
@@ -139,7 +140,7 @@ Future<TimePickerResult?> show3DTimePicker({
                                           style: TextStyle(
                                             fontSize: isSelected ? 24 : 18,
                                             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                            color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                            color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                           ),
                                         ),
                                       );
@@ -156,12 +157,12 @@ Future<TimePickerResult?> show3DTimePicker({
                                 child: OutlinedButton(
                                   onPressed: () => Navigator.pop(context),
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.grey.shade600,
+                                    foregroundColor: AppColors.of(context).textSecondary,
                                     padding: const EdgeInsets.symmetric(vertical: 12),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(10),
                                     ),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                   child: const Text('取消'),
                                 ),
@@ -261,7 +262,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                                   style: TextStyle(
                                     fontSize: isSelected ? 24 : 18,
                                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                    color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                    color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               );
@@ -277,10 +278,10 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                         children: [
                           Text(
                             title,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF1A1A2E),
+                              color: AppColors.of(context).textPrimary,
                             ),
                           ),
                           const SizedBox(height: 20),
@@ -305,7 +306,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.grey.shade700,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ),
@@ -327,7 +328,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.grey.shade700,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ),
@@ -349,7 +350,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.grey.shade700,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ),
@@ -360,7 +361,7 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                             '已选：$selectedDays天$selectedHours小时$selectedMinutes分钟',
                             style: TextStyle(
                               fontSize: 13,
-                              color: Colors.grey.shade600,
+                              color: AppColors.of(context).textSecondary,
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -370,12 +371,12 @@ Future<LeadTimePickerResult?> show3DLeadTimePicker({
                                 child: OutlinedButton(
                                   onPressed: () => Navigator.pop(context),
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.grey.shade600,
+                                    foregroundColor: AppColors.of(context).textSecondary,
                                     padding: const EdgeInsets.symmetric(vertical: 12),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(10),
                                     ),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                   child: const Text('取消'),
                                 ),

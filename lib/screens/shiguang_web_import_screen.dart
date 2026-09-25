@@ -6,6 +6,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/services.dart'
     show HapticFeedback, SystemChannels, rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -360,15 +361,15 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               const SizedBox(height: 16),
               Text(
                 'Chromium 内核版本：${chromeVersion ?? '未知'}',
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1A1A2E)),
+                    color: AppColors.of(context).textPrimary),
               ),
               const SizedBox(height: 6),
               Text('评估：$assessment',
                   style: TextStyle(
-                      fontSize: 13, color: Colors.grey.shade700)),
+                      fontSize: 13, color: AppColors.of(context).textSecondary)),
               const SizedBox(height: 12),
               // 清除 WebView 缓存 + Cookie 并刷新：瑞数把环境判定编码在
               // 客户端生成的 T cookie 里（Bk8UVSeWhgi3T 等 13 位随机名），
@@ -407,21 +408,21 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                 const SizedBox(height: 12),
                 Text('User-Agent：',
                     style: TextStyle(
-                        fontSize: 11, color: Colors.grey.shade500)),
+                        fontSize: 11, color: AppColors.of(context).textTertiary)),
                 const SizedBox(height: 4),
                 Container(
                   width: double.infinity,
                   constraints: const BoxConstraints(maxHeight: 90),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
+                    color: AppColors.of(context).surfaceAlt,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: SingleChildScrollView(
                     child: Text(
                       ua,
                       style: TextStyle(
-                          fontSize: 10, color: Colors.grey.shade600),
+                          fontSize: 10, color: AppColors.of(context).textSecondary),
                     ),
                   ),
                 ),
@@ -621,7 +622,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                 const SizedBox(height: 14),
                 Text(
                   title.isEmpty ? '提示' : title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 17, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
@@ -632,7 +633,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                       style: TextStyle(
                           fontSize: 13,
                           height: 1.5,
-                          color: Colors.grey.shade700),
+                          color: AppColors.of(context).textSecondary),
                     ),
                   ),
                 ),
@@ -905,7 +906,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             const SizedBox(height: 14),
             Text(
               title.isEmpty ? '请选择' : title,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Flexible(
@@ -919,7 +920,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     child: Material(
                       color: selected
                           ? const Color(0xFF9B59B6).withValues(alpha: 0.12)
-                          : Colors.grey.shade100,
+                          : AppColors.of(context).surfaceAlt,
                       borderRadius: BorderRadius.circular(12),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
@@ -936,7 +937,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                                     fontSize: 14,
                                     color: selected
                                         ? const Color(0xFF9B59B6)
-                                        : Colors.grey.shade800,
+                                        : AppColors.of(context).textPrimary,
                                     fontWeight: selected
                                         ? FontWeight.w600
                                         : FontWeight.normal,
@@ -961,7 +962,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               child: TextButton(
                 onPressed: () => Navigator.pop(context),
                 style: TextButton.styleFrom(
-                  foregroundColor: Colors.grey.shade600,
+                  foregroundColor: AppColors.of(context).textSecondary,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
@@ -1007,7 +1008,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             const SizedBox(height: 14),
             Text(
               title.isEmpty ? '请输入' : title,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             if (message.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -1018,7 +1019,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     style: TextStyle(
                         fontSize: 13,
                         height: 1.5,
-                        color: Colors.grey.shade700),
+                        color: AppColors.of(context).textSecondary),
                   ),
                 ),
               ),
@@ -1029,7 +1030,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               autofocus: true,
               decoration: InputDecoration(
                 filled: true,
-                fillColor: Colors.grey.shade100,
+                fillColor: AppColors.of(context).surfaceAlt,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
@@ -1045,7 +1046,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   child: TextButton(
                     onPressed: () => Navigator.pop(context),
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey.shade600,
+                      foregroundColor: AppColors.of(context).textSecondary,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
@@ -1137,7 +1138,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   style: TextStyle(
                       fontSize: 13,
                       height: 1.5,
-                      color: Colors.grey.shade700),
+                      color: AppColors.of(context).textSecondary),
                 ),
               ),
             ),
@@ -1153,7 +1154,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                             const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: Colors.grey.shade300),
+                          side: BorderSide(color: AppColors.of(context).borderWeak),
                         ),
                       ),
                       child: const Text('取消'),
@@ -1301,7 +1302,9 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       child: Scaffold(
         // 键盘弹出时不压缩 WebView；底部导航条自行随 viewInsets 上移。
         resizeToAvoidBottomInset: false,
-        backgroundColor: const Color(0xFFF8F9FC),
+        backgroundColor: Theme.of(context).brightness == Brightness.dark
+            ? AppPalette.dark.scaffold
+            : const Color(0xFFF8F9FC),
         body: Column(
           children: [
             _buildPinnedHeader(topPadding),
@@ -1315,9 +1318,9 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   Widget _buildPinnedHeader(double topPadding) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FC).withValues(alpha: 0.95),
+        color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.9 : 0.95),
         border: Border(
-          bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+          bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
         ),
       ),
       child: Column(
@@ -1334,10 +1337,10 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     width: 48,
                     height: 52,
                     margin: const EdgeInsets.only(left: 4),
-                    child: const Icon(
+                    child: Icon(
                       Icons.arrow_back_ios_new,
                       size: 18,
-                      color: Color(0xFF1A1A2E),
+                      color: AppColors.of(context).textPrimary,
                     ),
                   ),
                 ),
@@ -1350,10 +1353,10 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                         widget.school.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF1A1A2E),
+                          color: AppColors.of(context).textPrimary,
                         ),
                       ),
                       Text(
@@ -1362,7 +1365,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 11,
-                          color: Colors.grey.shade600,
+                          color: AppColors.of(context).textSecondary,
                         ),
                       ),
                     ],
@@ -1417,7 +1420,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   Widget _buildUaComboIcon() {
     final color = _useDesktopUa
         ? const Color(0xFF9B59B6)
-        : Colors.grey.shade500;
+        : AppColors.of(context).textTertiary;
     return Icon(Icons.desktop_windows, size: 24, color: color);
   }
 
@@ -1443,7 +1446,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         text: _currentDomain(),
         style: TextStyle(
           fontSize: 11,
-          color: const Color(0xFF1A1A2E),
+          color: AppColors.of(context).textPrimary,
           fontWeight: FontWeight.w500,
           // 与实际 Text 完全同字体：全局主题 Microsoft YaHei 会被实际
           // 渲染继承，测量若按默认字体则偏窄 → 域名尾部被截断（.cn 变 …）。
@@ -1527,11 +1530,12 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   child: Container(
                     decoration: BoxDecoration(
                       color: _reduceMotion
-                          ? Colors.white.withValues(alpha: 0.94)
-                          : Colors.white.withValues(alpha: 0.55),
+                          ? AppColors.of(context).glassShell
+                                .withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.94)
+                              : AppColors.of(context).glassShell.withValues(alpha: 0.55),
                       borderRadius: BorderRadius.circular(expanded ? 25 : 19),
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.6),
+                        color: AppColors.of(context).glassBorder,
                         width: 1.5,
                       ),
                     ),
@@ -1566,7 +1570,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
 
   /// 完全形态内容：后退/前进 + 无边框网址输入（左实心锁，右 → 前往）。
   Widget _buildFullBarContent() {
-    const black = Color(0xFF1A1A2E);
+    final black = AppColors.of(context).textPrimary;
     final focused = _urlFocus.hasFocus;
     return Row(
       children: [
@@ -1602,7 +1606,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                           child: Icon(
                             Icons.chevron_left,
                             size: 26,
-                            color: _canGoBack ? black : Colors.grey.shade300,
+                            color: _canGoBack ? black : AppColors.of(context).borderWeak,
                           ),
                         ),
                       ),
@@ -1619,7 +1623,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                             Icons.chevron_right,
                             size: 26,
                             color:
-                                _canGoForward ? black : Colors.grey.shade300,
+                                _canGoForward ? black : AppColors.of(context).borderWeak,
                           ),
                         ),
                       ),
@@ -1647,7 +1651,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               child: _LockAppear(
                 animation: _lockCurved,
                 reduceMotion: _reduceMotion,
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.only(left: 2, right: 2),
                   child: Icon(Icons.lock, size: 13, color: black),
                 ),
@@ -1671,14 +1675,14 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             keyboardType: TextInputType.url,
             textInputAction: TextInputAction.go,
             textAlignVertical: TextAlignVertical.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               color: black,
             ),
             decoration: InputDecoration(
               hintText: '输入教务系统网址',
               hintStyle: TextStyle(
-                color: Colors.grey.shade400,
+                color: AppColors.of(context).textTertiary,
                 fontSize: 12.5,
               ),
               isDense: true,
@@ -1700,7 +1704,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                       padding: const EdgeInsets.only(right: 14),
                       child: RotationTransition(
                         turns: _spinController,
-                        child: const Icon(
+                        child: Icon(
                           Icons.sync,
                           size: 17,
                           color: black,
@@ -1713,7 +1717,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                       ? GestureDetector(
                           onTap: _goToUrl,
                           behavior: HitTestBehavior.opaque,
-                          child: const Padding(
+                          child: Padding(
                             padding: EdgeInsets.only(right: 14),
                             child: Icon(
                               Icons.arrow_forward,
@@ -1725,7 +1729,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                       : GestureDetector(
                           onTap: _onRefreshPressed,
                           behavior: HitTestBehavior.opaque,
-                          child: const Padding(
+                          child: Padding(
                             padding: EdgeInsets.only(right: 14),
                             child: Icon(
                               Icons.sync,
@@ -1769,7 +1773,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 精简形态内容：实心锁 + 完整域名（点击恢复完全形态并聚焦输入）。
   /// 更小字号/图标/内边距，宽度按域名实际长度伸展（超屏才省略）。
   Widget _buildCompactBarContent() {
-    const black = Color(0xFF1A1A2E);
+    final black = AppColors.of(context).textPrimary;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -1797,7 +1801,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   child: _LockAppear(
                     animation: _lockCurved,
                     reduceMotion: _reduceMotion,
-                    child: const Padding(
+                    child: Padding(
                       padding: EdgeInsets.only(right: 5),
                       child: Icon(Icons.lock, size: 10.5, color: black),
                     ),
@@ -1815,7 +1819,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                 _currentDomain(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w500,
                   color: black,
@@ -2107,11 +2111,11 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.travel_explore,
-              size: 48, color: Colors.grey.shade300),
+              size: 48, color: AppColors.of(context).borderWeak),
           const SizedBox(height: 12),
           Text(
             '在下方输入你的教务系统网址并前往',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+            style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
           ),
         ],
       ),
@@ -2126,8 +2130,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
         decoration: BoxDecoration(
           gradient: LinearGradient(colors: [
-            enabled ? const Color(0xFF9B59B6) : Colors.grey.shade400,
-            enabled ? const Color(0xFFAF7AC5) : Colors.grey.shade300,
+            enabled ? const Color(0xFF9B59B6) : AppColors.of(context).textTertiary,
+            enabled ? const Color(0xFFAF7AC5) : AppColors.of(context).borderWeak,
           ]),
           borderRadius: BorderRadius.circular(28),
           boxShadow: [
@@ -2268,7 +2272,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppColors.of(context).borderWeak),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.15),
@@ -2291,7 +2295,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
-                          color: Colors.grey.shade700,
+                          color: AppColors.of(context).textSecondary,
                         ),
                       ),
                     ],
@@ -2301,7 +2305,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
                     widget.text,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                       height: 1.6,
                     ),
                   ),

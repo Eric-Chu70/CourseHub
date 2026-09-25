@@ -10,6 +10,7 @@ import '../models/course.dart';
 import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
 import 'glass_dialog.dart';
+import '../theme/app_theme.dart';
 import 'blur_selection_menu.dart';
 import 'app_text_field.dart';
 
@@ -1047,7 +1048,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               valueColor: const AlwaysStoppedAnimation(
                 Color(0xFF9C27B0),
               ),
-              backgroundColor: Colors.white.withValues(alpha: 0.4),
+              backgroundColor: AppColors.of(context).panel(0.4),
             ),
           ),
           const SizedBox(height: 24),
@@ -1085,7 +1086,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w500,
-          color: isActive ? Colors.white : Colors.grey.shade600,
+          color: isActive ? Colors.white : AppColors.of(context).textSecondary,
         ),
       ),
     );
@@ -1095,7 +1096,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Container(
       width: 20,
       height: 2,
-      color: Colors.white.withValues(alpha: 0.4),
+      color: AppColors.of(context).panel(0.4),
     );
   }
 
@@ -1109,13 +1110,13 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
             width: 80,
             height: 80,
             decoration: BoxDecoration(
-              color: Colors.orange.shade50.withValues(alpha: 0.5),
+              color: AppColors.isDark(context) ? Colors.orange.withValues(alpha: 0.10) : Colors.orange.shade50.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Icon(
               Icons.warning_amber_rounded,
               size: 40,
-              color: Colors.orange.shade400,
+              color: AppColors.bannerText(context, Colors.orange),
             ),
           ),
           const SizedBox(height: 24),
@@ -1134,8 +1135,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white.withValues(alpha: 0.4),
-                  foregroundColor: Colors.grey.shade700,
+                  backgroundColor: AppColors.of(context).panel(0.4),
+                  foregroundColor: AppColors.of(context).textSecondary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -1165,9 +1166,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.4),
+                  color: AppColors.of(context).panel(0.4),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: AppColors.of(context).borderWeak),
                 ),
                 child: Row(
                   children: [
@@ -1198,7 +1199,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                             '${course.teacher != null ? ' · ${course.teacher}' : ''}',
                             style: TextStyle(
                               fontSize: 12,
-                              color: Colors.grey.shade600,
+                              color: AppColors.of(context).textSecondary,
                             ),
                           ),
                         ],
@@ -1224,7 +1225,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
           color: Colors.transparent,
           child: Row(
             children: [
-              Icon(Icons.edit_note, color: Colors.grey.shade700, size: 20),
+              Icon(Icons.edit_note, color: AppColors.of(context).textSecondary, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1232,7 +1233,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
-                    color: Colors.grey.shade700,
+                    color: AppColors.of(context).textSecondary,
                   ),
                 ),
               ),
@@ -1258,9 +1259,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
               return Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.4),
+                  color: AppColors.of(context).panel(0.4),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: AppColors.of(context).borderWeak),
                 ),
                 child: Row(
                   children: [
@@ -1290,14 +1291,14 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                               '${dayNames[course.dayOfWeek]} ${course.period != null ? "第${course.period}节" : ""}'
                               '${course.location != null ? ' · ${course.location}' : ''}'
                               '${course.teacher != null ? ' · ${course.teacher}' : ''}',
-                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                              style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary),
                             ),
                           ],
                         ),
                       ),
                     ),
                     BlurredPopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
+                      icon: Icon(Icons.more_vert, color: AppColors.of(context).textTertiary, size: 20),
                       items: const [
                         BlurredPopupMenuItem(value: 'edit', icon: Icons.edit_outlined, label: '编辑', iconColor: Color(0xFF4A90E2)),
                         BlurredPopupMenuItem(value: 'delete', icon: Icons.delete_outline, label: '删除', iconColor: Colors.red, textColor: Colors.red),
@@ -1343,14 +1344,14 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                   decoration: InputDecoration(
                     hintText: '问我任何关于课程表的问题...',
                     filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.4),
+                    fillColor: AppColors.of(context).panel(0.4),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
+                      borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
+                      borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
@@ -1398,7 +1399,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         decoration: BoxDecoration(
           color: message.isUser
               ? const Color(0xFF9C27B0)
-              : Colors.white.withValues(alpha: 0.4),
+              : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(16),
         ),
         child: message.isUser
@@ -1422,10 +1423,10 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                         p: const TextStyle(fontSize: 14),
                         code: TextStyle(
                           fontSize: 12,
-                          backgroundColor: Colors.white.withValues(alpha: 0.4),
+                          backgroundColor: AppColors.of(context).panel(0.4),
                         ),
                         codeblockDecoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.4),
+                          color: AppColors.of(context).panel(0.4),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
@@ -1445,13 +1446,13 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                               width: 28,
                               height: 28,
                               decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.05),
+                                color: AppColors.of(context).overlaySoft,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(
                                 Icons.loop,
                                 size: 17,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                           ),
@@ -1475,9 +1476,9 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.4),
+        color: AppColors.of(context).panel(0.4),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1494,20 +1495,20 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                     height: 12,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.grey.shade500,
+                      color: AppColors.of(context).textTertiary,
                     ),
                   )
                 else
                   Icon(
                     isExpanded ? Icons.expand_less : Icons.expand_more,
                     size: 16,
-                    color: Colors.grey.shade500,
+                    color: AppColors.of(context).textTertiary,
                   ),
                 const SizedBox(width: 6),
                 Text(
                   isThinkingLive ? '思考中...' : '思考过程',
                   style: TextStyle(
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
@@ -1527,7 +1528,7 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
                     p: const TextStyle(fontSize: 12, height: 1.5),
                     code: TextStyle(
                       fontSize: 11,
-                      backgroundColor: Colors.white.withValues(alpha: 0.4),
+                      backgroundColor: AppColors.of(context).panel(0.4),
                     ),
                   ),
                   extensionSet: md.ExtensionSet.gitHubWeb,
@@ -1633,7 +1634,7 @@ class _StreamingDotsTextState extends State<_StreamingDotsText> {
   Widget build(BuildContext context) {
     return Text(
       '${widget.text}${'.' * _dotCount}',
-      style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+      style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
     );
   }
 }
@@ -1698,7 +1699,7 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
       width: 400,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.of(context).surface,
         borderRadius: BorderRadius.circular(24),
       ),
       child: Column(
@@ -1716,13 +1717,13 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             decoration: InputDecoration(
               labelText: '课程名称',
               filled: true,
-              fillColor: Colors.grey.shade50,
+              fillColor: AppColors.of(context).surfaceAlt,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey.shade300),
+                borderSide: BorderSide(color: AppColors.of(context).borderWeak),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1737,13 +1738,13 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             decoration: InputDecoration(
               labelText: '教师',
               filled: true,
-              fillColor: Colors.grey.shade50,
+              fillColor: AppColors.of(context).surfaceAlt,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey.shade300),
+                borderSide: BorderSide(color: AppColors.of(context).borderWeak),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1758,13 +1759,13 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
             decoration: InputDecoration(
               labelText: '地点',
               filled: true,
-              fillColor: Colors.grey.shade50,
+              fillColor: AppColors.of(context).surfaceAlt,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey.shade300),
+                borderSide: BorderSide(color: AppColors.of(context).borderWeak),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1779,9 +1780,9 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.4),
+                    color: AppColors.of(context).panel(0.4),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
+                    border: Border.all(color: AppColors.of(context).borderWeak),
                   ),
                   child: BlurredDropdown<int>(
                     value: _selectedDay,
@@ -1803,9 +1804,9 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.4),
+                    color: AppColors.of(context).panel(0.4),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
+                    border: Border.all(color: AppColors.of(context).borderWeak),
                   ),
                   child: BlurredDropdown<int>(
                     value: _selectedPeriod,
@@ -1831,9 +1832,9 @@ class _CourseEditDialogState extends State<_CourseEditDialog> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.4),
+              color: AppColors.of(context).panel(0.4),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: AppColors.of(context).borderWeak),
             ),
             child: BlurredDropdown<int>(
               value: _selectedDuration,

@@ -122,3 +122,8 @@ app.*.map.json
 !**/ios/**/Flutter/Debug.xcconfig
 !**/ios/**/Flutter/Release.xcconfig
 !**/ios/**/Flutter/Flutter.podspec
+
+# 事故恢复临时件
+lib_backup_recovery_*/
+*.damaged.bak
+_span_extracted.dart

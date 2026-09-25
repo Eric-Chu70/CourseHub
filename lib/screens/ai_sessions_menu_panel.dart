@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'dart:ui';
 import 'package:intl/intl.dart';
 import '../utils/storage.dart';
@@ -447,7 +448,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                   Text(
                     '确定要删除"${_deleteTitle}"吗？\n删除后无法恢复。',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                    style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
                   ),
                   const SizedBox(height: 24),
                   Row(
@@ -459,7 +460,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.grey.shade300),
+                              side: BorderSide(color: AppColors.of(context).borderWeak),
                             ),
                           ),
                           child: const Text('取消'),
@@ -628,13 +629,13 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.white.withValues(alpha: 0.42 * settle),
-                      Colors.white.withValues(alpha: 0.26 * settle),
+                      AppColors.of(context).glassShell.withValues(alpha: 0.42 * settle),
+                      AppColors.of(context).glassShell.withValues(alpha: 0.26 * settle),
                     ],
                   ),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.7 * settle),
+                    color: AppColors.of(context).glassBorder.withValues(alpha: 0.7 * settle),
                     width: 1.2,
                   ),
                 ),
@@ -658,7 +659,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
       return Center(
         child: Text(
           '暂无保存的会话',
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+          style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
         ),
       );
     }
@@ -675,7 +676,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
         final divider = Container(
           height: 0.5,
           margin: const EdgeInsets.symmetric(horizontal: 16),
-          color: Colors.grey.shade300,
+          color: AppColors.of(context).borderWeak,
         );
         var collapseCtrl = index + 1 < _sessions.length
             ? _removingRows[_sessions[index + 1]['id']?.toString() ?? '']
@@ -734,7 +735,9 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
             // 当前正在聊天的会话：圆角矩形深色底层遮罩
             decoration: isCurrent
                 ? BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.08),
+                    color: AppColors.isDark(context)
+                        ? Colors.white.withValues(alpha: 0.06)
+                        : Colors.black.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(12),
                   )
                 : null,
@@ -789,10 +792,10 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                                       title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
-                                        color: Color(0xFF1A1A2E),
+                                        color: AppColors.of(context).textPrimary,
                                       ),
                                     ),
                                     const SizedBox(height: 3),
@@ -802,7 +805,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         fontSize: 11,
-                                        color: Colors.grey.shade500,
+                                        color: AppColors.of(context).textTertiary,
                                       ),
                                     ),
                                   ],
@@ -827,10 +830,10 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                           key: const ValueKey('check'),
                           behavior: HitTestBehavior.opaque,
                           onTap: _commitInlineRename,
-                          child: const SizedBox(
+                          child: SizedBox(
                             width: 40,
                             height: 40,
-                            child: Icon(Icons.check, size: 22, color: Colors.black),
+                            child: Icon(Icons.check, size: 22, color: AppColors.of(context).textPrimary),
                           ),
                         )
                       : SizedBox(
@@ -854,8 +857,8 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                                     size: 18,
                                     color: _itemMenuOpen &&
                                             _itemMenuIndex == index
-                                        ? Colors.black
-                                        : Colors.grey.shade500,
+                                        ? AppColors.of(context).textPrimary
+                                        : AppColors.of(context).textTertiary,
                                   ),
                                 ),
                               ),
@@ -913,10 +916,10 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
       controller: _editController!,
       focusNode: _editFocusNode,
       autofocus: true,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 14,
         fontWeight: FontWeight.w600,
-        color: Color(0xFF1A1A2E),
+        color: AppColors.of(context).textPrimary,
       ),
       decoration: const InputDecoration(
         isDense: true,
@@ -965,10 +968,10 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                   child: Container(
                     width: _itemMenuWidth,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.8 * clamped),
+                      color: AppColors.of(context).glassShell.withValues(alpha: 0.8 * clamped),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.5 * clamped),
+                        color: AppColors.of(context).glassBorder.withValues(alpha: 0.5 * clamped),
                         width: 0.5,
                       ),
                     ),
@@ -983,7 +986,7 @@ class _SavedSessionsMenuHostState extends State<SavedSessionsMenuHost>
                         icon: Icons.edit_outlined,
                         label: '重命名',
                         color: const Color(0xFF4A90E2),
-                        labelColor: const Color(0xFF333333),
+                        labelColor: AppColors.of(context).textPrimary,
                         onTap: _onRenameTapped,
                       ),
                       _buildItemMenuRow(

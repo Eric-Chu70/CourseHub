@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'glass_dialog.dart';
 
 class AnimatedCalendarDatePicker extends StatefulWidget {
@@ -142,10 +143,10 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
           ),
           Text(
             '$year年 ${monthNames[month - 1]}',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF1A1A2E),
+              color: AppColors.of(context).textPrimary,
             ),
           ),
           IconButton(
@@ -211,7 +212,7 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: Colors.grey.shade600,
+                color: AppColors.of(context).textSecondary,
               ),
             ),
           ),
@@ -294,10 +295,10 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
               fontSize: 14,
               fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
               color: isDisabled
-                  ? Colors.grey.shade400
+                  ? AppColors.of(context).textTertiary
                   : isSelected
                       ? Colors.white
-                      : const Color(0xFF1A1A2E),
+                      : AppColors.of(context).textPrimary,
             ),
           ),
         ),
@@ -316,7 +317,7 @@ class _AnimatedCalendarDatePickerState extends State<AnimatedCalendarDatePicker>
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                side: BorderSide(color: Colors.grey.shade300),
+                side: BorderSide(color: AppColors.of(context).borderWeak),
               ),
               child: const Text('取消'),
             ),

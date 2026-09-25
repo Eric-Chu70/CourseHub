@@ -10,6 +10,7 @@ import '../main.dart' show appVersion;
 import '../services/update_service.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast_notification.dart';
+import '../theme/app_theme.dart';
 
 /// 更新阶段（更新对话框）
 enum UpdatePhase {
@@ -57,6 +58,7 @@ Future<void> showUpdateDialog(
 
   // 对话框可能已被关闭（外部点击），setDialogState 需容错
   void Function(VoidCallback)? setDs;
+  BuildContext? dsContext;
   void safeSetState(VoidCallback fn) {
     try {
       setDs?.call(fn);
@@ -113,6 +115,7 @@ Future<void> showUpdateDialog(
     safeSetState(() => phase = UpdatePhase.checking);
     final result = await UpdateService.checkForUpdate(appVersion);
     isChecking = false;
+    if (dsContext == null || !dsContext!.mounted) return;
     safeSetState(() {
       if (result.error != null) {
         phase = UpdatePhase.error;
@@ -209,7 +212,7 @@ Future<void> showUpdateDialog(
           padding: const EdgeInsets.symmetric(vertical: 14),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.grey.shade300),
+            side: BorderSide(color: AppColors.of(context).borderWeak),
           ),
         ),
         child: Text(text),
@@ -245,6 +248,11 @@ Future<void> showUpdateDialog(
       builder: (context, setDialogState) {
         // 捕获 setState 引用（供异步回调容错刷新）
         setDs = setDialogState;
+        dsContext = context;
+        // 语义色在 builder 顶层取一次：切换子树（AnimatedSwitcher 的
+        // 进出子项）内不做任何继承查找——重试瞬间旧子项可能已处于
+        // 停用态，子树内的 Theme 查找会抛 "deactivated ancestor"
+        final palette = AppColors.of(context);
         // 打开即开始检查（仅首次；重试由按钮显式触发）
         if (!autoCheckStarted) {
           autoCheckStarted = true;
@@ -277,7 +285,7 @@ Future<void> showUpdateDialog(
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey.shade600,
+                  color: palette.textSecondary,
                 ),
               ),
             ];
@@ -308,7 +316,7 @@ Future<void> showUpdateDialog(
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey.shade600,
+                  color: palette.textSecondary,
                 ),
               ),
             ];
@@ -337,7 +345,7 @@ Future<void> showUpdateDialog(
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey.shade600,
+                  color: palette.textSecondary,
                 ),
               ),
             ];
@@ -369,9 +377,9 @@ Future<void> showUpdateDialog(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
+                  color: palette.surfaceAlt,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: palette.borderWeak),
                 ),
                 child: Column(
                   children: [
@@ -381,7 +389,7 @@ Future<void> showUpdateDialog(
                           '当前版本',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade500,
+                            color: palette.textTertiary,
                           ),
                         ),
                         const Spacer(),
@@ -389,7 +397,7 @@ Future<void> showUpdateDialog(
                           'v$appVersion',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade600,
+                            color: palette.textSecondary,
                           ),
                         ),
                       ],
@@ -401,7 +409,7 @@ Future<void> showUpdateDialog(
                           '最新版本',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade500,
+                            color: palette.textTertiary,
                           ),
                         ),
                         const Spacer(),
@@ -433,7 +441,7 @@ Future<void> showUpdateDialog(
                       info.notes!,
                       style: TextStyle(
                         fontSize: 13,
-                        color: Colors.grey.shade600,
+                        color: palette.textSecondary,
                         height: 1.6,
                       ),
                     ),
@@ -475,7 +483,7 @@ Future<void> showUpdateDialog(
                 child: LinearProgressIndicator(
                   value: progress,
                   minHeight: 8,
-                  backgroundColor: Colors.grey.shade200,
+                  backgroundColor: palette.chipIdle,
                   valueColor:
                       const AlwaysStoppedAnimation(Color(0xFF4A90E2)),
                 ),
@@ -487,7 +495,7 @@ Future<void> showUpdateDialog(
                     : '已下载 $receivedMb MB',
                 style: TextStyle(
                   fontSize: 13,
-                  color: Colors.grey.shade600,
+                  color: palette.textSecondary,
                 ),
               ),
             ];
@@ -522,7 +530,7 @@ Future<void> showUpdateDialog(
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey.shade600,
+                    color: palette.textSecondary,
                     height: 1.5,
                   ),
                 ),
@@ -550,9 +558,9 @@ Future<void> showUpdateDialog(
                       '删除安装包',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey.shade500,
+                        color: palette.textTertiary,
                         decoration: TextDecoration.underline,
-                        decorationColor: Colors.grey.shade500,
+                        decorationColor: palette.textTertiary,
                       ),
                     ),
                   ),
@@ -570,7 +578,7 @@ Future<void> showUpdateDialog(
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey.shade600,
+                    color: palette.textSecondary,
                     height: 1.5,
                   ),
                 ),
@@ -583,7 +591,7 @@ Future<void> showUpdateDialog(
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade500,
+                      color: palette.textTertiary,
                     ),
                   ),
                 ],
@@ -615,7 +623,7 @@ Future<void> showUpdateDialog(
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey.shade600,
+                  color: palette.textSecondary,
                 ),
               ),
             ];

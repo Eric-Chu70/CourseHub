@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
@@ -3001,7 +3002,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               Text(
                 '当前对话尚未保存，恢复后将替换为所选会话。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
               ),
               const SizedBox(height: 24),
               Row(
@@ -3013,7 +3014,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: Colors.grey.shade300),
+                          side: BorderSide(color: AppColors.of(context).borderWeak),
                         ),
                       ),
                       child: const Text('取消'),
@@ -3310,7 +3311,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                               ),
                                               Text(
                                                 _fastModeEnabled ? '切换到普通模式启用图片上传功能' : '普通模式 · ${models.length}个模型可选',
-                                                style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                                style: TextStyle(fontSize: 12, color: Colors.white70),
                                               ),
                                             ],
                                           ),
@@ -3353,12 +3354,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         decoration: BoxDecoration(
                                           color: isSelected
                                               ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-                                              : Colors.white.withValues(alpha: 0.4),
+                                              : AppColors.of(context).panel(0.4),
                                           borderRadius: BorderRadius.circular(12),
                                           border: Border.all(
                                             color: isSelected
                                                 ? const Color(0xFF4A90E2)
-                                                : Colors.white.withValues(alpha: 0.4),
+                                                : AppColors.of(context).panel(0.4),
                                             width: isSelected ? 2 : 1,
                                           ),
                                         ),
@@ -3370,7 +3371,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                                   : Icons.check_box_outline_blank,
                                               color: isSelected 
                                                   ? const Color(0xFF4A90E2)
-                                                  : Colors.grey.shade400,
+                                                  : AppColors.of(context).textTertiary,
                                               size: 24,
                                             ),
                                             const SizedBox(width: 12),
@@ -3415,7 +3416,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                   ),
                                   child: const Text('关闭'),
@@ -3492,7 +3493,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 13,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -3502,14 +3503,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     decoration: InputDecoration(
                       hintText: '请输入 Agnes AI API Key',
                       filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.4),
+                      fillColor: AppColors.of(context).panel(0.4),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                        borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                        borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -3524,7 +3525,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         '模型',
                         style: TextStyle(
                           fontSize: 14,
-                          color: Colors.grey.shade700,
+                          color: AppColors.of(context).textSecondary,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -3532,9 +3533,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: AppColors.of(context).surface,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey.shade300),
+                            border: Border.all(color: AppColors.of(context).borderWeak),
                           ),
                           child: BlurredDropdown<String>(
                             value: selectedModel,
@@ -3569,7 +3570,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     ],
                   ),                  const SizedBox(height: 16),
                   // 思考强度：与自定义API同款滑动选项卡（1:1复刻）
-                  const Text('思考强度', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                   const SizedBox(height: 8),
                   SegmentedSelector<String>(
                     items: const [
@@ -3595,7 +3596,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.grey.shade300),
+                              side: BorderSide(color: AppColors.of(context).borderWeak),
                             ),
                           ),
                           child: const Text('取消'),
@@ -3634,7 +3635,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             }
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.grey.shade800,
+                            backgroundColor: AppColors.isDark(context)
+                                ? AppColors.of(context).surfaceAlt
+                                : Colors.grey.shade800,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -3677,7 +3680,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         for (var i = 1; i <= 4; i++)
           DropdownMenuItem<int>(
             value: i,
-            child: Text('节点 $i', style: const TextStyle(fontSize: 13)),
+            child: Text('节点 $i', style: TextStyle(fontSize: 13)),
           ),
       ],
     );
@@ -3779,7 +3782,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           const SizedBox(height: 8),
                           Text(
                             '支持OpenAI格式的API接口',
-                            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                            style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
                           ),
                           const SizedBox(height: 20),
                           AppTextField(
@@ -3789,7 +3792,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: 'API 地址',
                               hintText: 'https://api.example.com/v1/chat/completions',
                               filled: true,
-                              fillColor: Colors.white.withValues(alpha: 0.4),
+                              fillColor: AppColors.of(context).panel(0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
@@ -3801,7 +3804,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: 'API Key',
                               hintText: '请输入API密钥',
                               filled: true,
-                              fillColor: Colors.white.withValues(alpha: 0.4),
+                              fillColor: AppColors.of(context).panel(0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
@@ -3813,12 +3816,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               labelText: '模型名称',
                               hintText: 'gpt-4o-mini',
                               filled: true,
-                              fillColor: Colors.white.withValues(alpha: 0.4),
+                              fillColor: AppColors.of(context).panel(0.4),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
                           const SizedBox(height: 12),
-                          const Text('视觉能力支持', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                          Text('视觉能力支持', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                           const SizedBox(height: 8),
                           _buildInlineSegmented(
                             labels: const ['自动', '开启', '关闭'],
@@ -3836,7 +3839,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             }),
                           ),
                           const SizedBox(height: 16),
-                          const Text('思考强度', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                          Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                           const SizedBox(height: 8),
                           _buildInlineSegmented(
                             labels: const ['直接回答', 'Low', 'Medium', 'High'],
@@ -3851,13 +3854,13 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           const SizedBox(height: 16),
                           Row(
                             children: [
-                              const Text('联网搜索', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                              Text('联网搜索', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                               const Spacer(),
                               SizedBox(
                                 height: 28,
                                 child: Switch(
                                   value: localWebSearch,
-                                  activeTrackColor: Colors.grey.shade700,
+                                  activeTrackColor: AppColors.of(context).textSecondary,
                                   onChanged: (v) {
                                     HapticFeedback.selectionClick();
                                     setDialogState(() {
@@ -3878,7 +3881,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                   ),
                                   child: const Text('取消'),
@@ -3918,7 +3921,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     _loadFastModeSettingAndAnalyze();
                                   },
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.grey.shade800,
+                                    backgroundColor: AppColors.isDark(context)
+                                        ? AppColors.of(context).surfaceAlt
+                                        : Colors.grey.shade800,
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -4192,9 +4197,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               const SizedBox(width: 12),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
-                  color: Color(0xFF333333),
+                  color: AppColors.of(context).textPrimary,
                 ),
               ),
             ],
@@ -4311,7 +4316,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             systemNavigationBarIconBrightness: Brightness.dark,
           ),
           child: Scaffold(
-            backgroundColor: const Color(0xFFF8F9FC),
+            backgroundColor: Theme.of(context).brightness == Brightness.dark
+            ? AppPalette.dark.scaffold
+            : const Color(0xFFF8F9FC),
             resizeToAvoidBottomInset: false,
             extendBody: true,
             body: Stack(
@@ -4395,9 +4402,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                             // 镂空风格图标；弹出动画保持不变
                                             width: 160,
                                             decoration: BoxDecoration(
-                                              color: Colors.white.withValues(alpha: 0.7),
+                                              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.75 : 0.7),
                                               borderRadius: BorderRadius.circular(16),
-                                              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
+                                              border: Border.all(color: AppColors.of(context).glassBorder, width: 0.5),
                                             ),
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
@@ -4448,7 +4455,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           '内容由AI生成',
                           style: TextStyle(
                             fontSize: 9,
-                            color: Colors.grey.shade400,
+                            color: AppColors.of(context).textTertiary,
                           ),
                         ),
                       ),
@@ -4578,9 +4585,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
               ),
             ),
             child: Column(
@@ -4630,10 +4637,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                               key: ValueKey<String>(_chatTitle ?? '课表助手'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                           ),
@@ -4661,7 +4668,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                 ? Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                     decoration: BoxDecoration(
-                                      color: Colors.grey.shade200,
+                                      color: AppColors.of(context).borderWeak,
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Row(
@@ -4670,7 +4677,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         Text(
                                           _selectedModel!,
                                           style: TextStyle(
-                                            color: Colors.grey.shade600,
+                                            color: AppColors.of(context).textSecondary,
                                             fontSize: 11,
                                             fontWeight: FontWeight.w600,
                                           ),
@@ -4696,7 +4703,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                         children: [
                                           Text(
                                             _selectedModel!,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               color: Color(0xFF4A90E2),
                                               fontSize: 11,
                                               fontWeight: FontWeight.w600,
@@ -4713,7 +4720,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                     ),
                                   ),
                           BlurredPopupMenuButton<String>(
-                            icon: Icon(Icons.more_vert, size: 22, color: Colors.grey.shade600),
+                            icon: Icon(Icons.more_vert, size: 22, color: AppColors.of(context).textSecondary),
                             menuWidth: 170,
                             items: [
                               const BlurredPopupMenuItem(
@@ -4732,14 +4739,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                   iconColor: Color(0xFF4A90E2),
                                 )
                               else
-                                const BlurredPopupMenuItem(
+                                BlurredPopupMenuItem(
                                   value: 'autosave',
                                   icon: Icons.bookmark,
                                   label: '已自动保存',
-                                  iconColor: Colors.grey,
-                                  textColor: Colors.grey,
+                                  iconColor: AppColors.of(context).textSecondary,
+                                  textColor: AppColors.of(context).textSecondary,
                                 ),
-                              const BlurredPopupMenuItem(
+                              BlurredPopupMenuItem(
                                 value: 'history',
                                 icon: Icons.history,
                                 label: '已保存的会话',
@@ -4786,10 +4793,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
+                  color: AppColors.bannerBg(context, Colors.orange),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: Colors.orange.shade200,
+                    color: AppColors.bannerBorder(context, Colors.orange),
                     width: 1.5,
                   ),
                 ),
@@ -4801,12 +4808,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.orange.shade100,
+                            color: AppColors.bannerChip(context, Colors.orange),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Icon(
                             Icons.info_outline,
-                            color: Colors.orange.shade700,
+                            color: AppColors.bannerText(context, Colors.orange),
                             size: 20,
                           ),
                         ),
@@ -4816,7 +4823,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Colors.orange.shade800,
+                            color: AppColors.bannerText(context, Colors.orange),
                           ),
                         ),
                       ],
@@ -4826,7 +4833,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       '请前往"设置" → "AI 功能"开启后使用AI助手。',
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.orange.shade700,
+                        color: AppColors.bannerText(context, Colors.orange),
                         height: 1.5,
                       ),
                     ),
@@ -4836,7 +4843,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       icon: const Icon(Icons.settings, size: 18),
                       label: const Text('前往设置'),
                       style: TextButton.styleFrom(
-                        foregroundColor: Colors.orange.shade700,
+                        foregroundColor: AppColors.bannerText(context, Colors.orange),
                       ),
                     ),
                   ],
@@ -4856,7 +4863,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -4890,12 +4897,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Text(
-                        'AI 学习助手',
+                      Text(
+                        'AI课表助手',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF1A1A2E),
+                          color: AppColors.of(context).textPrimary,
                         ),
                       ),
                     ],
@@ -4905,7 +4912,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     '我可以帮你分析课程安排、管理学习任务、解答学习问题。有什么想问的吗？',
                     style: TextStyle(
                       fontSize: 14,
-                      color: Colors.grey.shade700,
+                      color: AppColors.of(context).textSecondary,
                       height: 1.5,
                     ),
                   ),
@@ -5065,10 +5072,12 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: message.isError
-                    ? Colors.red.shade50
-                    : (message.isWelcome 
-                        ? Colors.white
-                        : (isUser ? const Color(0xFF4A90E2) : Colors.white)),
+                    ? (Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFF3A1A1C)
+                        : Colors.red.shade50)
+                    : (message.isWelcome
+                        ? AppColors.of(context).surface
+                        : (isUser ? const Color(0xFF4A90E2) : AppColors.of(context).surface)),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: isUser
                     ? null
@@ -5132,7 +5141,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       child: Text(
                         message.content,
                         style: TextStyle(
-                          color: isUser ? Colors.white : Colors.grey.shade800,
+                          color: isUser ? Colors.white : AppColors.of(context).textPrimary,
                           fontSize: 14,
                           height: 1.5,
                         ),
@@ -5150,7 +5159,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           style: TextStyle(
                             fontSize: 14,
                             height: 1.5,
-                            color: message.isError ? Colors.red : Colors.grey.shade800,
+                            color: message.isError ? Colors.red : AppColors.of(context).textPrimary,
                           ),
                         ),
                       ),
@@ -5191,7 +5200,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           child: Icon(
                             Icons.loop,
                             size: 17,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                         ),
                       ),
@@ -5215,14 +5224,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
       children: [
         Row(
           children: [
-            Icon(Icons.list_alt, size: 16, color: Colors.grey.shade600),
+            Icon(Icons.list_alt, size: 16, color: AppColors.of(context).textSecondary),
             const SizedBox(width: 6),
             Text(
               '识别到的课程 (${courses.length})',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Colors.grey.shade700,
+                color: AppColors.of(context).textSecondary,
               ),
             ),
           ],
@@ -5234,9 +5243,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             margin: const EdgeInsets.only(bottom: 6),
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
+              color: AppColors.of(context).surfaceAlt,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: AppColors.of(context).borderWeak),
             ),
             child: Row(
               children: [
@@ -5246,10 +5255,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     children: [
                       Text(
                         course.name,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF1A1A2E),
+                          color: AppColors.of(context).textPrimary,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -5257,7 +5266,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         '${dayNames[course.day]} 第${course.time}节',
                         style: TextStyle(
                           fontSize: 11,
-                          color: Colors.grey.shade600,
+                          color: AppColors.of(context).textSecondary,
                         ),
                       ),
                       if (course.location != null || course.teacher != null)
@@ -5268,7 +5277,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           ].join(' · '),
                           style: TextStyle(
                             fontSize: 11,
-                            color: Colors.grey.shade500,
+                            color: AppColors.of(context).textTertiary,
                           ),
                         ),
                       if (course.weeks != null && course.weeks!.isNotEmpty)
@@ -5276,14 +5285,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                           '周次: ${course.weeks}',
                           style: TextStyle(
                             fontSize: 11,
-                            color: Colors.grey.shade500,
+                            color: AppColors.of(context).textTertiary,
                           ),
                         ),
                     ],
                   ),
                 ),
                 BlurredPopupMenuButton<String>(
-                  icon: Icon(Icons.more_vert, size: 18, color: Colors.grey.shade600),
+                  icon: Icon(Icons.more_vert, size: 18, color: AppColors.of(context).textSecondary),
                   items: const [
                     BlurredPopupMenuItem(value: 'edit', icon: Icons.edit_outlined, label: '编辑', iconColor: Color(0xFF4A90E2)),
                     BlurredPopupMenuItem(value: 'delete', icon: Icons.delete_outline, label: '删除', iconColor: Colors.red, textColor: Colors.red),
@@ -5313,7 +5322,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -5340,7 +5349,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         style: TextStyle(
                           fontSize: 14,
                           height: 1.5,
-                          color: Colors.grey.shade800,
+                          color: AppColors.of(context).textPrimary,
                         ),
                       ),
                     ),
@@ -5359,9 +5368,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: AppColors.of(context).surfaceAlt,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5381,13 +5390,13 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     height: 14,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.grey.shade500,
+                      color: AppColors.of(context).textTertiary,
                     ),
                   )
                 else
                   Icon(
                     isExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: Colors.grey.shade500,
+                    color: AppColors.of(context).textTertiary,
                     size: 18,
                   ),
                 const SizedBox(width: 8),
@@ -5396,7 +5405,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                       ? '思考中...' 
                       : '思考过程',
                   style: TextStyle(
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
@@ -5419,10 +5428,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
                               _thinkingContent,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 height: 1.5,
-                                color: Colors.black87,
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                           ),
@@ -5446,7 +5455,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -5464,7 +5473,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -5473,7 +5482,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                         ? _statusMessage 
                         : (_isAnalyzing ? '分析中...' : '思考中...'),
                     style: TextStyle(
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                       fontSize: 14,
                     ),
                   ),
@@ -5492,9 +5501,9 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: AppColors.of(context).surfaceAlt,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5510,14 +5519,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               children: [
                 Icon(
                   isExpanded ? Icons.expand_less : Icons.expand_more,
-                  color: Colors.grey.shade500,
+                  color: AppColors.of(context).textTertiary,
                   size: 18,
                 ),
                 const SizedBox(width: 8),
                 Text(
                   '思考过程',
                   style: TextStyle(
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
@@ -5539,10 +5548,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             contextMenuBuilder: _messageSelectionMenuBuilder,
                             child: _buildMarkdownContent(
                               message.thinkingContent!,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 height: 1.5,
-                                color: Colors.black87,
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                           ),
@@ -5597,10 +5606,10 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
               child: Container(
                 padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.45),
+                  color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.55 : 0.45),
                   borderRadius: BorderRadius.circular(28),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.6),
+                    color: AppColors.of(context).glassBorder,
                     width: 1.5,
                   ),
                 ),
@@ -5630,25 +5639,25 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                   margin: const EdgeInsets.only(bottom: 8),
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade100,
+                                    color: AppColors.of(context).surfaceAlt,
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Row(
                                     children: [
-                                      Icon(Icons.image, size: 20, color: Colors.grey.shade600),
+                                      Icon(Icons.image, size: 20, color: AppColors.of(context).textSecondary),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
                                           '已选择图片（点击预览）',
                                           style: TextStyle(
                                             fontSize: 13,
-                                            color: Colors.grey.shade700,
+                                            color: AppColors.of(context).textSecondary,
                                           ),
                                         ),
                                       ),
                                       GestureDetector(
                                         onTap: _removeImage,
-                                        child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                                        child: Icon(Icons.close, size: 18, color: AppColors.of(context).textSecondary),
                                       ),
                                     ],
                                   ),
@@ -5674,7 +5683,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                             child: _supportsImageUpload
                                 ? Material(
                                     key: const ValueKey('add_button'),
-                                    color: _showAddMenu ? const Color(0xFF4A90E2) : Colors.grey.shade200,
+                                    color: _showAddMenu ? const Color(0xFF4A90E2) : AppColors.of(context).borderWeak,
                                     borderRadius: BorderRadius.circular(20),
                                     child: InkWell(
                                       onTap: _toggleAddMenu,
@@ -5687,7 +5696,7 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
                                           height: 40,
                                           child: Icon(
                                             Icons.add,
-                                            color: _showAddMenu ? Colors.white : Colors.grey.shade700,
+                                            color: _showAddMenu ? Colors.white : AppColors.of(context).textSecondary,
                                             size: 24,
                                           ),
                                         ),
@@ -5827,14 +5836,14 @@ ${tasksInfo.isEmpty ? '暂无任务' : tasksInfo}
         controller: _messageController,
         focusNode: _focusNode,
         scrollController: _inputScrollController,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 15,
           height: 1.4,
         ),
         decoration: InputDecoration(
           hintText: '输入消息...',
           hintStyle: TextStyle(
-            color: Colors.grey.shade400,
+            color: AppColors.of(context).textTertiary,
             fontSize: 15,
           ),
           border: InputBorder.none,
@@ -6717,9 +6726,9 @@ class _DragSegmentedState extends State<_DragSegmented> {
           child: Container(
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.4),
+              color: AppColors.of(context).panel(0.4),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300, width: 1),
+              border: Border.all(color: AppColors.of(context).borderWeak, width: 1),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(9),
@@ -6738,7 +6747,10 @@ class _DragSegmentedState extends State<_DragSegmented> {
                       child: Container(
                         width: segmentW - 4,
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade800,
+                          // 滑块把手：深色下用中灰与深轨道区分，白字仍可读
+                          color: AppColors.isDark(context)
+                              ? Colors.grey.shade600
+                              : Colors.grey.shade800,
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
@@ -6750,7 +6762,7 @@ class _DragSegmentedState extends State<_DragSegmented> {
                         child: Center(
                           child: AnimatedDefaultTextStyle(
                             duration: Duration.zero,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: Colors.black87),
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: AppColors.of(context).textPrimary),
                             child: Text(label),
                           ),
                         ),
@@ -6784,8 +6796,9 @@ class _DragSegmentedState extends State<_DragSegmented> {
                           children: labels.map((label) => Expanded(
                             child: Center(
                               child: AnimatedDefaultTextStyle(
+                                key: ValueKey(Theme.of(context).brightness),
                                 duration: Duration.zero,
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: Colors.white),
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: Colors.white),
                                 child: Text(label),
                               ),
                             ),
@@ -6799,12 +6812,15 @@ class _DragSegmentedState extends State<_DragSegmented> {
                         return Expanded(
                           child: Center(
                             child: AnimatedDefaultTextStyle(
+                              key: ValueKey(Theme.of(context).brightness),
                               duration: _textAnimDuration,
                               curve: Curves.easeInOut,
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.normal,
-                                color: entry.key == visualActiveIdx ? Colors.white : Colors.black87,
+                                color: entry.key == visualActiveIdx
+                                    ? Colors.white
+                                    : AppColors.of(context).textPrimary,
                               ),
                               child: Text(entry.value),
                             ),
@@ -6985,8 +7001,8 @@ class _MessageActionMenuState extends State<_MessageActionMenu>
             filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.72),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+                color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.78 : 0.72),
+                border: Border.all(color: AppColors.of(context).glassBorder),
               ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
@@ -7049,7 +7065,7 @@ class _MessageActionMenuState extends State<_MessageActionMenu>
                     maxLines: 1,
                     softWrap: false,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+                    style: TextStyle(fontSize: 14, color: AppColors.of(context).textPrimary),
                   ),
                 ),
               ],

@@ -82,3 +82,5 @@ flutter:
     - assets/coursehub_logo.jpg
     - assets/icon/agnes_icon.png
     - assets/shiguang/
+    # 打赏码：把 wechat_qr.png / alipay_qr.png 放进 assets/donate/ 即可生效
+    - assets/donate/

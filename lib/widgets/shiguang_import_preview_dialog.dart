@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/course.dart';
 import '../utils/storage.dart';
 import 'glass_dialog.dart';
+import '../theme/app_theme.dart';
 
 /// 教务系统导入 - 课程预览与导入模式选择弹窗。
 ///
@@ -114,7 +115,7 @@ class _PreviewBodyState extends State<_PreviewBody> {
           '从 ${widget.schoolName} 解析到 $courseCount 门课程'
           '${widget.skippedCount > 0 ? '，跳过 ${widget.skippedCount} 条无效数据' : ''}',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
         ),
         const SizedBox(height: 16),
         Flexible(child: _buildCourseList()),
@@ -146,7 +147,7 @@ class _PreviewBodyState extends State<_PreviewBody> {
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: Colors.grey.shade300),
+                    side: BorderSide(color: AppColors.of(context).borderWeak),
                   ),
                 ),
                 child: const Text('取消'),
@@ -177,9 +178,9 @@ class _PreviewBodyState extends State<_PreviewBody> {
     return Container(
       constraints: const BoxConstraints(maxHeight: 260),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.5),
+        color: AppColors.of(context).panel(0.5),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.of(context).borderWeak),
       ),
       child: ListView.builder(
         shrinkWrap: true,
@@ -224,10 +225,10 @@ class _PreviewBodyState extends State<_PreviewBody> {
                   course.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                    color: AppColors.of(context).textPrimary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -240,7 +241,7 @@ class _PreviewBodyState extends State<_PreviewBody> {
                   ].join(' · '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                  style: TextStyle(fontSize: 11, color: AppColors.of(context).textSecondary),
                 ),
               ],
             ),
@@ -275,10 +276,10 @@ class _PreviewBodyState extends State<_PreviewBody> {
         decoration: BoxDecoration(
           color: isSelected
               ? color.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.4),
+              : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? color : Colors.grey.shade200,
+            color: isSelected ? color : AppColors.of(context).chipIdle,
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -303,7 +304,7 @@ class _PreviewBodyState extends State<_PreviewBody> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? color : Colors.black87,
+                      color: isSelected ? color : AppColors.of(context).textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -311,7 +312,7 @@ class _PreviewBodyState extends State<_PreviewBody> {
                     subtitle,
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ],

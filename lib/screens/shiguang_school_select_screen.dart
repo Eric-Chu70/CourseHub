@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -371,7 +372,7 @@ class _ShiguangSchoolSelectScreenState
             const SizedBox(height: 16),
             Text(
               school.name,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
@@ -381,7 +382,7 @@ class _ShiguangSchoolSelectScreenState
               '该学校有 ${adapters.length} 个适配器，请选择',
               style: TextStyle(
                 fontSize: 13,
-                color: Colors.grey.shade600,
+                color: AppColors.of(context).textSecondary,
               ),
             ),
             const SizedBox(height: 16),
@@ -418,9 +419,9 @@ class _ShiguangSchoolSelectScreenState
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.5),
+          color: AppColors.of(context).panel(0.5),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: AppColors.of(context).borderWeak),
         ),
         child: Row(
           children: [
@@ -444,7 +445,7 @@ class _ShiguangSchoolSelectScreenState
                 children: [
                   Text(
                     adapter.adapterName,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: Colors.black87,
@@ -458,7 +459,7 @@ class _ShiguangSchoolSelectScreenState
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                   ],
@@ -467,13 +468,13 @@ class _ShiguangSchoolSelectScreenState
                     '分类：${adapter.category.label} · 维护：${adapter.maintainer}',
                     style: TextStyle(
                       fontSize: 10,
-                      color: Colors.grey.shade500,
+                      color: AppColors.of(context).textTertiary,
                     ),
                   ),
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, size: 20, color: Colors.grey.shade400),
+            Icon(Icons.chevron_right, size: 20, color: AppColors.of(context).textTertiary),
           ],
         ),
       ),
@@ -594,7 +595,9 @@ class _ShiguangSchoolSelectScreenState
     return Scaffold(
       // 搜索框位于顶部，键盘弹出无需压缩页面，避免整页重布局卡顿。
       resizeToAvoidBottomInset: false,
-      backgroundColor: const Color(0xFFF8F9FC),
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? AppPalette.dark.scaffold
+          : const Color(0xFFF8F9FC),
       body: Stack(
         children: [
           if (_loading) _buildLoading(),
@@ -730,9 +733,9 @@ class _ShiguangSchoolSelectScreenState
             padding:
                 const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.85),
+              color: AppColors.of(context).glassShell.withValues(alpha: 0.85),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: AppColors.of(context).borderWeak),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.08),
@@ -818,9 +821,9 @@ class _ShiguangSchoolSelectScreenState
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
               ),
             ),
             child: Column(
@@ -837,21 +840,21 @@ class _ShiguangSchoolSelectScreenState
                           width: 56,
                           height: 56,
                           margin: const EdgeInsets.only(left: 4),
-                          child: const Icon(
+                          child: Icon(
                             Icons.arrow_back_ios_new,
                             size: 18,
-                            color: Color(0xFF1A1A2E),
+                            color: AppColors.of(context).textPrimary,
                           ),
                         ),
                       ),
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           '选择学校',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF1A1A2E),
+                            color: AppColors.of(context).textPrimary,
                           ),
                         ),
                       ),
@@ -898,7 +901,7 @@ class _ShiguangSchoolSelectScreenState
           const SizedBox(height: 16),
           Text(
             '正在获取学校列表...',
-            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
           ),
         ],
       ),
@@ -926,19 +929,19 @@ class _ShiguangSchoolSelectScreenState
               ),
             ),
             const SizedBox(height: 20),
-            const Text(
+            Text(
               '获取学校列表失败',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF1A1A2E),
+                color: AppColors.of(context).textPrimary,
               ),
             ),
             const SizedBox(height: 8),
             Text(
               _error ?? '',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
@@ -971,7 +974,7 @@ class _ShiguangSchoolSelectScreenState
       textAlignVertical: TextAlignVertical.center,
       decoration: InputDecoration(
         hintText: '搜索学校名称 / 英文缩写',
-        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+        hintStyle: TextStyle(color: AppColors.of(context).textTertiary, fontSize: 13),
         prefixIcon: const Icon(Icons.search,
             size: 20, color: Color(0xFF9B59B6)),
         suffixIcon: _query.isNotEmpty
@@ -981,28 +984,28 @@ class _ShiguangSchoolSelectScreenState
                   setState(() => _query = '');
                 },
                 child:
-                    Icon(Icons.close, size: 18, color: Colors.grey.shade400),
+                    Icon(Icons.close, size: 18, color: AppColors.of(context).textTertiary),
               )
             : null,
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.8),
+        fillColor: AppColors.of(context).panel(0.8),
         isDense: true,
         contentPadding:
             const EdgeInsets.symmetric(vertical: 13, horizontal: 4),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
+          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
+          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Color(0xFF9B59B6), width: 2),
         ),
       ),
-      style: const TextStyle(fontSize: 13),
+      style: TextStyle(fontSize: 13),
     );
   }
 
@@ -1016,12 +1019,12 @@ class _ShiguangSchoolSelectScreenState
       ),
       child: Row(
         children: [
-          Icon(Icons.info_outline, size: 16, color: Colors.orange.shade700),
+          Icon(Icons.info_outline, size: 16, color: AppColors.bannerText(context, Colors.orange)),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               '网络不佳，当前展示的是缓存数据，可能不是最新',
-              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+              style: TextStyle(fontSize: 12, color: AppColors.bannerText(context, Colors.orange)),
             ),
           ),
         ],
@@ -1032,10 +1035,10 @@ class _ShiguangSchoolSelectScreenState
   Widget _buildSectionTitle(String title) {
     return Text(
       title,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 15,
         fontWeight: FontWeight.w600,
-        color: Color(0xFF1A1A2E),
+        color: AppColors.of(context).textPrimary,
       ),
     );
   }
@@ -1058,12 +1061,12 @@ class _ShiguangSchoolSelectScreenState
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             '最近使用',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF1A1A2E),
+              color: AppColors.of(context).textPrimary,
             ),
           ),
           const Spacer(),
@@ -1220,7 +1223,7 @@ class _ShiguangSchoolSelectScreenState
                   const SizedBox(width: 6),
                   Text(
                     school.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       color: Color(0xFF9B59B6),
                       fontWeight: FontWeight.w500,
@@ -1241,7 +1244,7 @@ class _ShiguangSchoolSelectScreenState
                   width: 18,
                   height: 18,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade500,
+                    color: AppColors.of(context).textTertiary,
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 1.5),
                   ),
@@ -1269,7 +1272,7 @@ class _ShiguangSchoolSelectScreenState
           ),
           child: Text(
             letter,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
               color: Color(0xFF9B59B6),
@@ -1292,7 +1295,7 @@ class _ShiguangSchoolSelectScreenState
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppColors.of(context).borderWeak),
       ),
       child: InkWell(
         onTap: () => _onSchoolTap(school),
@@ -1314,14 +1317,14 @@ class _ShiguangSchoolSelectScreenState
               Expanded(
                 child: Text(
                   school.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1A1A2E),
+                    color: AppColors.of(context).textPrimary,
                   ),
                 ),
               ),
-              Icon(Icons.chevron_right, size: 20, color: Colors.grey.shade400),
+              Icon(Icons.chevron_right, size: 20, color: AppColors.of(context).textTertiary),
             ],
           ),
         ),

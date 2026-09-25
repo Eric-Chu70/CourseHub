@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/scheduler.dart';
 
 /// 通用「模糊 + 动画」文本选中/输入框上下文菜单。
@@ -396,10 +397,10 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.7),
+              color: AppColors.of(context).glassShell.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.5),
+                color: AppColors.of(context).glassBorder,
                 width: 0.5,
               ),
             ),
@@ -471,7 +472,7 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
       height: 18,
       // 竖直方向由 Row 居中；水平留 2px 与按钮文字隔开
       margin: const EdgeInsets.symmetric(horizontal: 2),
-      color: Colors.grey.shade400,
+      color: AppColors.of(context).textTertiary,
     );
   }
 
@@ -591,8 +592,8 @@ class _MenuButton extends StatelessWidget {
     return TextButton(
       onPressed: onPressed,
       style: TextButton.styleFrom(
-        foregroundColor: Colors.black87,
-        disabledForegroundColor: Colors.black38,
+        foregroundColor: AppColors.of(context).textPrimary,
+        disabledForegroundColor: AppColors.of(context).textTertiary,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         // 固定高度 48：无论按钮数量多少、字体度量如何浮动，
         // 菜单卡片高度恒定（与 _kEstimatedToolbarHeight 一致）
@@ -606,7 +607,7 @@ class _MenuButton extends StatelessWidget {
         style: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w500,
-          color: enabled ? Colors.black87 : Colors.black38,
+          color: enabled ? AppColors.of(context).textPrimary : AppColors.of(context).textTertiary,
         ),
       ),
     );

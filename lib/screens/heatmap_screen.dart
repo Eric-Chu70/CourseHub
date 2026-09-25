@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../utils/storage.dart';
@@ -172,7 +173,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
     }).length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FC),
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? AppPalette.dark.scaffold
+          : const Color(0xFFF8F9FC),
       body: Stack(
         children: [
           CustomScrollView(
@@ -286,16 +289,16 @@ class HeatmapScreenState extends State<HeatmapScreen>
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
               ),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(height: topPadding),
-                const SizedBox(
+                SizedBox(
                   height: 56,
                   child: Center(
                     child: Text(
@@ -303,7 +306,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A1A2E),
+                        color: AppColors.of(context).textPrimary,
                       ),
                     ),
                   ),
@@ -328,10 +331,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
             filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
+                color: AppColors.of(context).glassShell
+                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.8),
+                  color: AppColors.of(context).glassBorder,
                   width: 1.5,
                 ),
                 boxShadow: [
@@ -370,11 +374,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                               width: 32,
                               height: 32,
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
+                                color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(Icons.close,
-                                  size: 18, color: Colors.grey.shade600),
+                                  size: 18, color: AppColors.of(context).textSecondary),
                             ),
                           ),
                         ],
@@ -554,12 +558,12 @@ class HeatmapScreenState extends State<HeatmapScreen>
                               child: Column(
                                 children: [
                                   Icon(Icons.book_outlined,
-                                      size: 48, color: Colors.grey.shade400),
+                                      size: 48, color: AppColors.of(context).textTertiary),
                                   const SizedBox(height: 12),
                                   Text(
                                     '暂无课程',
                                     style:
-                                        TextStyle(color: Colors.grey.shade500),
+                                        TextStyle(color: AppColors.of(context).textTertiary),
                                   ),
                                   const SizedBox(height: 8),
                                   TextButton(
@@ -596,10 +600,10 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                     margin: const EdgeInsets.only(bottom: 8),
                                     decoration: BoxDecoration(
                                       color:
-                                          Colors.white.withValues(alpha: 0.4),
+                                          AppColors.of(context).panel(0.4),
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                          color: Colors.grey.shade200),
+                                          color: AppColors.of(context).borderWeak),
                                     ),
                                     child: ListTile(
                                       leading: Container(
@@ -624,7 +628,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                           ? Text(courses.first.teacher!,
                                               style: TextStyle(
                                                   fontSize: 12,
-                                                  color: Colors.grey.shade600))
+                                                  color: AppColors.of(context).textSecondary))
                                           : null,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
@@ -779,8 +783,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                     alpha: 0.7),
                                                 size: isSmallScreen ? 18 : 20),
                                             filled: true,
-                                            fillColor: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            fillColor: AppColors.of(context).panel(0.4),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
                                                     horizontal: 12,
@@ -791,13 +794,13 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             enabledBorder: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             focusedBorder: OutlineInputBorder(
                                               borderRadius:
@@ -826,7 +829,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               style: TextStyle(
                                                 fontSize:
                                                     isSmallScreen ? 11 : 12,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                               ),
                                             ),
                                           ],
@@ -837,12 +840,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               horizontal:
                                                   isSmallScreen ? 10 : 12),
                                           decoration: BoxDecoration(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            color: AppColors.of(context).panel(0.4),
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             border: Border.all(
-                                                color: Colors.grey.shade200),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                           child: BlurredDropdown<String>(
                                             value: type,
@@ -907,12 +909,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                             padding: EdgeInsets.all(
                                                 isSmallScreen ? 12 : 16),
                                             decoration: BoxDecoration(
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.4),
+                                              color: AppColors.of(context).panel(0.4),
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               border: Border.all(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             child: Row(
                                               children: [
@@ -938,8 +939,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                                   isSmallScreen
                                                                       ? 11
                                                                       : 12,
-                                                              color: Colors.grey
-                                                                  .shade600)),
+                                                              color: AppColors.of(context).textSecondary)),
                                                       Text(
                                                           '${dueDate.year}/${dueDate.month}/${dueDate.day} ${dueDate.hour.toString().padLeft(2, '0')}:${dueDate.minute.toString().padLeft(2, '0')}',
                                                           style: TextStyle(
@@ -954,7 +954,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                   ),
                                                 ),
                                                 Icon(Icons.chevron_right,
-                                                    color: Colors.grey.shade400,
+                                                    color: AppColors.of(context).textTertiary,
                                                     size: isSmallScreen
                                                         ? 18
                                                         : 20),
@@ -977,7 +977,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               style: TextStyle(
                                                 fontSize:
                                                     isSmallScreen ? 11 : 12,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                               ),
                                             ),
                                           ],
@@ -1012,9 +1012,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                         ? priorityColor
                                                             .withValues(
                                                                 alpha: 0.15)
-                                                        : Colors.white
-                                                            .withValues(
-                                                                alpha: 0.4),
+                                                        : AppColors.of(context).panel(0.4),
                                                     borderRadius:
                                                         BorderRadius.circular(
                                                             10),
@@ -1060,8 +1058,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                     alpha: 0.7),
                                                 size: isSmallScreen ? 18 : 20),
                                             filled: true,
-                                            fillColor: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            fillColor: AppColors.of(context).panel(0.4),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
                                                     horizontal: 12,
@@ -1072,13 +1069,13 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             enabledBorder: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             focusedBorder: OutlineInputBorder(
                                               borderRadius:
@@ -1116,7 +1113,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                 borderRadius:
                                                     BorderRadius.circular(12)),
                                             side: BorderSide(
-                                                color: Colors.grey.shade300),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                           child: Text('取消',
                                               style: TextStyle(
@@ -1200,11 +1197,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.of(context).surface,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: AppColors.of(context).overlaySoft,
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -1312,7 +1309,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                     day,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade500,
+                      color: AppColors.of(context).textTertiary,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1360,14 +1357,14 @@ class HeatmapScreenState extends State<HeatmapScreen>
                   decoration: BoxDecoration(
                     color: taskCount > 0
                         ? _getHeatColor(taskCount)
-                        : Colors.grey.shade50,
+                        : AppColors.of(context).surfaceAlt,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: isToday
                           ? const Color(0xFF4A90E2)
                           : isSelected
                               ? const Color(0xFF4A90E2).withValues(alpha: 0.5)
-                              : Colors.grey.shade200,
+                              : AppColors.of(context).borderWeak,
                       width: isToday || isSelected ? 2 : 1,
                     ),
                   ),
@@ -1382,7 +1379,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                             ? taskCount >= 3
                                 ? Colors.white
                                 : const Color(0xFFE60000)
-                            : Colors.black87,
+                            : AppColors.of(context).textPrimary,
                       ),
                     ),
                   ),
@@ -1404,7 +1401,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
           decoration: BoxDecoration(
             color: color,
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: Colors.grey.shade300),
+            border: Border.all(color: AppColors.of(context).borderWeak),
           ),
         ),
         const SizedBox(width: 4),
@@ -1412,7 +1409,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
           label,
           style: TextStyle(
             fontSize: 10,
-            color: Colors.grey.shade600,
+            color: AppColors.of(context).textSecondary,
           ),
         ),
       ],
@@ -1426,7 +1423,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.of(context).surface,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -1454,7 +1451,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: tasks.isEmpty
-                      ? Colors.grey.shade100
+                      ? AppColors.of(context).surfaceAlt
                       : const Color(0xFFFF4D4D).withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1463,7 +1460,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                   style: TextStyle(
                     fontSize: 12,
                     color: tasks.isEmpty
-                        ? Colors.grey.shade600
+                        ? AppColors.of(context).textSecondary
                         : const Color(0xFFE60000),
                     fontWeight: FontWeight.w500,
                   ),
@@ -1479,7 +1476,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                 child: Text(
                   '当天无任务',
                   style: TextStyle(
-                    color: Colors.grey.shade400,
+                    color: AppColors.of(context).textTertiary,
                   ),
                 ),
               ),
@@ -1504,10 +1501,10 @@ class HeatmapScreenState extends State<HeatmapScreen>
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isCompleted ? Colors.grey.shade100 : Colors.grey.shade50,
+        color: isCompleted ? AppColors.of(context).surfaceAlt : AppColors.of(context).surfaceAlt,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-            color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
+            color: isCompleted ? AppColors.of(context).borderWeak : AppColors.of(context).borderWeak),
       ),
       child: Row(
         children: [
@@ -1523,7 +1520,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                 color: isCompleted ? priorityColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: isCompleted ? priorityColor : Colors.grey.shade400,
+                  color: isCompleted ? priorityColor : AppColors.of(context).textTertiary,
                   width: 2,
                 ),
               ),
@@ -1538,7 +1535,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
             height: 30,
             decoration: BoxDecoration(
               color: isCompleted
-                  ? Colors.grey.shade400
+                  ? AppColors.of(context).textTertiary
                   : (isOverdue ? Colors.red : priorityColor),
               borderRadius: BorderRadius.circular(2),
             ),
@@ -1553,7 +1550,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                   style: TextStyle(
                     fontWeight: FontWeight.w500,
                     fontSize: 13,
-                    color: isCompleted ? Colors.grey.shade500 : null,
+                    color: isCompleted ? AppColors.of(context).textTertiary : null,
                     decoration: isCompleted ? TextDecoration.lineThrough : null,
                   ),
                 ),
@@ -1563,8 +1560,8 @@ class HeatmapScreenState extends State<HeatmapScreen>
                   style: TextStyle(
                     fontSize: 11,
                     color: isCompleted
-                        ? Colors.grey.shade400
-                        : Colors.grey.shade600,
+                        ? AppColors.of(context).textTertiary
+                        : AppColors.of(context).textSecondary,
                     decoration: isCompleted ? TextDecoration.lineThrough : null,
                   ),
                 ),
@@ -1575,7 +1572,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
               color: isCompleted
-                  ? Colors.grey.shade200
+                  ? AppColors.of(context).borderWeak
                   : priorityColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(4),
             ),
@@ -1583,7 +1580,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
               task.priority,
               style: TextStyle(
                 fontSize: 10,
-                color: isCompleted ? Colors.grey.shade500 : priorityColor,
+                color: isCompleted ? AppColors.of(context).textTertiary : priorityColor,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -1607,7 +1604,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: Colors.grey.shade200),
+          side: BorderSide(color: AppColors.of(context).borderWeak),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1626,7 +1623,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                 label,
                 style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey.shade600,
+                  color: AppColors.of(context).textSecondary,
                 ),
               ),
             ],
@@ -1645,14 +1642,14 @@ class HeatmapScreenState extends State<HeatmapScreen>
             Icon(
               Icons.task_alt,
               size: 80,
-              color: Colors.grey.shade300,
+              color: AppColors.of(context).borderWeak,
             ),
             const SizedBox(height: 16),
             Text(
               '暂无任务',
               style: TextStyle(
                 fontSize: 16,
-                color: Colors.grey.shade400,
+                color: AppColors.of(context).textTertiary,
               ),
             ),
           ],
@@ -1676,9 +1673,9 @@ class HeatmapScreenState extends State<HeatmapScreen>
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-            color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
+            color: isCompleted ? AppColors.of(context).borderWeak : AppColors.of(context).borderWeak),
       ),
-      color: isCompleted ? Colors.grey.shade50 : null,
+      color: isCompleted ? AppColors.of(context).surfaceAlt : null,
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
         leading: Row(
@@ -1696,7 +1693,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                   color: isCompleted ? priorityColor : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: isCompleted ? priorityColor : Colors.grey.shade400,
+                    color: isCompleted ? priorityColor : AppColors.of(context).textTertiary,
                     width: 2,
                   ),
                 ),
@@ -1711,7 +1708,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
               height: 40,
               decoration: BoxDecoration(
                 color: isCompleted
-                    ? Colors.grey.shade400
+                    ? AppColors.of(context).textTertiary
                     : (isOverdue ? Colors.red : priorityColor),
                 borderRadius: BorderRadius.circular(2),
               ),
@@ -1722,7 +1719,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
           task.name,
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: isCompleted ? Colors.grey.shade500 : null,
+            color: isCompleted ? AppColors.of(context).textTertiary : null,
             decoration: isCompleted ? TextDecoration.lineThrough : null,
           ),
         ),
@@ -1735,8 +1732,8 @@ class HeatmapScreenState extends State<HeatmapScreen>
               style: TextStyle(
                 fontSize: 12,
                 color: isCompleted
-                    ? Colors.grey.shade400
-                    : (isOverdue ? Colors.red : Colors.grey.shade600),
+                    ? AppColors.of(context).textTertiary
+                    : (isOverdue ? Colors.red : AppColors.of(context).textSecondary),
                 decoration: isCompleted ? TextDecoration.lineThrough : null,
               ),
             ),
@@ -1749,7 +1746,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                 onPointerDown: (_) => HapticFeedback.selectionClick(),
                 child: BlurredPopupMenuButton<String>(
                   icon: Icon(Icons.more_vert,
-                      color: Colors.grey.shade400, size: 20),
+                      color: AppColors.of(context).textTertiary, size: 20),
                   items: const [
                     BlurredPopupMenuItem(
                       value: 'edit',
@@ -1926,8 +1923,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                     alpha: 0.7),
                                                 size: isSmallScreen ? 18 : 20),
                                             filled: true,
-                                            fillColor: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            fillColor: AppColors.of(context).panel(0.4),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
                                                     horizontal: 12,
@@ -1938,13 +1934,13 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             enabledBorder: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             focusedBorder: OutlineInputBorder(
                                               borderRadius:
@@ -1972,7 +1968,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               style: TextStyle(
                                                 fontSize:
                                                     isSmallScreen ? 11 : 12,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                               ),
                                             ),
                                           ],
@@ -1983,12 +1979,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               horizontal:
                                                   isSmallScreen ? 10 : 12),
                                           decoration: BoxDecoration(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            color: AppColors.of(context).panel(0.4),
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             border: Border.all(
-                                                color: Colors.grey.shade200),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                           child: BlurredDropdown<String>(
                                             value: type,
@@ -2051,12 +2046,11 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                             padding: EdgeInsets.all(
                                                 isSmallScreen ? 12 : 16),
                                             decoration: BoxDecoration(
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.4),
+                                              color: AppColors.of(context).panel(0.4),
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               border: Border.all(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             child: Row(
                                               children: [
@@ -2082,8 +2076,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                                   isSmallScreen
                                                                       ? 11
                                                                       : 12,
-                                                              color: Colors.grey
-                                                                  .shade600)),
+                                                              color: AppColors.of(context).textSecondary)),
                                                       Text(
                                                           DateFormat(
                                                                   'yyyy/MM/dd HH:mm')
@@ -2100,7 +2093,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                   ),
                                                 ),
                                                 Icon(Icons.chevron_right,
-                                                    color: Colors.grey.shade400,
+                                                    color: AppColors.of(context).textTertiary,
                                                     size: isSmallScreen
                                                         ? 18
                                                         : 20),
@@ -2123,7 +2116,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               style: TextStyle(
                                                 fontSize:
                                                     isSmallScreen ? 11 : 12,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                               ),
                                             ),
                                           ],
@@ -2158,9 +2151,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                         ? priorityColor
                                                             .withValues(
                                                                 alpha: 0.15)
-                                                        : Colors.white
-                                                            .withValues(
-                                                                alpha: 0.4),
+                                                        : AppColors.of(context).panel(0.4),
                                                     borderRadius:
                                                         BorderRadius.circular(
                                                             10),
@@ -2207,8 +2198,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                     alpha: 0.7),
                                                 size: isSmallScreen ? 18 : 20),
                                             filled: true,
-                                            fillColor: Colors.white
-                                                .withValues(alpha: 0.4),
+                                            fillColor: AppColors.of(context).panel(0.4),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
                                                     horizontal: 12,
@@ -2219,13 +2209,13 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             enabledBorder: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               borderSide: BorderSide(
-                                                  color: Colors.grey.shade200),
+                                                  color: AppColors.of(context).borderWeak),
                                             ),
                                             focusedBorder: OutlineInputBorder(
                                               borderRadius:
@@ -2262,7 +2252,7 @@ class HeatmapScreenState extends State<HeatmapScreen>
                                                 borderRadius:
                                                     BorderRadius.circular(12)),
                                             side: BorderSide(
-                                                color: Colors.grey.shade300),
+                                                color: AppColors.of(context).borderWeak),
                                           ),
                                           child: Text('取消',
                                               style: TextStyle(

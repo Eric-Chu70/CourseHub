@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import '../services/glm_service.dart';
@@ -418,7 +419,7 @@ $tasksInfo
         key: _containerKey,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppColors.of(context).surface,
           borderRadius: BorderRadius.circular(16),
           // 柔光参数与对话页分析完成气泡样式完全一致
           boxShadow: [
@@ -512,7 +513,7 @@ $tasksInfo
                     child: Icon(
                       Icons.loop,
                       size: 17,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ),
@@ -529,7 +530,7 @@ $tasksInfo
                   child: Icon(
                     Icons.close,
                     size: 17,
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                   ),
                 ),
               ),
@@ -546,16 +547,16 @@ $tasksInfo
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.orange.shade100,
+            color: AppColors.bannerChip(context, Colors.orange),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
+          child: Icon(Icons.info_outline, color: AppColors.bannerText(context, Colors.orange), size: 20),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             '开启 AI 功能后可自动分析任务',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
           ),
         ),
       ],
@@ -578,7 +579,7 @@ $tasksInfo
         Expanded(
           child: Text(
             '暂无任务需要分析',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
           ),
         ),
       ],
@@ -620,18 +621,24 @@ $tasksInfo
               return LinearGradient(
                 begin: Alignment(-1 + progress * 2, 0),
                 end: Alignment(progress * 2, 0),
-                colors: [
-                  Colors.grey.shade200,
-                  Colors.white,
-                  Colors.grey.shade200,
-                ],
+                colors: Theme.of(context).brightness == Brightness.dark
+                    ? const [
+                        Color(0x1AFFFFFF),
+                        Color(0x33FFFFFF),
+                        Color(0x1AFFFFFF),
+                      ]
+                    : const [
+                        Color(0xFFEEEEEE),
+                        Colors.white,
+                        Color(0xFFEEEEEE),
+                      ],
                 stops: const [0.0, 0.5, 1.0],
               ).createShader(bounds);
             },
             child: Container(
               height: height,
               decoration: BoxDecoration(
-                color: Colors.grey.shade300,
+                color: AppColors.of(context).borderWeak,
                 borderRadius: BorderRadius.circular(4),
               ),
             ),
@@ -649,7 +656,7 @@ $tasksInfo
     final markdownStyle = TextStyle(
         fontSize: 12,
         height: 1.4,
-        color: Colors.grey.shade800);
+        color: AppColors.of(context).textPrimary);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -668,12 +675,12 @@ $tasksInfo
                   color: Color(0xFF4A90E2), size: 16),
             ),
             const SizedBox(width: 8),
-            const Text(
+            Text(
               'AI任务提示',
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF1A1A2E),
+                color: AppColors.of(context).textPrimary,
               ),
             ),
           ],
@@ -713,16 +720,16 @@ $tasksInfo
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.red.shade50,
+            color: AppColors.bannerBg(context, Colors.red),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(Icons.error_outline, color: Colors.red.shade400, size: 20),
+          child: Icon(Icons.error_outline, color: AppColors.bannerText(context, Colors.red), size: 20),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             '分析失败，点击重试',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
           ),
         ),
         GestureDetector(

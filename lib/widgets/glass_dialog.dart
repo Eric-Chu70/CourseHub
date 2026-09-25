@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../theme/app_theme.dart';
 
 /// 读取全局「减弱动态效果」开关（设置页个性化，默认关闭）。
 /// 对话框打开路径上读取（SharedPreferences 首次加载后有缓存，开销可忽略）
@@ -44,14 +45,20 @@ class GlassDialogShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
     final BorderRadius borderRadius = BorderRadius.circular(radius);
+    // 深色玻璃需要更高不透明度保证壳内可读性（半透明近黑比半透明白更透）
+    final effectiveAlpha = palette.brightness == Brightness.dark
+        ? math.min(0.93, backgroundAlpha + 0.18)
+        : backgroundAlpha;
+    final isDark = palette.brightness == Brightness.dark;
     Widget content = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: backgroundAlpha),
+        color: palette.glassShell.withValues(alpha: effectiveAlpha),
         borderRadius: borderRadius,
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.6),
+          color: palette.glassBorder,
           width: 0.5,
         ),
       ),
@@ -67,7 +74,8 @@ class GlassDialogShell extends StatelessWidget {
         boxShadow: boxShadow ??
             [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
+                color: palette.shadow
+                    .withValues(alpha: isDark ? 0.45 : 0.12),
                 blurRadius: 24,
                 offset: const Offset(0, 12),
               ),
@@ -79,11 +87,11 @@ class GlassDialogShell extends StatelessWidget {
             ? content
             : Stack(
                 children: [
-                  // 提亮层：模糊前先垫一层半透明白，中和外层遮罩的压暗，
-                  // 模糊采样到偏亮的底 → 呈"白磨砂"而非"灰磨砂"（白与模糊兼得）
+                  // 提亮层：模糊前先垫一层（浅色垫白中和压暗，呈"白磨砂"；
+                  // 深色垫极淡白防止磨砂发闷）
                   Positioned.fill(
                     child: ColoredBox(
-                      color: Colors.white.withValues(alpha: 0.4),
+                      color: palette.glassHighlight,
                     ),
                   ),
                   BackdropFilter(
@@ -120,48 +128,54 @@ class GlassDialog {
     required VoidCallback onClose,
     IconData? icon,
   }) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              if (icon != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
+    // 无上下文的静态构建器：包一层 Builder 取主题语义色
+    return Builder(builder: (context) {
+      final palette = AppColors.of(context);
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                if (icon != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child:
+                        Icon(icon, color: const Color(0xFF4A90E2), size: 20),
                   ),
-                  child: Icon(icon, color: const Color(0xFF4A90E2), size: 20),
+                  const SizedBox(width: 12),
+                ],
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                const SizedBox(width: 12),
               ],
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          GestureDetector(
-            onTap: onClose,
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(Icons.close, size: 18, color: Colors.grey.shade700),
             ),
-          ),
-        ],
-      ),
-    );
+            GestureDetector(
+              onTap: onClose,
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: palette.surfaceAlt,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.close,
+                    size: 18, color: palette.textSecondary),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   static Widget buildButton({
@@ -169,26 +183,31 @@ class GlassDialog {
     required VoidCallback onPressed,
     bool isPrimary = true,
   }) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: isPrimary ? const Color(0xFF4A90E2) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: isPrimary ? null : Border.all(color: Colors.white.withValues(alpha: 0.4)),
-        ),
-        child: Center(
-          child: Text(
-            text,
-            style: TextStyle(
-              color: isPrimary ? Colors.white : Colors.grey.shade700,
-              fontWeight: FontWeight.w600,
+    return Builder(builder: (context) {
+      final palette = AppColors.of(context);
+      return GestureDetector(
+        onTap: onPressed,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            color: isPrimary ? const Color(0xFF4A90E2) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            border: isPrimary
+                ? null
+                : Border.all(color: palette.borderWeak),
+          ),
+          child: Center(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: isPrimary ? Colors.white : palette.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
 
@@ -233,45 +252,51 @@ Widget blurredMorphTransition(
   );
 }
 
-/// 统一的模糊菜单外壳：ClipRRect + BackdropFilter + 半透明白色。
+/// 统一的模糊菜单外壳：ClipRRect + BackdropFilter + 半透明壳。
 Widget _blurredMenuShell({
   required Widget child,
   double radius = 16,
   double blurSigma = 20,
   double alpha = 0.7,
 }) {
-  return DecoratedBox(
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(radius),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.15),
-          blurRadius: 12,
-          offset: const Offset(0, 4),
-        ),
-      ],
-    ),
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: alpha),
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.5),
-              width: 0.5,
-            ),
+  return Builder(builder: (context) {
+    final palette = AppColors.of(context);
+    final isDark = palette.brightness == Brightness.dark;
+    final effectiveAlpha =
+        isDark ? math.min(0.93, alpha + 0.18) : alpha;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        boxShadow: [
+          BoxShadow(
+            color: palette.shadow.withValues(alpha: isDark ? 0.4 : 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-          child: Material(
-            color: Colors.transparent,
-            child: child,
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: Container(
+            decoration: BoxDecoration(
+              color: palette.glassShell.withValues(alpha: effectiveAlpha),
+              borderRadius: BorderRadius.circular(radius),
+              border: Border.all(
+                color: palette.glassBorder,
+                width: 0.5,
+              ),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: child,
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  });
 }
 
 /// 模糊下拉选择框 — 替代 DropdownButton，弹出菜单带毛玻璃模糊效果。
@@ -369,7 +394,8 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
                 currentItem?.child ?? widget.hint ?? const SizedBox(),
               const SizedBox(width: 4),
               widget.icon ??
-                  Icon(Icons.expand_more, size: 20, color: Colors.grey.shade600),
+                  Icon(Icons.expand_more,
+                      size: 20, color: AppColors.of(context).textSecondary),
             ],
           ),
         ),
@@ -570,7 +596,7 @@ Future<T?> showBlurredMenu<T>({
                                         child: Icon(
                                           Icons.help_outline,
                                           size: 15,
-                                          color: Colors.grey.shade500,
+                                          color: AppColors.of(context).textTertiary,
                                         ),
                                       ),
                                     ],
@@ -711,30 +737,36 @@ class _MenuInfoTooltipState extends State<_MenuInfoTooltip>
         },
         child: Material(
           color: Colors.transparent,
-          child: Container(
-            constraints: BoxConstraints(maxWidth: maxTipWidth),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Text(
-              widget.text,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
+          child: Builder(builder: (tipContext) {
+            final palette = AppColors.of(tipContext);
+            return Container(
+              constraints: BoxConstraints(maxWidth: maxTipWidth),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: palette.borderWeak),
+                boxShadow: [
+                  BoxShadow(
+                    color: palette.shadow.withValues(
+                        alpha: palette.brightness == Brightness.dark
+                            ? 0.4
+                            : 0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-            ),
-          ),
+              child: Text(
+                widget.text,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: palette.textSecondary,
+                ),
+              ),
+            );
+          }),
         ),
       ),
     );
@@ -965,7 +997,8 @@ class _BlurredPopupMenuButtonState<T> extends State<BlurredPopupMenuButton<T>> {
                                       style: TextStyle(
                                           fontSize: 15,
                                           color: item.textColor ??
-                                              const Color(0xFF333333)),
+                                              AppColors.of(context)
+                                                  .textPrimary),
                                     ),
                                   ],
                                 ),

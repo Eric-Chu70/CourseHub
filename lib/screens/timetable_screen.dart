@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:ui' show ImageFilter, ImageByteFormat, lerpDouble;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
@@ -54,6 +55,10 @@ class TimetableScreenState extends State<TimetableScreen>
   String? _wallpaperPath;
   int _wallpaperOpacity = 100;
   bool _wallpaperEnabled = false;
+
+  /// 深色模式下壁纸统一压暗，渲染时一律视为深色壁纸（文字/网格走浅色分支）
+  bool get _effectiveWallpaperIsLight =>
+      Theme.of(context).brightness == Brightness.dark ? false : _wallpaperIsLight;
   bool _wallpaperIsLight = true;
   bool _wallpaperBlurEnabled = false;
 
@@ -721,12 +726,12 @@ class TimetableScreenState extends State<TimetableScreen>
                             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
+                            Text(
                               '切换课表',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                             const SizedBox(height: 16),
@@ -745,12 +750,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                     decoration: BoxDecoration(
                                       color: isSelected
                                           ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-                                          : Colors.white.withValues(alpha: 0.4),
+                                          : AppColors.of(context).panel(0.4),
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
                                         color: isSelected
                                             ? const Color(0xFF4A90E2)
-                                            : Colors.grey.shade200,
+                                            : AppColors.of(context).borderWeak,
                                       ),
                                     ),
                                     child: ClipRRect(
@@ -770,12 +775,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                                   end: Alignment.bottomRight,
                                                 )
                                               : null,
-                                          color: isSelected ? null : Colors.white.withValues(alpha: 0.4),
+                                          color: isSelected ? null : AppColors.of(context).panel(0.4),
                                           borderRadius: BorderRadius.circular(10),
                                         ),
                                         child: Icon(
                                           Icons.calendar_month_rounded,
-                                          color: isSelected ? Colors.white : Colors.grey.shade500,
+                                          color: isSelected ? Colors.white : AppColors.of(context).textSecondary,
                                           size: 20,
                                         ),
                                       ),
@@ -813,7 +818,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                   autofocus: true,
                                                     style: TextStyle(
                                                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                      color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+                                                      color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                                     ),
                                                     decoration: const InputDecoration(
                                                       isDense: true,
@@ -847,7 +852,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                     timetable.name,
                                                     style: TextStyle(
                                                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                      color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+                                                      color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                                     ),
                                                   ),
                                                 ),
@@ -910,7 +915,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                           renameFocusGuardActive = false;
                                                         },
                                                         child: BlurredPopupMenuButton<String>(
-                                                          icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
+                                                          icon: Icon(Icons.more_vert, color: AppColors.of(context).textTertiary, size: 20),
                                                           items: const [
                                                             BlurredPopupMenuItem(
                                                               value: 'rename',
@@ -1150,13 +1155,13 @@ class TimetableScreenState extends State<TimetableScreen>
                               autofocus: autoFocusNewField,
                               decoration: InputDecoration(
                                 hintText: '新建课表名称',
-                                hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+                                hintStyle: TextStyle(color: AppColors.of(context).textTertiary, fontSize: 14),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                                 filled: true,
-                                fillColor: Colors.white.withValues(alpha: 0.4),
+                                fillColor: AppColors.of(context).panel(0.4),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -1318,7 +1323,11 @@ class TimetableScreenState extends State<TimetableScreen>
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
 
     return Scaffold(
-      backgroundColor: hasWallpaper ? const Color(0xFF1A1A2E) : const Color(0xFFF8F9FC),
+      backgroundColor: hasWallpaper
+        ? const Color(0xFF1A1A2E)
+        : Theme.of(context).brightness == Brightness.dark
+            ? AppPalette.dark.scaffold
+            : const Color(0xFFF8F9FC),
       body: RepaintBoundary(
         child: Stack(
           children: [
@@ -1370,11 +1379,14 @@ class TimetableScreenState extends State<TimetableScreen>
               // 高度 = 原「边框上下 0.5×2 + topPadding + 周选择行 48 + 日期行 52」
               height: topPadding + 48 + 52 + 1.0,
               decoration: BoxDecoration(
-                color: hasWallpaper
-                    ? Colors.white.withValues(alpha: 0.35)
-                    : const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? AppColors.of(context).glassShell
+                        .withValues(alpha: hasWallpaper ? 0.45 : 0.85)
+                    : (hasWallpaper
+                        ? Colors.white.withValues(alpha: 0.35)
+                        : AppColors.of(context).glassShell.withValues(alpha: 0.75)),
                 border: Border(
-                  bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                  bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
                 ),
               ),
             ),
@@ -1430,7 +1442,7 @@ class TimetableScreenState extends State<TimetableScreen>
             AnimatedBuilder(
               animation: _pageController,
               builder: (context, _) {
-                return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _wallpaperIsLight);
+                return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _effectiveWallpaperIsLight);
               },
             ),
           ],
@@ -1460,8 +1472,8 @@ class TimetableScreenState extends State<TimetableScreen>
     final currentPage = rawPage.clamp(0, totalWeeks - 1);
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
     final headerTextColor = hasWallpaper
-        ? (_wallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
-        : const Color(0xFF1A1A2E);
+        ? (_effectiveWallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
+        : AppColors.of(context).textPrimary;
     
     return SizedBox(
       height: 48,
@@ -1595,11 +1607,11 @@ class TimetableScreenState extends State<TimetableScreen>
     Color dayLabelColor;
     Color dateNumberColor;
     if (hasWallpaper) {
-      dayLabelColor = wallpaperIsLight ? Colors.grey.shade700 : Colors.grey.shade400;
-      dateNumberColor = wallpaperIsLight ? Colors.grey.shade900 : Colors.grey.shade300;
+      dayLabelColor = wallpaperIsLight ? Colors.grey.shade600 : Colors.white;
+      dateNumberColor = wallpaperIsLight ? Colors.grey.shade900 : Colors.grey.shade200;
     } else {
-      dayLabelColor = Colors.grey.shade600;
-      dateNumberColor = Colors.grey.shade800;
+      dayLabelColor = AppColors.of(context).textSecondary;
+      dateNumberColor = AppColors.of(context).textPrimary;
     }
     
     // 淡入淡出用文字颜色透明度而非 Opacity（原因见 _buildAnimatedWeekNumber
@@ -1696,12 +1708,12 @@ class TimetableScreenState extends State<TimetableScreen>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
+                            Text(
                               '选择周数',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -1732,7 +1744,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                         style: TextStyle(
                                           fontSize: isSelected ? 18 : 16,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                         ),
                                       ),
                                     );
@@ -1747,12 +1759,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                   child: OutlinedButton(
                                     onPressed: () => Navigator.pop(context),
                                     style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.grey.shade600,
+                                      foregroundColor: AppColors.of(context).textSecondary,
                                       padding: const EdgeInsets.symmetric(vertical: 12),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -1804,7 +1816,7 @@ class TimetableScreenState extends State<TimetableScreen>
       child: Material(
         color: onPressed != null
             ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-            : Colors.grey.shade100,
+            : AppColors.of(context).surfaceAlt,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: onPressed,
@@ -1815,7 +1827,7 @@ class TimetableScreenState extends State<TimetableScreen>
               icon,
               color: onPressed != null
                   ? const Color(0xFF4A90E2)
-                  : Colors.grey.shade400,
+                  : AppColors.of(context).textTertiary,
               size: 20,
             ),
           ),
@@ -1841,6 +1853,21 @@ class TimetableScreenState extends State<TimetableScreen>
 
   /// 构建壁纸背景：视频壁纸优先显示首帧过渡图，视频就绪后覆盖播放
   Widget _buildWallpaperBackground() {
+    final wallpaper = _buildWallpaperLayer();
+    // 深色模式压暗壁纸：与深色界面观感统一，也保证浅色文字可读
+    if (Theme.of(context).brightness == Brightness.dark) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          wallpaper,
+          ColoredBox(color: Colors.black.withValues(alpha: 0.42)),
+        ],
+      );
+    }
+    return wallpaper;
+  }
+
+  Widget _buildWallpaperLayer() {
     if (_isVideoWallpaper) {
       final videoReady = _videoController != null && _videoController!.value.isInitialized;
       return Stack(
@@ -1930,8 +1957,8 @@ class TimetableScreenState extends State<TimetableScreen>
   Widget _buildHolidayPage({bool hasWallpaper = false}) {
     // 根据壁纸深浅决定文字颜色：浅色壁纸用深色字，深色壁纸用白字
     final textColor = hasWallpaper
-        ? (_wallpaperIsLight ? const Color(0xFF1A1A2E) : Colors.white)
-        : const Color(0xFF1A1A2E);
+        ? (_effectiveWallpaperIsLight ? const Color(0xFF1A1A2E) : Colors.white)
+        : AppColors.of(context).textPrimary;
     return RepaintBoundary(
       child: SafeArea(
         child: Center(
@@ -2096,17 +2123,22 @@ class TimetableScreenState extends State<TimetableScreen>
 
   Widget _buildTimeColumn(double cellHeight, double width, {bool hasWallpaper = false}) {
     final timeTextColor = hasWallpaper
-        ? (_wallpaperIsLight ? const Color(0xFF666E78) : const Color(0xFFD0D0D0))
-        : Colors.grey.shade500;
+        ? (_effectiveWallpaperIsLight ? const Color(0xFF666E78) : const Color(0xFFD0D0D0))
+        : AppColors.of(context).textTertiary;
     final timeNumColor = hasWallpaper
-        ? (_wallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
-        : const Color(0xFF1A1A2E);
+        ? (_effectiveWallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
+        : AppColors.of(context).textPrimary;
     return Container(
       width: width,
       decoration: BoxDecoration(
-        color: hasWallpaper ? Colors.white.withValues(alpha: 0.5) : Colors.grey.shade50,
+        color: Theme.of(context).brightness == Brightness.dark
+                            ? AppColors.of(context).glassShell
+                                .withValues(alpha: hasWallpaper ? 0.55 : 1.0)
+                            : (hasWallpaper
+                                ? Colors.white.withValues(alpha: 0.5)
+                                : AppColors.of(context).surfaceAlt),
         border: Border(
-          right: BorderSide(color: Colors.grey.shade200),
+          right: BorderSide(color: AppColors.of(context).borderWeak),
         ),
       ),
       child: Column(
@@ -2116,7 +2148,7 @@ class TimetableScreenState extends State<TimetableScreen>
             height: cellHeight,
             decoration: BoxDecoration(
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak),
               ),
             ),
             child: Center(
@@ -2220,9 +2252,9 @@ class TimetableScreenState extends State<TimetableScreen>
       }
       return Container(
         decoration: BoxDecoration(
-          color: hasWallpaper ? Colors.transparent : Colors.white,
+          color: hasWallpaper ? Colors.transparent : AppColors.of(context).surface,
           border: Border(
-            right: BorderSide(color: Colors.grey.shade200),
+            right: BorderSide(color: AppColors.of(context).borderWeak),
           ),
         ),
         child: Stack(
@@ -2255,15 +2287,25 @@ class TimetableScreenState extends State<TimetableScreen>
                     builder: (context, _) {
                       final v = _emptySlotMaskCurved.value;
                       if (v <= 0.0) return const SizedBox.shrink();
+                      // 模糊区域与遮罩本体同步缩放（同款 0.9→1.0）：
+                      // 静态全尺寸模糊区会在 morph 期间露出"模糊/清晰
+                      // 分界"的一圈描边，跟随缩放后边界始终贴住遮罩边缘
+                      final scale = 0.9 + 0.1 * v;
+                      final base = Rect.fromLTWH(
+                        2,
+                        cellHeight * _selectedEmptyPeriod! + 2,
+                        columnConstraints.maxWidth - 4,
+                        cellHeight - 4,
+                      );
+                      final scaled = Rect.fromCenter(
+                        center: base.center,
+                        width: base.width * scale,
+                        height: base.height * scale,
+                      );
                       return ClipPath(
                         clipper: _CourseBlurClipper([
                           RRect.fromRectAndRadius(
-                            Rect.fromLTWH(
-                              2,
-                              cellHeight * _selectedEmptyPeriod! + 2,
-                              columnConstraints.maxWidth - 4,
-                              cellHeight - 4,
-                            ),
+                            scaled,
                             const Radius.circular(5),
                           ),
                         ]),
@@ -2307,7 +2349,7 @@ class TimetableScreenState extends State<TimetableScreen>
                               2,
                               cellHeight * appearingCourse!.time + 2,
                               columnConstraints.maxWidth - 4,
-                              appearingCourse.duration * cellHeight - 4,
+                              appearingCourse!.duration * cellHeight - 4,
                             ),
                             const Radius.circular(5),
                           ),
@@ -2349,7 +2391,7 @@ class TimetableScreenState extends State<TimetableScreen>
               height: cellHeight,
               decoration: BoxDecoration(
                 border: Border(
-                  bottom: BorderSide(color: Colors.grey.shade200),
+                  bottom: BorderSide(color: AppColors.of(context).borderWeak),
                 ),
               ),
               child: const SizedBox.expand(),
@@ -2622,15 +2664,20 @@ class TimetableScreenState extends State<TimetableScreen>
   }
 
   /// 空白课程块选中后的灰白色遮罩（与非本周课程样式一致，仅占一个小节），中部显示灰色加号
-  Widget _buildEmptySlotSelection(int period, double cellHeight, {
+    Widget _buildEmptySlotSelection(int period, double cellHeight, {
     bool hasWallpaper = false,
     double transparencyFactor = 1.0,
   }) {
     final inactiveT = hasWallpaper ? transparencyFactor : 0.4;
-    final backgroundStart = const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!);
-    final backgroundEnd = const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!);
-    final borderColor = const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
-    final iconColor = const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
+    final palette = AppColors.of(context);
+    // 与非本周卡片完全一致：同底色渐变、同描边策略（深色无白描边）、
+    // 加号与卡片标题同级（textPrimary）
+    final backgroundStart = palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!);
+    final backgroundEnd = palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!);
+    final borderColor = AppColors.isDark(context)
+        ? Colors.transparent
+        : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!);
+    final iconColor = palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
 
     return Positioned(
       top: period * cellHeight + 2,
@@ -2640,8 +2687,6 @@ class TimetableScreenState extends State<TimetableScreen>
       child: IgnorePointer(
         child: Builder(
           builder: (context) {
-            // 无条件注册：构建期子树尚未挂载时 findRenderObject() 会返回 null，
-            // 条件判断会导致注册永远不生效（点击时测量，attached 检查可兜底陈旧上下文）
             _emptySlotMaskContext = context;
             final curved = _emptySlotMaskCurved;
             return AnimatedBuilder(
@@ -2709,7 +2754,8 @@ class TimetableScreenState extends State<TimetableScreen>
       // 原位改放透明点击区——点击后原课程卡片淡入短暂显示 5s（见
       // _beginInactivePeek），左右滑动切换周页自动隐藏（同加号遮罩）
       if (isInactiveInCurrentWeek && !_showInactiveCourses) {
-        final hiddenCourse = _pickFallbackCourse(sameStartCourses, week);
+        final hiddenCourse =
+            sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b);
         // morph 飞行中：浮现卡片与真课程块同样由翻转卡片（复刻）接管，
         // 随 _morphBlockFade 渐隐/渐显（Opacity 包在 Positioned 内部，
         // 避免将 Positioned 包进 IgnorePointer/Opacity 破坏 Stack 布局）
@@ -2725,7 +2771,7 @@ class TimetableScreenState extends State<TimetableScreen>
         continue;
       }
         final course = isInactiveInCurrentWeek
-          ? _pickFallbackCourse(sameStartCourses, week)
+          ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
           : activeCourses.first;
 
       final hasAlternativeCourses = sameStartCourses.length > 1;
@@ -2759,39 +2805,35 @@ class TimetableScreenState extends State<TimetableScreen>
 
   bool _shouldShowCourse(Course course, int week) {
     if (course.weeks == null || course.weeks!.isEmpty) return true;
-
+    
     final weeks = _parseWeeks(course.weeks!);
     return weeks.contains(week);
   }
 
   /// 多课程叠加但本周都不上时选「代表课程」：
-  /// 全部未开始 → 开始周离本周最近者；已全部结束 → 结束周离本周最近者；
-  /// 并列时保持列表原序（稳定）。网格卡片、模糊层、非本周浮现位共用
-  Course _pickFallbackCourse(List<Course> courses, int week) {
-    Course pick(Course best, Course c, int Function(Course) dist) {
-      final dc = dist(c);
-      final db = dist(best);
-      if (dc < db) return c;
-      return best;
+  /// 全部未开始 → 开始周离本周最近者；已全部结束 → 结束周离本周最近者
+  Course _pickFallbackCourse(List<Course> sameStartCourses, int week) {
+    int startWeekOf(Course c) {
+      final w = _parseWeeks(c.weeks ?? '');
+      return w.isEmpty ? week : w.first;
     }
 
-    int startDist(Course c) {
-      final weeks = _parseWeeks(c.weeks ?? '');
-      if (weeks.isEmpty) return 0;
-      return weeks.reduce((a, b) => a < b ? a : b) - week;
+    int endWeekOf(Course c) {
+      final w = _parseWeeks(c.weeks ?? '');
+      return w.isEmpty ? week : w.last;
     }
 
-    int endDist(Course c) {
-      final weeks = _parseWeeks(c.weeks ?? '');
-      if (weeks.isEmpty) return 0;
-      return week - weeks.reduce((a, b) => a > b ? a : b);
+    final notStarted = sameStartCourses.where((c) => startWeekOf(c) > week).toList();
+    if (notStarted.isNotEmpty) {
+      notStarted.sort((a, b) => startWeekOf(a).compareTo(startWeekOf(b)));
+      return notStarted.first;
     }
-
-    final allNotStarted = courses.every((c) => startDist(c) > 0);
-    if (allNotStarted) {
-      return courses.reduce((best, c) => pick(best, c, startDist));
+    final ended = sameStartCourses.where((c) => endWeekOf(c) < week).toList();
+    if (ended.isNotEmpty) {
+      ended.sort((a, b) => endWeekOf(b).compareTo(endWeekOf(a)));
+      return ended.first;
     }
-    return courses.reduce((best, c) => pick(best, c, endDist));
+    return sameStartCourses.first;
   }
 
   Set<int> _parseWeeks(String weeks) {
@@ -2934,19 +2976,23 @@ class TimetableScreenState extends State<TimetableScreen>
       triangleColor = displayColor;
       borderColor = displayColor.withValues(alpha: lerpDouble(0.2, 0.06, effectiveT)!);
     } else {
+      // 非本周设计：去色表达"本周不重要"，文字保持高对比保证可读
       final inactiveT = hasWallpaper ? t : 0.4;
+      final palette = AppColors.of(context);
       gradient = LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
-          const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+          palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+          palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
         ],
       );
-      titleColor = const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
-      metaColor = const Color(0xFFA2A8B0).withValues(alpha: lerpDouble(1.0, 0.6, inactiveT)!);
-      triangleColor = const Color(0xFFCDD2D9).withValues(alpha: lerpDouble(1.0, 0.65, inactiveT)!);
-      borderColor = const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
+      titleColor = palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
+      metaColor = palette.textSecondary.withValues(alpha: lerpDouble(0.80, 0.30, inactiveT)!);
+      triangleColor = palette.textTertiary.withValues(alpha: lerpDouble(0.90, 0.35, inactiveT)!);
+      borderColor = AppColors.isDark(context)
+          ? Colors.transparent
+          : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!);
     }
 
     return Container(
@@ -3019,21 +3065,26 @@ class TimetableScreenState extends State<TimetableScreen>
     final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
     final t = hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0;
     final inactiveT = hasWallpaper ? t : 0.4;
+    final palette = AppColors.of(context);
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
-            const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+            palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+            palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
           ],
         ),
-        border: Border.all(color: const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!)),
+        border: Border.all(
+          color: AppColors.isDark(context)
+              ? Colors.transparent
+              : palette.borderWeak.withValues(alpha: lerpDouble(1.0, 0.45, inactiveT)!),
+        ),
         borderRadius: BorderRadius.circular(5),
       ),
       child: Center(
-        child: Icon(Icons.add, size: 24, color: const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!)),
+        child: Icon(Icons.add, size: 24, color: palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)),
       ),
     );
   }
@@ -3135,6 +3186,7 @@ class TimetableScreenState extends State<TimetableScreen>
             final currentCourse = slotCourses[currentPage];
             final courseColor = _parseColor(currentCourse.color);
             final dialogTasks = _getDialogTasksForCourse(currentCourse);
+            final slideSign = currentPage >= previousPage ? 1.0 : -1.0;
             final dialogWidth = math.min(420.0, MediaQuery.of(context).size.width - 48);
             final headerHeight = _calculateCourseHeaderHeight(
               course: currentCourse,
@@ -3171,70 +3223,54 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                     child: Row(
                                 children: [
-                                  // 课程图标：单一静态组件（不随课程重建），
-                                  // 尺寸随头部高度平滑缩放、颜色随课程渐变，
-                                  // 垂直位置随头部高度动画自然平滑位移保持居中
-                                  AnimatedContainer(
+                                  AnimatedSwitcher(
                                     duration: const Duration(milliseconds: 260),
-                                    curve: Curves.easeOut,
-                                    width: iconBoxSize,
-                                    height: iconBoxSize,
-                                    decoration: BoxDecoration(
-                                      color: courseColor.withValues(alpha: 0.28),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Center(
-                                      child: TweenAnimationBuilder<Color?>(
-                                        duration: const Duration(milliseconds: 260),
-                                        tween: ColorTween(end: courseColor),
-                                        builder: (context, color, child) {
-                                          return Icon(
-                                            Icons.book,
-                                            size: iconGlyphSize,
-                                            color: color,
-                                          );
-                                        },
+                                    switchInCurve: Curves.easeOut,
+                                    switchOutCurve: Curves.easeIn,
+                                    transitionBuilder: (child, anim) {
+                                      return FadeTransition(
+                                        opacity: anim,
+                                        child: SlideTransition(
+                                          position: Tween<Offset>(
+                                            begin: Offset(-0.12 * slideSign, 0),
+                                            end: Offset.zero,
+                                          ).animate(anim),
+                                          child: child,
+                                        ),
+                                      );
+                                    },
+                                    layoutBuilder: (currentChild, previousChildren) {
+                                      return currentChild ?? const SizedBox.shrink();
+                                    },
+                                    child: Container(
+                                      key: ValueKey('course_icon_${currentCourse.id}'),
+                                      width: iconBoxSize,
+                                      height: iconBoxSize,
+                                      decoration: BoxDecoration(
+                                        color: courseColor.withValues(alpha: 0.28),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Icon(
+                                        Icons.book,
+                                        color: courseColor,
+                                        size: iconGlyphSize,
                                       ),
                                     ),
                                   ),
                                   const SizedBox(width: 16),
                                   Expanded(
                                     child: AnimatedSwitcher(
-                                      duration: const Duration(milliseconds: 350),
+                                      duration: const Duration(milliseconds: 220),
                                       switchInCurve: Curves.easeOut,
                                       switchOutCurve: Curves.easeIn,
-                                      // 切换课程时文字原地模糊淡入淡出 + 轻微
-                                      // 原地缩放（参考登录对话框副标题切换）；
-                                      // 「减弱动态效果」开启时去掉模糊，保留
-                                      // 同时长的淡入淡出与缩放
                                       transitionBuilder: (child, anim) {
-                                        if (_reduceMotionEnabled) {
-                                          return FadeTransition(
-                                            opacity: anim,
-                                            child: AnimatedBuilder(
-                                              animation: anim,
-                                              builder: (context, grandChild) => Transform.scale(
-                                                scale: 0.94 + 0.06 * anim.value,
-                                                child: grandChild,
-                                              ),
-                                              child: child,
-                                            ),
-                                          );
-                                        }
                                         return FadeTransition(
                                           opacity: anim,
-                                          child: AnimatedBuilder(
-                                            animation: anim,
-                                            builder: (context, grandChild) => ImageFiltered(
-                                              imageFilter: ImageFilter.blur(
-                                                sigmaX: 8 * (1.0 - anim.value),
-                                                sigmaY: 8 * (1.0 - anim.value),
-                                              ),
-                                              child: Transform.scale(
-                                                scale: 0.94 + 0.06 * anim.value,
-                                                child: grandChild,
-                                              ),
-                                            ),
+                                          child: SlideTransition(
+                                            position: Tween<Offset>(
+                                              begin: Offset(0.08 * slideSign, 0),
+                                              end: Offset.zero,
+                                            ).animate(anim),
                                             child: child,
                                           ),
                                         );
@@ -3262,7 +3298,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                               '@${currentCourse.location!}',
                                               style: TextStyle(
                                                 fontSize: 14,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                                 height: 1.2,
                                               ),
                                               maxLines: 3,
@@ -3273,7 +3309,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                               currentCourse.teacher!,
                                               style: TextStyle(
                                                 fontSize: 14,
-                                                color: Colors.grey.shade600,
+                                                color: AppColors.of(context).textSecondary,
                                                 height: 1.2,
                                               ),
                                               maxLines: 2,
@@ -3284,22 +3320,40 @@ class TimetableScreenState extends State<TimetableScreen>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  // 关闭按钮：单一静态组件——不缩放、不变色，
-                                  // 仅随头部高度动画平滑位移保持居中（高度不变
-                                  // 时完全静止，消除此前按课程 id 重建的闪现）
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: Container(
-                                      width: closeBoxSize,
-                                      height: closeBoxSize,
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withValues(alpha: 0.05),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(
-                                        Icons.close,
-                                        size: closeGlyphSize,
-                                        color: Colors.grey.shade600,
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 260),
+                                    switchInCurve: Curves.easeOut,
+                                    switchOutCurve: Curves.easeIn,
+                                    transitionBuilder: (child, anim) {
+                                      return FadeTransition(
+                                        opacity: anim,
+                                        child: SlideTransition(
+                                          position: Tween<Offset>(
+                                            begin: Offset(0.12 * slideSign, 0),
+                                            end: Offset.zero,
+                                          ).animate(anim),
+                                          child: child,
+                                        ),
+                                      );
+                                    },
+                                    layoutBuilder: (currentChild, previousChildren) {
+                                      return currentChild ?? const SizedBox.shrink();
+                                    },
+                                    child: GestureDetector(
+                                      key: ValueKey('close_btn_${currentCourse.id}'),
+                                      onTap: () => Navigator.pop(context),
+                                      child: Container(
+                                        width: closeBoxSize,
+                                        height: closeBoxSize,
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withValues(alpha: 0.05),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.close,
+                                          size: closeGlyphSize,
+                                          color: AppColors.of(context).textSecondary,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -3412,7 +3466,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                               style: TextStyle(
                                                 fontSize: 16,
                                                 fontWeight: FontWeight.bold,
-                                                color: Colors.grey.shade800,
+                                                color: AppColors.of(context).textPrimary,
                                               ),
                                             ),
                                             TextButton.icon(
@@ -3433,7 +3487,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                               child: Text(
                                                 '暂无任务',
                                                 style: TextStyle(
-                                                  color: Colors.grey.shade400,
+                                                  color: AppColors.of(context).textTertiary,
                                                 ),
                                               ),
                                             ),
@@ -3463,7 +3517,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                           decoration: BoxDecoration(
                                             color: selected
                                                 ? courseColor.withValues(alpha: 0.9)
-                                                : Colors.white.withValues(alpha: 0.4),
+                                                : AppColors.of(context).panel(0.4),
                                             borderRadius: BorderRadius.circular(4),
                                           ),
                                         );
@@ -3474,7 +3528,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       '${currentPage + 1}/${slotCourses.length}',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.grey.shade500,
+                                        color: AppColors.of(context).textTertiary,
                                       ),
                                     ),
                                   ],
@@ -3868,7 +3922,7 @@ class TimetableScreenState extends State<TimetableScreen>
                               Text(
                                 '确定要删除课程"${course.name}"吗？\n相关任务也会被删除。',
                                 textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                                style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
                               ),
                               const SizedBox(height: 24),
                               Row(
@@ -3879,13 +3933,13 @@ class TimetableScreenState extends State<TimetableScreen>
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(vertical: 14),
                                         decoration: BoxDecoration(
-                                          color: Colors.white.withValues(alpha: 0.4),
+                                          color: AppColors.of(context).panel(0.4),
                                           borderRadius: BorderRadius.circular(12),
                                         ),
                                         child: Center(
                                           child: Text(
                                             '取消',
-                                            style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                                            style: TextStyle(color: AppColors.of(context).textSecondary, fontWeight: FontWeight.w600),
                                           ),
                                         ),
                                       ),
@@ -4006,7 +4060,7 @@ class TimetableScreenState extends State<TimetableScreen>
               Text(
                 '确定要删除课表“$name”吗？\n该课表内的所有课程和任务也会被删除。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
               ),
               const SizedBox(height: 24),
               Row(
@@ -4017,13 +4071,13 @@ class TimetableScreenState extends State<TimetableScreen>
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.4),
+                          color: AppColors.of(context).panel(0.4),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Center(
                           child: Text(
                             '取消',
-                            style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                            style: TextStyle(color: AppColors.of(context).textSecondary, fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
@@ -4169,9 +4223,9 @@ class TimetableScreenState extends State<TimetableScreen>
                         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.7),
+                            color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.78 : 0.7),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
+                            border: Border.all(color: AppColors.of(context).glassBorder, width: 0.5),
                             boxShadow: [
                               BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 12, offset: const Offset(0, 4)),
                             ],
@@ -4187,7 +4241,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                   borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
                                   onTap: () => Navigator.pop(context, 'edit_current'),
                                 ),
-                                Divider(height: 1, color: Colors.grey.shade200),
+                                Divider(height: 1, color: AppColors.of(context).borderWeak),
                                 _buildCourseEditMenuItem(
                                   icon: Icons.add_circle_outline,
                                   label: '添加同时段课程',
@@ -4233,9 +4287,9 @@ class TimetableScreenState extends State<TimetableScreen>
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
-                    color: Color(0xFF333333),
+                    color: AppColors.of(context).textPrimary,
                   ),
                 ),
               ),
@@ -4256,9 +4310,9 @@ class TimetableScreenState extends State<TimetableScreen>
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.4),
+        color: AppColors.of(context).panel(0.4),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isCompleted ? Colors.grey.shade300 : Colors.grey.shade200),
+        border: Border.all(color: isCompleted ? AppColors.of(context).borderWeak : AppColors.of(context).borderWeak),
       ),
       child: Row(
         children: [
@@ -4296,7 +4350,7 @@ class TimetableScreenState extends State<TimetableScreen>
                 color: isCompleted ? courseColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: isCompleted ? courseColor : Colors.grey.shade400,
+                  color: isCompleted ? courseColor : AppColors.of(context).textTertiary,
                   width: 2,
                 ),
               ),
@@ -4310,7 +4364,7 @@ class TimetableScreenState extends State<TimetableScreen>
             width: 4,
             height: 40,
             decoration: BoxDecoration(
-              color: isCompleted ? Colors.grey.shade400 : (isOverdue ? Colors.red : priorityColor),
+              color: isCompleted ? AppColors.of(context).textTertiary : (isOverdue ? Colors.red : priorityColor),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -4333,7 +4387,7 @@ class TimetableScreenState extends State<TimetableScreen>
                         task.type,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isCompleted ? Colors.grey.shade500 : priorityColor,
+                          color: isCompleted ? AppColors.of(context).textTertiary : priorityColor,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -4345,7 +4399,7 @@ class TimetableScreenState extends State<TimetableScreen>
                         style: TextStyle(
                           fontWeight: FontWeight.w500,
                           fontSize: 13,
-                          color: isCompleted ? Colors.grey.shade500 : null,
+                          color: isCompleted ? AppColors.of(context).textTertiary : null,
                           decoration: isCompleted ? TextDecoration.lineThrough : null,
                         ),
                         maxLines: 1,
@@ -4360,8 +4414,8 @@ class TimetableScreenState extends State<TimetableScreen>
                   style: TextStyle(
                     fontSize: 11,
                     color: isCompleted 
-                        ? Colors.grey.shade400 
-                        : (isOverdue ? Colors.red : Colors.grey.shade600),
+                        ? AppColors.of(context).textTertiary 
+                        : (isOverdue ? Colors.red : AppColors.of(context).textSecondary),
                     decoration: isCompleted ? TextDecoration.lineThrough : null,
                   ),
                 ),
@@ -4373,7 +4427,7 @@ class TimetableScreenState extends State<TimetableScreen>
               behavior: HitTestBehavior.translucent,
               onPointerDown: (_) => HapticFeedback.selectionClick(),
               child: BlurredPopupMenuButton<String>(
-                icon: Icon(Icons.more_vert, color: Colors.grey.shade400, size: 20),
+                icon: Icon(Icons.more_vert, color: AppColors.of(context).textTertiary, size: 20),
                 items: const [
                   BlurredPopupMenuItem(
                     value: 'edit',
@@ -4517,14 +4571,14 @@ class TimetableScreenState extends State<TimetableScreen>
                                         labelText: '任务名称',
                                         prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7)),
                                         filled: true,
-                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        fillColor: AppColors.of(context).panel(0.4),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -4537,16 +4591,16 @@ class TimetableScreenState extends State<TimetableScreen>
                                       children: [
                                         Icon(Icons.category_outlined, color: courseColor.withValues(alpha: 0.7), size: 20),
                                         const SizedBox(width: 8),
-                                        Text('任务类型', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                                        Text('任务类型', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
                                       ],
                                     ),
                                     const SizedBox(height: 8),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 12),
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.4),
+                                        color: AppColors.of(context).panel(0.4),
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.grey.shade200),
+                                        border: Border.all(color: AppColors.of(context).borderWeak),
                                       ),
                                       child: BlurredDropdown<String>(
                                         value: type,
@@ -4587,9 +4641,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                       child: Container(
                                         padding: const EdgeInsets.all(16),
                                         decoration: BoxDecoration(
-                                          color: Colors.white.withValues(alpha: 0.4),
+                                          color: AppColors.of(context).panel(0.4),
                                           borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: Colors.grey.shade200),
+                                          border: Border.all(color: AppColors.of(context).borderWeak),
                                         ),
                                         child: Row(
                                           children: [
@@ -4599,12 +4653,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                               child: Column(
                                                 crossAxisAlignment: CrossAxisAlignment.start,
                                                 children: [
-                                                  Text('截止日期', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                                                  Text('截止日期', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
                                                   Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: const TextStyle(fontWeight: FontWeight.w500)),
                                                 ],
                                               ),
                                             ),
-                                            Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                                            Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
                                           ],
                                         ),
                                       ),
@@ -4614,7 +4668,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       children: [
                                         Icon(Icons.flag_outlined, color: courseColor.withValues(alpha: 0.7), size: 20),
                                         const SizedBox(width: 8),
-                                        Text('优先级', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                                        Text('优先级', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
                                       ],
                                     ),
                                     const SizedBox(height: 8),
@@ -4634,10 +4688,10 @@ class TimetableScreenState extends State<TimetableScreen>
                                               margin: const EdgeInsets.symmetric(horizontal: 4),
                                               padding: const EdgeInsets.symmetric(vertical: 10),
                                               decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.4),
+                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).panel(0.4),
                                                 borderRadius: BorderRadius.circular(10),
                                                 border: Border.all(
-                                                  color: isSelected ? priorityColor : Colors.grey.shade200,
+                                                  color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
                                                   width: isSelected ? 2 : 1,
                                                 ),
                                               ),
@@ -4645,7 +4699,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                 p,
                                                 textAlign: TextAlign.center,
                                                 style: TextStyle(
-                                                  color: isSelected ? priorityColor : Colors.grey.shade600,
+                                                  color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
                                                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                                 ),
                                               ),
@@ -4663,14 +4717,14 @@ class TimetableScreenState extends State<TimetableScreen>
                                         labelText: '备注（可选）',
                                         prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7)),
                                         filled: true,
-                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        fillColor: AppColors.of(context).panel(0.4),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -4852,15 +4906,15 @@ class TimetableScreenState extends State<TimetableScreen>
                                         labelText: '任务名称',
                                         prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
                                         filled: true,
-                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        fillColor: AppColors.of(context).panel(0.4),
                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -4878,7 +4932,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                           '任务类型',
                                           style: TextStyle(
                                             fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                            color: AppColors.of(context).textSecondary,
                                           ),
                                         ),
                                       ],
@@ -4887,9 +4941,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                     Container(
                                       padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 10 : 12),
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.4),
+                                        color: AppColors.of(context).panel(0.4),
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.grey.shade200),
+                                        border: Border.all(color: AppColors.of(context).borderWeak),
                                       ),
                                       child: BlurredDropdown<String>(
                                         value: type,
@@ -4930,9 +4984,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                       child: Container(
                                         padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
                                         decoration: BoxDecoration(
-                                          color: Colors.white.withValues(alpha: 0.4),
+                                          color: AppColors.of(context).panel(0.4),
                                           borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: Colors.grey.shade200),
+                                          border: Border.all(color: AppColors.of(context).borderWeak),
                                         ),
                                         child: Row(
                                           children: [
@@ -4942,12 +4996,12 @@ class TimetableScreenState extends State<TimetableScreen>
                                               child: Column(
                                                 crossAxisAlignment: CrossAxisAlignment.start,
                                                 children: [
-                                                  Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey.shade600)),
+                                                  Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: AppColors.of(context).textSecondary)),
                                                   Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 14 : 16)),
                                                 ],
                                               ),
                                             ),
-                                            Icon(Icons.chevron_right, color: Colors.grey.shade400, size: isSmallScreen ? 18 : 20),
+                                            Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary, size: isSmallScreen ? 18 : 20),
                                           ],
                                         ),
                                       ),
@@ -4961,7 +5015,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                           '优先级',
                                           style: TextStyle(
                                             fontSize: isSmallScreen ? 11 : 12,
-                                            color: Colors.grey.shade600,
+                                            color: AppColors.of(context).textSecondary,
                                           ),
                                         ),
                                       ],
@@ -4983,10 +5037,10 @@ class TimetableScreenState extends State<TimetableScreen>
                                               margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
                                               padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
                                               decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.4),
+                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).panel(0.4),
                                                 borderRadius: BorderRadius.circular(10),
                                                 border: Border.all(
-                                                  color: isSelected ? priorityColor : Colors.grey.shade200,
+                                                  color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
                                                   width: isSelected ? 2 : 1,
                                                 ),
                                               ),
@@ -4995,7 +5049,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                                 textAlign: TextAlign.center,
                                                 style: TextStyle(
                                                   fontSize: isSmallScreen ? 13 : 14,
-                                                  color: isSelected ? priorityColor : Colors.grey.shade600,
+                                                  color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
                                                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                                 ),
                                               ),
@@ -5013,15 +5067,15 @@ class TimetableScreenState extends State<TimetableScreen>
                                         labelText: '备注（可选）',
                                         prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
                                         filled: true,
-                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        fillColor: AppColors.of(context).panel(0.4),
                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: Colors.grey.shade200),
+                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -5044,7 +5098,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       style: OutlinedButton.styleFrom(
                                         padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: AppColors.of(context).borderWeak),
                                       ),
                                       child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
                                     ),
@@ -5102,10 +5156,10 @@ class TimetableScreenState extends State<TimetableScreen>
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.grey.shade100,
+            color: AppColors.of(context).surfaceAlt,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(icon, size: 18, color: Colors.grey.shade600),
+          child: Icon(icon, size: 18, color: AppColors.of(context).textSecondary),
         ),
         const SizedBox(width: 12),
         Column(
@@ -5115,7 +5169,7 @@ class TimetableScreenState extends State<TimetableScreen>
               label,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade500,
+                color: AppColors.of(context).textTertiary,
               ),
             ),
             Text(
@@ -5139,13 +5193,14 @@ class TimetableScreenState extends State<TimetableScreen>
   }) {
     final isClickable = onTap != null;
     final content = AnimatedContainer(
+      key: ValueKey(Theme.of(context).brightness),
       duration: const Duration(milliseconds: 150),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.4),
+        color: AppColors.of(context).panel(0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: Colors.grey.shade200,
+          color: AppColors.of(context).borderWeak,
         ),
       ),
       child: Row(
@@ -5153,13 +5208,13 @@ class TimetableScreenState extends State<TimetableScreen>
           Container(
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.4),
+              color: AppColors.of(context).panel(0.4),
               borderRadius: BorderRadius.circular(5),
             ),
             child: Icon(
               icon,
               size: 14,
-              color: Colors.grey.shade600,
+              color: AppColors.of(context).textSecondary,
             ),
           ),
           const SizedBox(width: 8),
@@ -5171,7 +5226,7 @@ class TimetableScreenState extends State<TimetableScreen>
                   label,
                   style: TextStyle(
                     fontSize: 10,
-                    color: Colors.grey.shade500,
+                    color: AppColors.of(context).textTertiary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -5192,7 +5247,7 @@ class TimetableScreenState extends State<TimetableScreen>
             Icon(
               Icons.chevron_right,
               size: 14,
-              color: Colors.grey.shade400,
+              color: AppColors.of(context).textTertiary,
             ),
         ],
       ),
@@ -5231,10 +5286,11 @@ class TimetableScreenState extends State<TimetableScreen>
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.35),
+                  color: AppColors.of(context).glassShell
+                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.8),
+                    color: AppColors.of(context).glassBorder,
                     width: 1.5,
                   ),
                   boxShadow: [
@@ -5274,10 +5330,10 @@ class TimetableScreenState extends State<TimetableScreen>
                                 width: 32,
                                 height: 32,
                                 decoration: BoxDecoration(
-                                  color: Colors.grey.shade100,
+                                  color: AppColors.of(context).surfaceAlt,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                                child: Icon(Icons.close, size: 18, color: AppColors.of(context).textSecondary),
                               ),
                             ),
                           ],
@@ -5433,7 +5489,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                 }(),
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                  color: AppColors.of(context).textSecondary,
                                 ),
                               ),
                             ),
@@ -5555,10 +5611,11 @@ class TimetableScreenState extends State<TimetableScreen>
             filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
+                color: AppColors.of(context).glassShell
+                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.8),
+                  color: AppColors.of(context).glassBorder,
                   width: 1.5,
                 ),
                 boxShadow: [
@@ -5597,10 +5654,10 @@ class TimetableScreenState extends State<TimetableScreen>
                               width: 32,
                               height: 32,
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
+                                color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(Icons.close, size: 18, color: Colors.grey.shade600),
+                              child: Icon(Icons.close, size: 18, color: AppColors.of(context).textSecondary),
                             ),
                           ),
                         ],
@@ -5769,11 +5826,11 @@ class TimetableScreenState extends State<TimetableScreen>
                             padding: const EdgeInsets.all(40),
                             child: Column(
                               children: [
-                                Icon(Icons.book_outlined, size: 48, color: Colors.grey.shade400),
+                                Icon(Icons.book_outlined, size: 48, color: AppColors.of(context).textTertiary),
                                 const SizedBox(height: 12),
                                 Text(
                                   '暂无课程',
-                                  style: TextStyle(color: Colors.grey.shade500),
+                                  style: TextStyle(color: AppColors.of(context).textTertiary),
                                 ),
                                 const SizedBox(height: 8),
                                 TextButton(
@@ -5801,9 +5858,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.4),
+                                    color: AppColors.of(context).panel(0.4),
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey.shade200),
+                                    border: Border.all(color: AppColors.of(context).borderWeak),
                                   ),
                                   child: ListTile(
                                     leading: Container(
@@ -5820,7 +5877,7 @@ class TimetableScreenState extends State<TimetableScreen>
                                       style: const TextStyle(fontWeight: FontWeight.w500),
                                     ),
                                     subtitle: courses.first.teacher != null && courses.first.teacher!.isNotEmpty
-                                        ? Text(courses.first.teacher!, style: TextStyle(fontSize: 12, color: Colors.grey.shade600))
+                                        ? Text(courses.first.teacher!, style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary))
                                         : null,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
@@ -6327,7 +6384,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                   maxHeight: dialogMaxHeight,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.of(context).surface,
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
@@ -6397,15 +6454,15 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                 labelText: '任务名称',
                                 prefixIcon: Icon(Icons.task, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppColors.of(context).surfaceAlt,
                                 contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade200),
+                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade200),
+                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -6423,7 +6480,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                   '任务类型',
                                   style: TextStyle(
                                     fontSize: isSmallScreen ? 11 : 12,
-                                    color: Colors.grey.shade600,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ],
@@ -6432,9 +6489,9 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                             Container(
                               padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 8 : 12),
                               decoration: BoxDecoration(
-                                color: Colors.grey.shade50,
+                                color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.grey.shade200),
+                                border: Border.all(color: AppColors.of(context).borderWeak),
                               ),
                               // BlurredDropdown（而非原生 DropdownButton）：原生下拉经子路由
                               // 显示，收起时路由焦点恢复会钻回同对话框内的任务名称输入框，
@@ -6478,9 +6535,9 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               child: Container(
                                 padding: EdgeInsets.all(isSmallScreen ? 10 : 16),
                                 decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
+                                  color: AppColors.of(context).surfaceAlt,
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.grey.shade200),
+                                  border: Border.all(color: AppColors.of(context).borderWeak),
                                 ),
                                 child: Row(
                                   children: [
@@ -6490,12 +6547,12 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey.shade600)),
+                                          Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: AppColors.of(context).textSecondary)),
                                           Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 13 : 16)),
                                         ],
                                       ),
                                     ),
-                                    Icon(Icons.chevron_right, color: Colors.grey.shade400, size: isSmallScreen ? 16 : 20),
+                                    Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary, size: isSmallScreen ? 16 : 20),
                                   ],
                                 ),
                               ),
@@ -6509,7 +6566,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                   '优先级',
                                   style: TextStyle(
                                     fontSize: isSmallScreen ? 11 : 12,
-                                    color: Colors.grey.shade600,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ],
@@ -6531,10 +6588,10 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                       margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
                                       padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
                                       decoration: BoxDecoration(
-                                        color: isSelected ? priorityColor.withValues(alpha: 0.15) : Colors.grey.shade50,
+                                        color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).surfaceAlt,
                                         borderRadius: BorderRadius.circular(10),
                                         border: Border.all(
-                                          color: isSelected ? priorityColor : Colors.grey.shade200,
+                                          color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
                                           width: isSelected ? 2 : 1,
                                         ),
                                       ),
@@ -6543,7 +6600,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
                                           fontSize: isSmallScreen ? 13 : 14,
-                                          color: isSelected ? priorityColor : Colors.grey.shade600,
+                                          color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                         ),
                                       ),
@@ -6561,15 +6618,15 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                 labelText: '备注（可选）',
                                 prefixIcon: Icon(Icons.note_outlined, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
                                 filled: true,
-                                fillColor: Colors.grey.shade50,
+                                fillColor: AppColors.of(context).surfaceAlt,
                                 contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade200),
+                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade200),
+                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -6592,7 +6649,7 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               style: OutlinedButton.styleFrom(
                                 padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 10 : 14),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: AppColors.of(context).borderWeak),
                               ),
                               child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
                             ),
@@ -7037,7 +7094,7 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
                       // （全白）连续
                       Opacity(
                         opacity: dissolve,
-                        child: const ColoredBox(color: Colors.white),
+                        child: ColoredBox(color: AppColors.of(context).surface),
                       ),
                       if (dissolve < 0.995)
                         Opacity(
@@ -7118,7 +7175,7 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
                           padding: paperInsets,
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(cardRadius),
-                            child: const ColoredBox(color: Colors.white),
+                            child: ColoredBox(color: AppColors.of(context).surface),
                           ),
                         ),
                       ),
@@ -8254,7 +8311,7 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
                 onTap: _toggleSubMenu,
               ),
             ),
-            Container(width: 1, height: 24, color: Colors.grey.withValues(alpha: 0.25)),
+            Container(width: 1, height: 24, color: AppColors.of(context).borderWeak),
             Expanded(
               child: _menuButton(
                 icon: Icons.delete_outline,
@@ -8313,8 +8370,8 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
             filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.72),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+                color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.78 : 0.72),
+                border: Border.all(color: AppColors.of(context).glassBorder),
               ),
               child: child,
             ),
@@ -8386,7 +8443,7 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
                     maxLines: 1,
                     softWrap: false,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+                    style: TextStyle(fontSize: 14, color: AppColors.of(context).textPrimary),
                   ),
                 ),
               ],

@@ -25,6 +25,8 @@ import '../services/notification_service.dart';
 import '../widgets/blur_selection_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../widgets/app_text_field.dart';
+import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
 
 enum _CloudSyncAction {
   syncFromCloud,
@@ -128,11 +130,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.of(context).surface,
         borderRadius: BorderRadius.circular(8),
         // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
         border: Border.all(
-          color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4),
+          color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
         ),
       ),
       // BlurredDropdown（而非原生 DropdownButton）：原生下拉经子路由显示，
@@ -237,7 +239,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Row(
+                            Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(
@@ -245,7 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   style: TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
-                                    color: Color(0xFF1A1A2E),
+                                    color: AppColors.of(context).textPrimary,
                                   ),
                                 ),
                                 SizedBox(width: 6),
@@ -257,19 +259,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.4),
+                                color: AppColors.of(context).panel(0.4),
                                 borderRadius: BorderRadius.circular(10),
                                 // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
                                 border: _reduceMotionEnabled
-                                    ? Border.all(color: Colors.grey.shade300)
+                                    ? Border.all(color: AppColors.of(context).borderWeak)
                                     : null,
                               ),
                               child: Row(
                                 children: [
-                                  const Expanded(
+                                  Expanded(
                                     child: Text(
                                       '自定义壁纸',
-                                      style: TextStyle(fontSize: 15, color: Color(0xFF1A1A2E)),
+                                      style: TextStyle(fontSize: 15, color: AppColors.of(context).textPrimary),
                                     ),
                                   ),
                                   Switch(
@@ -394,8 +396,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   return Image.file(file, fit: BoxFit.cover);
 })
                                                       : Container(
-                                                          color: Colors.white.withValues(alpha: 0.4),
-                                                          child: Icon(Icons.broken_image, color: Colors.grey.shade400),
+                                                          color: AppColors.of(context).panel(0.4),
+                                                          child: Icon(Icons.broken_image, color: AppColors.of(context).textTertiary),
                                                         ),
                                                   Container(
                                                     decoration: BoxDecoration(
@@ -403,14 +405,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                       border: Border.all(
                                                         color: isActive && localEnabled
                                                             ? const Color(0xFF4A90E2)
-                                                            : Colors.white.withValues(alpha: 0.4),
+                                                            : AppColors.of(context).panel(0.4),
                                                         width: isActive && localEnabled ? 2.5 : 1,
                                                       ),
                                                     ),
                                                   ),
                                                   if (!localEnabled)
                                                     Container(
-                                                      color: Colors.white.withValues(alpha: 0.4),
+                                                      color: AppColors.of(context).panel(0.4),
                                                     ),
                                                   if (dialogDeleteMode)
                                                     Positioned(
@@ -503,13 +505,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                             fit: StackFit.expand,
                                             children: [
                                               Container(
-                                                color: Colors.white.withValues(alpha: 0.4),
+                                                color: AppColors.of(context).panel(0.4),
                                                 child: Column(
                                                   mainAxisAlignment: MainAxisAlignment.center,
                                                   children: [
-                                                    Icon(Icons.add, color: Colors.grey.shade500, size: 32),
+                                                    Icon(Icons.add, color: AppColors.of(context).textTertiary, size: 32),
                                                     const SizedBox(height: 4),
-                                                    Text('添加图片/视频', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                                                    Text('添加图片/视频', style: TextStyle(fontSize: 12, color: AppColors.of(context).textTertiary)),
                                                   ],
                                                 ),
                                               ),
@@ -520,14 +522,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                                   // 改用浅灰细边（与其他磁贴同款）
                                                   border: Border.all(
                                                     color: _reduceMotionEnabled
-                                                        ? Colors.grey.shade300
-                                                        : Colors.white.withValues(alpha: 0.4),
+                                                        ? AppColors.of(context).borderWeak
+                                                        : AppColors.of(context).panel(0.4),
                                                   ),
                                                 ),
                                               ),
                                               if (!localEnabled)
                                                 Container(
-                                                  color: Colors.white.withValues(alpha: 0.4),
+                                                  color: AppColors.of(context).panel(0.4),
                                                 ),
                                             ],
                                           ),
@@ -548,7 +550,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -590,12 +592,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
-                              '背景透明度',
+                            Text('背景透明度',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -626,7 +627,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         style: TextStyle(
                                           fontSize: isSelected ? 18 : 16,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                         ),
                                       ),
                                     );
@@ -640,19 +641,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                 decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.4),
+                                  color: AppColors.of(context).panel(0.4),
                                   borderRadius: BorderRadius.circular(10),
                                   // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
                                   border: _reduceMotionEnabled
-                                      ? Border.all(color: Colors.grey.shade300)
+                                      ? Border.all(color: AppColors.of(context).borderWeak)
                                       : null,
                                 ),
                                 child: Row(
                                   children: [
-                                    const Expanded(
+                                    Expanded(
                                       child: Text(
                                         '卡片模糊',
-                                        style: TextStyle(fontSize: 15, color: Color(0xFF1A1A2E)),
+                                        style: TextStyle(fontSize: 15, color: AppColors.of(context).textPrimary),
                                       ),
                                     ),
                                     Switch(
@@ -680,7 +681,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -784,7 +785,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final topPadding = MediaQuery.of(context).padding.top;
     
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FC),
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? AppPalette.dark.scaffold
+          : const Color(0xFFF8F9FC),
       body: Stack(
         children: [
           NotificationListener<ScrollNotification>(
@@ -838,7 +841,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
                                 color: StorageService.isHoliday()
-                                    ? Colors.grey.withValues(alpha: 0.15)
+                                    ? AppColors.of(context).chipIdle
                                     : const Color(0xFF4A90E2).withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(20),
                               ),
@@ -850,7 +853,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         : '第 ${StorageService.getCurrentWeek()} 周',
                                 style: TextStyle(
                                   color: StorageService.isHoliday()
-                                      ? Colors.grey.shade600
+                                      ? AppColors.of(context).textSecondary
                                       : const Color(0xFF4A90E2),
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -1064,6 +1067,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(height: 12),
                         _buildSettingsGroup([
                           _buildSettingsItem(
+                            // 左侧图标随当前生效模式切换：深色月亮 / 浅色太阳
+                            icon: AppColors.isDark(context)
+                                ? Icons.dark_mode
+                                : Icons.light_mode,
+                            title: '界面风格',
+                            subtitle: _themeModeLabel(
+                                context.watch<ThemeController>().mode),
+                            trailing: _buildThemeModeSelector(),
+                          ),
+                          _buildDivider(),
+                          _buildSettingsItem(
                             icon: Icons.image_outlined,
                             title: '课表壁纸',
                             subtitle: _wallpaperEnabled && _wallpaperPath != null
@@ -1101,7 +1115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   child: Icon(
                                     Icons.help_outline,
                                     size: 15,
-                                    color: Colors.grey.shade500,
+                                    color: AppColors.of(context).textTertiary,
                                   ),
                                 ),
                               ],
@@ -1124,7 +1138,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ]),
                         const SizedBox(height: 24),
-                        _buildSectionTitle('数据管理'),
+                        // 本栏收纳「应用自身信息 + 支持开发者 + 维护类操作」：
+                        // 关于 / 打赏支持 / 自动检查更新 / 清除所有数据
+                        _buildSectionTitle('关于与支持'),
                         const SizedBox(height: 12),
                         _buildSettingsGroup([
                           _buildSettingsItem(
@@ -1132,6 +1148,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: '关于',
                             subtitle: 'CourseHub v$appVersion',
                             onTap: _showAboutDialog,
+                          ),
+                          _buildDivider(),
+                          _buildSettingsItem(
+                            icon: Icons.volunteer_activism_outlined,
+                            title: '打赏支持',
+                            onTap: _showDonationDialog,
                           ),
                           _buildDivider(),
                           _buildSettingsItem(
@@ -1154,7 +1176,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   child: Icon(
                                     Icons.help_outline,
                                     size: 15,
-                                    color: Colors.grey.shade500,
+                                    color: AppColors.of(context).textTertiary,
                                   ),
                                 ),
                               ],
@@ -1206,16 +1228,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFFF8F9FC).withValues(alpha: 0.75),
+              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
               border: Border(
-                bottom: BorderSide(color: Colors.grey.shade200, width: 0.5),
+                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
               ),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(height: topPadding),
-                const SizedBox(
+                SizedBox(
                   height: 56,
                   child: Center(
                     child: Text(
@@ -1223,7 +1245,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1A1A2E),
+                        color: AppColors.of(context).textPrimary,
                       ),
                     ),
                   ),
@@ -1241,10 +1263,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.only(left: 4),
       child: Text(
         title,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.bold,
-          color: Color(0xFF1A1A2E),
+          color: AppColors.of(context).textPrimary,
         ),
       ),
     );
@@ -1364,7 +1386,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppColors.of(context).borderWeak),
       ),
       child: Column(
         children: items,
@@ -1415,7 +1437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : null,
       trailing: trailing ?? Icon(
         Icons.chevron_right,
-        color: Colors.grey.shade400,
+        color: AppColors.of(context).textTertiary,
       ),
       onTap: onTap,
     );
@@ -1425,11 +1447,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Divider(
       height: 1,
       indent: 56,
-      color: Colors.grey.shade200,
+      color: AppColors.of(context).borderWeak,
     );
   }
 
-  Future<bool> _showAIConsentDialog() async {
+  /// 深色模式当前值的描述文案
+  String _themeModeLabel(ThemeMode mode) {
+    switch (mode) {
+      case ThemeMode.dark:
+        return '深色';
+      case ThemeMode.system:
+        return '跟随系统';
+      case ThemeMode.light:
+        return '浅色';
+    }
+  }
+
+  /// 「个性化 → 界面风格」三段可拖动滑块：浅色 / 深色 / 跟随
+  /// （复用与思考强度/视觉能力支持同款的 SegmentedSelector）
+  Widget _buildThemeModeSelector() {
+    return SizedBox(
+      width: 172,
+      child: SegmentedSelector<ThemeMode>(
+        whiteKnobInLight: true,
+        items: const [
+          SegmentItem(label: '浅色', value: ThemeMode.light),
+          SegmentItem(label: '深色', value: ThemeMode.dark),
+          SegmentItem(label: '跟随', value: ThemeMode.system),
+        ],
+        activeValue: context.watch<ThemeController>().mode,
+        onChanged: (mode) {
+          HapticFeedback.selectionClick();
+          ThemeController.instance.setMode(mode);
+        },
+      ),
+    );
+  }
+
+Future<bool> _showAIConsentDialog() async {
     final accepted = await AIConsentDialog.show(context);
     if (!mounted || !accepted) return false;
     final prefs = await SharedPreferences.getInstance();
@@ -1506,13 +1561,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   width: 48,
                                   height: 48,
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade800,
+                                    color: AppColors.of(context).surfaceAlt,
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Icon(
+                                  child: Icon(
                                     Icons.code,
                                     size: 24,
-                                    color: Colors.white,
+                                    color: AppColors.of(context).textPrimary,
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -1530,7 +1585,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               '选择或配置AI服务提供商',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -1570,7 +1625,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.white.withValues(alpha: 0.4),
+                                              color: AppColors.of(context).panel(0.4),
                                             ),
                                           ),
                                           Padding(
@@ -1579,14 +1634,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                               '推荐选项',
                                               style: TextStyle(
                                                 fontSize: 12,
-                                                color: Colors.grey.shade500,
+                                                color: AppColors.of(context).textTertiary,
                                               ),
                                             ),
                                           ),
                                           Expanded(
                                             child: Container(
                                               height: 1,
-                                              color: Colors.white.withValues(alpha: 0.4),
+                                              color: AppColors.of(context).panel(0.4),
                                             ),
                                           ),
                                         ],
@@ -1636,7 +1691,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('关闭'),
@@ -1662,13 +1717,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4A90E2).withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.4),
+          color: isSelected ? const Color(0xFF4A90E2).withValues(alpha: 0.1) : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             // 未选中描边：减弱动态时改浅灰（白描边与近实底壳背景融合）
             color: isSelected
                 ? const Color(0xFF4A90E2)
-                : (_reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
+                : (_reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -1679,13 +1734,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               decoration: BoxDecoration(
                 color: isSelected
                     ? const Color(0xFF4A90E2).withValues(alpha: 0.2)
-                    : Colors.white.withValues(alpha: 0.4),
+                    : AppColors.of(context).panel(0.4),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
                 icon,
                 size: 20,
-                color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+                color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
               ),
             ),
             const SizedBox(width: 12),
@@ -1706,7 +1761,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     subtitle,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ],
@@ -1714,7 +1769,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             isSelected
                 ? const Icon(Icons.check_circle, color: Color(0xFF4A90E2), size: 20)
-                : Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                : Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
           ],
         ),
       ),
@@ -1738,13 +1793,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: isSelected ? color.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.4),
+            color: isSelected ? color.withValues(alpha: 0.1) : AppColors.of(context).panel(0.4),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               // 未选中描边：减弱动态时改浅灰（白描边与近实底壳背景融合）
               color: isSelected
                   ? color
-                  : (_reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
+                  : (_reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
               width: isSelected ? 2 : 1,
             ),
           ),
@@ -1786,7 +1841,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       subtitle,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey.shade600,
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                   ],
@@ -1796,7 +1851,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (isSelected)
                 Icon(Icons.check_circle, color: color, size: 20)
               else
-                Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
           ],
         ),
       ),
@@ -1845,17 +1900,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE3F0FB),
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF4A90E2).withValues(alpha: 0.18)
+                            : const Color(0xFFE3F0FB),
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
                           color: const Color(0xFF3B82C4).withValues(alpha: 0.45),
                         ),
                       ),
-                      child: const Text(
+                      child: Text(
                         '限时免费',
                         style: TextStyle(
                           fontSize: 10,
-                          color: Color(0xFF3B82C4),
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? const Color(0xFF9CC8F5)
+                              : const Color(0xFF3B82C4),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1867,7 +1926,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   '高峰时段可能响应缓慢或无响应',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                   ),
                 ),
               ],
@@ -1879,11 +1938,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             width: 128,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.of(context).surface,
               borderRadius: BorderRadius.circular(8),
               // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
               border: Border.all(
-                color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4),
+                color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
               ),
             ),
             // BlurredDropdown（而非原生 DropdownButton）：与全局毛玻璃风格统一的下拉菜单
@@ -1895,9 +1954,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // 菜单独立定宽（与对话页徽章节点菜单同宽 120，
               // "节点 X" + 问号图标 + 勾号槽不换行）
               menuWidth: 120,
-              hint: const Text(
+              hint: Text(
                 '未使用',
-                style: TextStyle(fontSize: 13, color: Colors.grey),
+                style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
               ),
               icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
               items: [
@@ -1996,7 +2055,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 13,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -2006,14 +2065,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     decoration: InputDecoration(
                       hintText: '请输入 Agnes AI API Key',
                       filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.4),
+                      fillColor: AppColors.of(context).panel(0.4),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
+                        borderSide: BorderSide(color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4)),
+                        borderSide: BorderSide(color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -2028,7 +2087,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         '模型',
                         style: TextStyle(
                           fontSize: 14,
-                          color: Colors.grey.shade700,
+                          color: AppColors.of(context).textSecondary,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -2036,11 +2095,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: AppColors.of(context).surface,
                             borderRadius: BorderRadius.circular(12),
                             // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
                             border: Border.all(
-                              color: _reduceMotionEnabled ? Colors.grey.shade300 : Colors.white.withValues(alpha: 0.4),
+                              color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
                             ),
                           ),
                           // BlurredDropdown：与全局毛玻璃风格统一的下拉菜单
@@ -2078,7 +2137,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 16),
                   // 思考强度：与自定义API同款滑动选项卡（1:1复刻）
-                  const Text('思考强度', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                   const SizedBox(height: 8),
                   SegmentedSelector<String>(
                     items: const [
@@ -2104,7 +2163,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.grey.shade300),
+                              side: BorderSide(color: AppColors.of(context).borderWeak),
                             ),
                           ),
                           child: const Text('取消'),
@@ -2144,7 +2203,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.grey.shade800,
+                            backgroundColor: AppColors.isDark(context)
+                                ? AppColors.of(context).surfaceAlt
+                                : Colors.grey.shade800,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -2306,7 +2367,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               const SizedBox(height: 8),
                               Text(
                                 '支持OpenAI格式的API接口',
-                                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                                style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
                               ),
                               const SizedBox(height: 20),
                               AppTextField(
@@ -2316,7 +2377,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: 'API 地址',
                                   hintText: 'https://api.example.com/v1/chat/completions',
                                   filled: true,
-                                  fillColor: Colors.white.withValues(alpha: 0.4),
+                                  fillColor: AppColors.of(context).panel(0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
@@ -2328,7 +2389,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: 'API Key',
                                   hintText: '请输入API密钥',
                                   filled: true,
-                                  fillColor: Colors.white.withValues(alpha: 0.4),
+                                  fillColor: AppColors.of(context).panel(0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
@@ -2340,12 +2401,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   labelText: '模型名称',
                                   hintText: 'gpt-4o-mini',
                                   filled: true,
-                                  fillColor: Colors.white.withValues(alpha: 0.4),
+                                  fillColor: AppColors.of(context).panel(0.4),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              const Text('视觉能力支持', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                              Text('视觉能力支持', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                               const SizedBox(height: 8),
                               SegmentedSelector<_CustomVisionMode>(
                                 items: const [
@@ -2370,7 +2431,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 },
                               ),
                               const SizedBox(height: 16),
-                              const Text('思考强度', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                              Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                               const SizedBox(height: 8),
                               SegmentedSelector<String>(
                                 items: const [
@@ -2390,13 +2451,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               const SizedBox(height: 16),
                               Row(
                                 children: [
-                                  const Text('联网搜索', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                                  Text('联网搜索', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
                                   const Spacer(),
                                   SizedBox(
                                     height: 28,
                                     child: Switch(
                                       value: localWebSearch,
-                                      activeTrackColor: Colors.grey.shade700,
+                                      activeTrackColor: AppColors.of(context).textSecondary,
                                       onChanged: (v) {
                                         HapticFeedback.selectionClick();
                                         setDialogState(() {
@@ -2418,7 +2479,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         padding: const EdgeInsets.symmetric(vertical: 14),
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          side: BorderSide(color: Colors.grey.shade300),
+                                          side: BorderSide(color: AppColors.of(context).borderWeak),
                                         ),
                                       ),
                                       child: const Text('取消'),
@@ -2429,7 +2490,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     child: ElevatedButton(
                                       onPressed: onSave,
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.grey.shade800,
+                                        backgroundColor: AppColors.isDark(context)
+                                        ? AppColors.of(context).surfaceAlt
+                                        : Colors.grey.shade800,
                                         foregroundColor: Colors.white,
                                         padding: const EdgeInsets.symmetric(vertical: 14),
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2493,12 +2556,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
-                              '学期周数',
+                            Text('学期周数',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -2529,7 +2591,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         style: TextStyle(
                                           fontSize: isSelected ? 18 : 16,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                         ),
                                       ),
                                     );
@@ -2548,7 +2610,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -2601,12 +2663,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
-                              '每日节数',
+                            Text('每日节数',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -2637,7 +2698,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         style: TextStyle(
                                           fontSize: isSelected ? 18 : 16,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade600,
+                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
                                         ),
                                       ),
                                     );
@@ -2656,7 +2717,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                     child: const Text('取消'),
                                   ),
@@ -2760,9 +2821,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   width: 100,
                                   padding: const EdgeInsets.symmetric(horizontal: 10),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.4),
+                                    color: AppColors.of(context).panel(0.4),
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.grey.shade200),
+                                    border: Border.all(color: AppColors.of(context).borderWeak),
                                   ),
                                   child: BlurredDropdown<String>(
                                     value: selectedPreset,
@@ -2771,7 +2832,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       '自定义',
                                       style: TextStyle(
                                         fontSize: 14,
-                                        color: Colors.grey.shade600,
+                                        color: AppColors.of(context).textSecondary,
                                       ),
                                     ),
                                     icon: const Icon(
@@ -2834,15 +2895,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       margin: const EdgeInsets.only(bottom: 8),
                                       padding: const EdgeInsets.all(12),
                                       decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.4),
+                                        color: AppColors.of(context).panel(0.4),
                                         borderRadius: BorderRadius.circular(10),
                                         // 非减弱动态：与右上角预设选择框一致
                                         // 的浅灰描边（shade200）；减弱动态维持
                                         // shade300 不变
                                         border: Border.all(
                                           color: _reduceMotionEnabled
-                                              ? Colors.grey.shade300
-                                              : Colors.grey.shade200,
+                                              ? AppColors.of(context).borderWeak
+                                              : AppColors.of(context).borderWeak,
                                         ),
                                       ),
                                       child: Row(
@@ -2915,7 +2976,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       padding: const EdgeInsets.symmetric(vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: AppColors.of(context).borderWeak),
                                       ),
                                     ),
                                     child: const Text('取消'),
@@ -2984,14 +3045,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.4),
+          color: AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(8),
           // 非减弱动态：与右上角预设选择框一致的浅灰描边（shade200）；
           // 减弱动态维持 shade300 不变
           border: Border.all(
             color: _reduceMotionEnabled
-                ? Colors.grey.shade300
-                : Colors.grey.shade200,
+                ? AppColors.of(context).borderWeak
+                : AppColors.of(context).borderWeak,
           ),
         ),
         child: Text(
@@ -3061,10 +3122,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         decoration: BoxDecoration(
                           color: isSelected
                               ? const Color(0xFF4A90E2).withValues(alpha: 0.12)
-                              : Colors.white.withValues(alpha: 0.4),
+                              : AppColors.of(context).panel(0.4),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isSelected ? const Color(0xFF4A90E2) : Colors.white.withValues(alpha: 0.4),
+                            color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).panel(0.4),
                             width: isSelected ? 1.5 : 1,
                           ),
                         ),
@@ -3087,7 +3148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         NotificationService.instance.copyStyleLabel(style),
                                         style: TextStyle(
                                           fontWeight: FontWeight.w600,
-                                          color: isSelected ? const Color(0xFF4A90E2) : const Color(0xFF333333),
+                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textPrimary,
                                         ),
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -3097,7 +3158,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         NotificationService.instance.copyStyleDescription(style),
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: Colors.grey.shade600,
+                                          color: AppColors.of(context).textSecondary,
                                         ),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
@@ -3108,7 +3169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 const SizedBox(width: 8),
                                 Icon(
                                   isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                  color: isSelected ? const Color(0xFF4A90E2) : Colors.grey.shade500,
+                                  color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textTertiary,
                                   size: 20,
                                 ),
                               ],
@@ -3132,7 +3193,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: Colors.grey.shade300),
+                  side: BorderSide(color: AppColors.of(context).borderWeak),
                 ),
               ),
               child: const Text('取消'),
@@ -3267,7 +3328,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'v$appVersion',
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade600,
+              color: AppColors.of(context).textSecondary,
             ),
           ),
           const SizedBox(height: 16),
@@ -3276,7 +3337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade700,
+              color: AppColors.of(context).textSecondary,
               height: 1.5,
             ),
           ),
@@ -3286,7 +3347,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
-              color: Colors.grey.shade500,
+              color: AppColors.of(context).textTertiary,
               height: 1.5,
             ),
           ),
@@ -3307,7 +3368,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: Colors.grey.shade300),
+                      side: BorderSide(color: AppColors.of(context).borderWeak),
                     ),
                   ),
                   child: const Text('检查更新'),
@@ -3332,6 +3393,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 打赏支持对话框：顶部说明文案 → 打赏码（微信 / 支付宝）→ 打赏者名单。
+  ///
+  /// 打赏码用 Image.asset + errorBuilder 做「预留位」：图片未放入时渲染虚位
+  /// 占位框，一旦把二维码放进 assets/donate/ 即自动显示，无需再改代码。
+  /// 内容区固定高度、内部可下滑，底部「确定」按钮不随内容滚动。
+  void _showDonationDialog() {
+    showBouncyDialog(
+      context: context,
+      barrierLabel: '打赏支持',
+      shellPadding: const EdgeInsets.all(24),
+      builder: (context) {
+        final dialogHeight = MediaQuery.of(context).size.height * 0.72;
+        return SizedBox(
+          height: dialogHeight,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Center(
+                        child: Text(
+                          '打赏支持',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '您的打赏将用于CourseHub的开发测试以及服务器的运行和维护。'
+                        '是否打赏不会影响到软件功能的使用。'
+                        'CourseHub诚挚感谢每一份支持与信任！',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.of(context).textSecondary,
+                          height: 1.6,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      const Row(
+                        children: [
+                          Expanded(
+                            child: _DonateQrSlot(
+                              label: '微信',
+                              assetPath: 'assets/donate/wechat_qr.png',
+                            ),
+                          ),
+                          SizedBox(width: 16),
+                          Expanded(
+                            child: _DonateQrSlot(
+                              label: '支付宝',
+                              assetPath: 'assets/donate/alipay_qr.png',
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      const _DonationSupporterList(),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4A90E2),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('确定'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -3369,7 +3520,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -3382,7 +3533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -3568,7 +3719,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 14,
-                                    color: Colors.grey.shade600,
+                                    color: AppColors.of(context).textSecondary,
                                   ),
                                 ),
                               ),
@@ -3589,7 +3740,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     errorText: email.isEmpty || isEmailValid ? null : '邮箱格式不正确',
                                     prefixIcon: const Icon(Icons.email_outlined),
                                     filled: true,
-                                    fillColor: Colors.white.withValues(alpha: 0.4),
+                                    fillColor: AppColors.of(context).panel(0.4),
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                     ),
@@ -3622,7 +3773,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
                                     ),
                                     filled: true,
-                                    fillColor: Colors.white.withValues(alpha: 0.4),
+                                    fillColor: AppColors.of(context).panel(0.4),
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                     ),
@@ -3660,7 +3811,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
                                         ),
                                         filled: true,
-                                        fillColor: Colors.white.withValues(alpha: 0.4),
+                                        fillColor: AppColors.of(context).panel(0.4),
                                         border: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
                                         ),
@@ -3712,7 +3863,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: Colors.grey.shade300),
+                                      side: BorderSide(color: AppColors.of(context).borderWeak),
                                     ),
                                   ),
                                   child: const Text('取消'),
@@ -3939,7 +4090,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               '可多选，未选中的课表不会上传',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey.shade600,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                             const SizedBox(height: 12),
@@ -4006,7 +4157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       padding: const EdgeInsets.symmetric(vertical: 14),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: Colors.grey.shade300),
+                                        side: BorderSide(color: AppColors.of(context).borderWeak),
                                       ),
                                     ),
                                     child: const Text('取消'),
@@ -4082,7 +4233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                         ),
                         const SizedBox(height: 20),
@@ -4095,7 +4246,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('暂不上传'),
@@ -4167,7 +4318,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -4197,7 +4348,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: AppColors.of(context).borderWeak),
                               ),
                             ),
                             child: const Text('稍后再说'),
@@ -4255,7 +4406,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           '云端更新时间：${_formatDateTime(updatedAt)}',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -4293,7 +4444,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: AppColors.of(context).borderWeak),
                               ),
                             ),
                             child: const Text('取消'),
@@ -4348,7 +4499,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade700,
+                            color: AppColors.of(context).textSecondary,
                             fontWeight: FontWeight.w600,
                           ),
                           maxLines: 2,
@@ -4360,7 +4511,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -4390,7 +4541,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: Colors.grey.shade300),
+                                side: BorderSide(color: AppColors.of(context).borderWeak),
                               ),
                             ),
                             child: const Text('取消'),
@@ -4454,7 +4605,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         subtitle,
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.grey.shade600,
+                          color: AppColors.of(context).textSecondary,
                         ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -4462,7 +4613,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
               ],
             ),
           ),
@@ -4482,14 +4633,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
+        key: ValueKey(Theme.of(context).brightness),
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? selectedColor.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.4),
+          color: selected ? selectedColor.withValues(alpha: 0.12) : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? selectedColor : Colors.white.withValues(alpha: 0.4),
+            color: selected ? selectedColor : AppColors.of(context).panel(0.4),
             width: selected ? 1.6 : 1.0,
           ),
         ),
@@ -4502,7 +4654,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: selected ? selectedColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
-                  color: selected ? selectedColor : Colors.grey.shade400,
+                  color: selected ? selectedColor : AppColors.of(context).textTertiary,
                 ),
               ),
               child: selected
@@ -4519,7 +4671,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: selected ? selectedColor : Colors.black87,
+                      color: selected ? selectedColor : AppColors.of(context).textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -4527,7 +4679,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     subtitle,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                     ),
                   ),
                 ],
@@ -4586,7 +4738,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey.shade600,
+                            color: AppColors.of(context).textSecondary,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -4599,7 +4751,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    side: BorderSide(color: AppColors.of(context).borderWeak),
                                   ),
                                 ),
                                 child: const Text('取消'),
@@ -4648,10 +4800,15 @@ class SegmentedSelector<T> extends StatefulWidget {
   final T activeValue;
   final ValueChanged<T> onChanged;
 
+  /// 浅色模式白把手样式（黑字+投影）：仅「界面风格」滑块使用；
+  /// AI 配置的思考强度/视觉支持滑块保持原灰把手白字
+  final bool whiteKnobInLight;
+
   const SegmentedSelector({super.key, 
     required this.items,
     required this.activeValue,
     required this.onChanged,
+    this.whiteKnobInLight = false,
   });
 
   @override
@@ -4745,9 +4902,9 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
           child: Container(
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.4),
+              color: AppColors.of(context).panel(0.4),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300, width: 1),
+              border: Border.all(color: AppColors.of(context).borderWeak, width: 1),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(9),
@@ -4766,8 +4923,20 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
                       child: Container(
                         width: segmentW - 4,
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade800,
+                          // 滑块把手：深色下用中灰与深轨道区分，白字仍可读
+                          color: AppColors.isDark(context)
+                              ? Colors.grey.shade600
+                              : (widget.whiteKnobInLight ? Colors.white : Colors.grey.shade800),
                           borderRadius: BorderRadius.circular(8),
+                          boxShadow: (AppColors.isDark(context) || !widget.whiteKnobInLight)
+                              ? null
+                              : [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.18),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
                         ),
                       ),
                     ),
@@ -4777,8 +4946,9 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
                       children: labels.map((label) => Expanded(
                         child: Center(
                           child: AnimatedDefaultTextStyle(
+                            key: ValueKey(Theme.of(context).brightness),
                             duration: Duration.zero,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: Colors.black87),
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: AppColors.of(context).textPrimary),
                             child: Text(label),
                           ),
                         ),
@@ -4813,7 +4983,7 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
                             child: Center(
                               child: AnimatedDefaultTextStyle(
                                 duration: Duration.zero,
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: Colors.white),
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: (widget.whiteKnobInLight && !AppColors.isDark(context)) ? const Color(0xFF1A1A2E) : Colors.white),
                                 child: Text(label),
                               ),
                             ),
@@ -4827,12 +4997,15 @@ class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
                         return Expanded(
                           child: Center(
                             child: AnimatedDefaultTextStyle(
+                              key: ValueKey(Theme.of(context).brightness),
                               duration: _textAnimDuration,
                               curve: Curves.easeInOut,
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.normal,
-                                color: entry.key == visualActiveIdx ? Colors.white : Colors.black87,
+                                color: entry.key == visualActiveIdx
+                                    ? ((widget.whiteKnobInLight && !AppColors.isDark(context)) ? const Color(0xFF1A1A2E) : Colors.white)
+                                    : AppColors.of(context).textPrimary,
                               ),
                               child: Text(entry.value),
                             ),
@@ -5065,9 +5238,9 @@ class _SettingsInfoTipState extends State<_SettingsInfoTip>
             constraints: BoxConstraints(maxWidth: maxTipWidth),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.of(context).surface,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: AppColors.of(context).borderWeak),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.15),
@@ -5080,7 +5253,7 @@ class _SettingsInfoTipState extends State<_SettingsInfoTip>
               widget.text,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.grey.shade600,
+                color: AppColors.of(context).textSecondary,
               ),
             ),
           ),
@@ -5258,7 +5431,7 @@ class _AgnesHelpIconState extends State<_AgnesHelpIcon> {
       child: Icon(
         Icons.help_outline,
         size: 16,
-        color: Colors.grey.shade500,
+        color: AppColors.of(context).textTertiary,
       ),
     );
   }
@@ -5346,7 +5519,7 @@ class _TitleHelpIconState extends State<_TitleHelpIcon> {
       child: Icon(
         Icons.help_outline,
         size: 16,
-        color: Colors.grey.shade500,
+        color: AppColors.of(context).textTertiary,
       ),
     );
   }
@@ -5453,9 +5626,9 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
             width: widget.width,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.of(context).surface,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: AppColors.of(context).borderWeak),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.15),
@@ -5473,7 +5646,7 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: Colors.grey.shade700,
+                    color: AppColors.of(context).textSecondary,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -5481,7 +5654,7 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
                   'Agnes AI现面向全球用户针对部分模型提供免费API，经测试这些模型足以发挥出CourseHub的全部Agent能力。在使用过程中，我们推荐您将思考强度设置为Medium。',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     height: 1.5,
                   ),
                 ),
@@ -5490,7 +5663,7 @@ class _AgnesHelpTipState extends State<_AgnesHelpTip>
                   '您可在如下网址注册一个账号获取API并开始免费使用CourseHub的所有功能。',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     height: 1.5,
                   ),
                 ),
@@ -5605,9 +5778,9 @@ class _AboutContactLinkState extends State<_AboutContactLink> {
         '联系开发者',
         style: TextStyle(
           fontSize: 12,
-          color: Colors.grey.shade500,
+          color: AppColors.of(context).textTertiary,
           decoration: TextDecoration.underline,
-          decorationColor: Colors.grey.shade500,
+          decorationColor: AppColors.of(context).textTertiary,
         ),
       ),
     );
@@ -5706,9 +5879,9 @@ class _AboutContactTipState extends State<_AboutContactTip>
             width: widget.width,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.of(context).surface,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: AppColors.of(context).borderWeak),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.15),
@@ -5725,7 +5898,7 @@ class _AboutContactTipState extends State<_AboutContactTip>
                   '如在使用中遇到问题，想要反馈Bug、获取新功能，甚至成为我们的一员，欢迎通过如下方式联系我：',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade600,
+                    color: AppColors.of(context).textSecondary,
                     height: 1.5,
                   ),
                 ),
@@ -5745,7 +5918,7 @@ class _AboutContactTipState extends State<_AboutContactTip>
                     '邮箱：zwt70@outlook.com',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                       height: 1.5,
                     ),
                   ),
@@ -5766,7 +5939,7 @@ class _AboutContactTipState extends State<_AboutContactTip>
                     'QQ：1831657335',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: AppColors.of(context).textSecondary,
                       height: 1.5,
                     ),
                   ),
@@ -5775,6 +5948,157 @@ class _AboutContactTipState extends State<_AboutContactTip>
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 打赏者记录：微信打赏 ID + 打赏金额（元）。
+class _DonationRecord {
+  const _DonationRecord({required this.wechatId, required this.amount});
+
+  final String wechatId;
+  final double amount;
+}
+
+/// 打赏者名单（按打赏时间由新到旧排列）。
+/// 当前为空 → 对话框内展示空态提示；收到打赏后按下面注释示例追加即可。
+/// 后续若改为从云端拉取，用同一结构填充本列表，展示组件无需改动。
+const List<_DonationRecord> _kDonationRecords = [
+  // _DonationRecord(wechatId: '微信昵称', amount: 6.66),
+];
+
+/// 打赏码预留位：优先加载 assets/donate/ 下的二维码图片，
+/// 图片尚未放入时由 errorBuilder 回落为占位框（放入即生效，无需改代码）。
+class _DonateQrSlot extends StatelessWidget {
+  const _DonateQrSlot({required this.label, required this.assetPath});
+
+  final String label;
+  final String assetPath;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: double.infinity,
+          height: 132,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: AppColors.of(context).surfaceAlt,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.of(context).borderWeak),
+          ),
+          child: Image.asset(
+            assetPath,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.qr_code_2, size: 40, color: AppColors.of(context).textTertiary),
+                const SizedBox(height: 6),
+                Text(
+                  '打赏码待放置',
+                  style: TextStyle(fontSize: 11, color: AppColors.of(context).textTertiary),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
+        ),
+      ],
+    );
+  }
+}
+
+/// 打赏者名单区块：左侧微信打赏 ID，右侧打赏金额（￥xx.xx）。
+class _DonationSupporterList extends StatelessWidget {
+  const _DonationSupporterList();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('打赏者名单',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            color: AppColors.of(context).textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_kDonationRecords.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              color: AppColors.of(context).surfaceAlt,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.of(context).borderWeak),
+            ),
+            child: Text(
+              '还没有打赏记录，你的支持会出现在这里',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
+            ),
+          )
+        else
+          Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.of(context).borderWeak),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < _kDonationRecords.length; i++) ...[
+                  if (i > 0) Divider(height: 1, color: AppColors.of(context).borderWeak),
+                  _DonationRecordRow(record: _kDonationRecords[i]),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DonationRecordRow extends StatelessWidget {
+  const _DonationRecordRow({required this.record});
+
+  final _DonationRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              record.wechatId,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 14, color: AppColors.of(context).textPrimary),
+            ),
+          ),
+          Text(
+            '￥${record.amount.toStringAsFixed(2)}',
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF4A90E2),
+            ),
+          ),
+        ],
       ),
     );
   }

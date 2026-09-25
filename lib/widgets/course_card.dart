@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import '../models/course.dart';
 
 class CourseCard extends StatelessWidget {
@@ -20,7 +21,7 @@ class CourseCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.of(context).surface,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -50,10 +51,10 @@ class CourseCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               course.name,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                                color: AppColors.of(context).textPrimary,
                               ),
                             ),
                           ),
@@ -61,16 +62,16 @@ class CourseCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      _buildInfoRow(),
+                      _buildInfoRow(context),
                       if (course.weeks != null && course.weeks!.isNotEmpty) ...[
                         const SizedBox(height: 6),
-                        _buildWeeksChip(courseColor),
+                        _buildWeeksChip(context, courseColor),
                       ],
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                _buildDeleteButton(),
+                _buildDeleteButton(context),
               ],
             ),
           ),
@@ -147,11 +148,12 @@ class CourseCard extends StatelessWidget {
     );
   }
 
-  Widget _buildInfoRow() {
+  Widget _buildInfoRow(BuildContext context) {
     final items = <Widget>[];
 
     if (course.teacher != null && course.teacher!.isNotEmpty) {
       items.add(_buildInfoItem(
+        context: context,
         icon: Icons.person_outline,
         text: course.teacher!,
       ));
@@ -160,6 +162,7 @@ class CourseCard extends StatelessWidget {
     if (course.location != null && course.location!.isNotEmpty) {
       if (items.isNotEmpty) items.add(const SizedBox(width: 16));
       items.add(_buildInfoItem(
+        context: context,
         icon: Icons.location_on_outlined,
         text: course.location!,
       ));
@@ -172,40 +175,40 @@ class CourseCard extends StatelessWidget {
     return Row(children: items);
   }
 
-  Widget _buildInfoItem({required IconData icon, required String text}) {
+  Widget _buildInfoItem({required BuildContext context, required IconData icon, required String text}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 15, color: Colors.grey.shade500),
+        Icon(icon, size: 15, color: AppColors.of(context).textTertiary),
         const SizedBox(width: 4),
         Text(
           text,
           style: TextStyle(
             fontSize: 13,
-            color: Colors.grey.shade600,
+            color: AppColors.of(context).textSecondary,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildWeeksChip(Color color) {
+  Widget _buildWeeksChip(BuildContext context, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: AppColors.of(context).surfaceAlt,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.calendar_today_outlined, size: 12, color: Colors.grey.shade500),
+          Icon(Icons.calendar_today_outlined, size: 12, color: AppColors.of(context).textTertiary),
           const SizedBox(width: 4),
           Text(
             '${course.weeks} 周',
             style: TextStyle(
               fontSize: 11,
-              color: Colors.grey.shade600,
+              color: AppColors.of(context).textSecondary,
             ),
           ),
         ],
@@ -213,7 +216,7 @@ class CourseCard extends StatelessWidget {
     );
   }
 
-  Widget _buildDeleteButton() {
+  Widget _buildDeleteButton(BuildContext context) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -223,7 +226,7 @@ class CourseCard extends StatelessWidget {
           padding: const EdgeInsets.all(8),
           child: Icon(
             Icons.delete_outline_rounded,
-            color: Colors.grey.shade400,
+            color: AppColors.of(context).textTertiary,
             size: 22,
           ),
         ),

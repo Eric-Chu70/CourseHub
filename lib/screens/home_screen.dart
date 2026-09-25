@@ -7,6 +7,7 @@ import 'heatmap_screen.dart';
 import 'import_screen.dart';
 import 'ai_assistant_screen.dart';
 import 'settings_screen.dart';
+import '../theme/app_theme.dart';
 import '../utils/storage.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -59,18 +60,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   @override
   void initState() {
     super.initState();
+    // 深色模式渐进迁移：已语义化改造的设置页跟随全局主题；
+    // 未迁移的大屏先局部锁定浅色 Theme 保持自身自洽（内部硬编码
+    // 浅色不与深色脚手架/默认文字色混色），迁移一屏解禁一屏
     _screens = [
+      // 课表屏已语义化（壁纸分支保持独立明暗逻辑），跟随全局深浅
       TimetableScreen(
         key: _timetableKey,
         onScrollDirectionChanged: _onScrollDirectionChanged,
       ),
+      // 热力图已语义化，跟随全局深浅
       HeatmapScreen(key: _heatmapKey),
+      // AI 对话屏已语义化，跟随全局深浅
       AIAssistantScreen(
         key: _aiAssistantKey,
         onKeyboardShown: _onKeyboardShown,
         onKeyboardHidden: _onKeyboardHidden,
         onNavigateToSettings: () => _onTabChanged(4),
       ),
+      // 导入屏已语义化，跟随全局深浅
       const ImportScreen(),
       const SettingsScreen(),
     ];
@@ -306,7 +314,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         resizeToAvoidBottomInset: false,
         extendBody: true,
         extendBodyBehindAppBar: true,
-        backgroundColor: const Color(0xFFF5F7FA),
+        backgroundColor: Theme.of(context).brightness == Brightness.dark
+            ? AppPalette.dark.scaffold
+            : const Color(0xFFF5F7FA),
         body: NotificationListener<ScrollNotification>(
           onNotification: (notification) {
             _handleScroll(notification);
@@ -378,7 +388,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   Positioned.fill(
                     child: Container(
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.35),
+                        color: AppColors.of(context).glassShell.withValues(alpha: 0.35),
                         borderRadius: BorderRadius.circular(16),
                       ),
                     ),
@@ -441,10 +451,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 child: Container(
                   height: 64,
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.45),
+                    color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.55 : 0.45),
                     borderRadius: BorderRadius.circular(32),
                     border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: AppColors.of(context).glassBorder,
                       width: 1.5,
                     ),
                   ),
@@ -618,14 +628,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         Icon(
           icon,
           size: 24,
-          color: isHighlighted ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+          color: isHighlighted ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
         ),
         const SizedBox(height: 4),
         Text(
           label,
           style: TextStyle(
             fontSize: 11,
-            color: isHighlighted ? const Color(0xFF4A90E2) : Colors.grey.shade700,
+            color: isHighlighted ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
             fontWeight: isHighlighted ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
