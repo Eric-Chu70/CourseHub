@@ -2990,8 +2990,16 @@ class TimetableScreenState extends State<TimetableScreen>
           palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
         ],
       );
-      titleColor = palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
-      metaColor = palette.textSecondary.withValues(alpha: lerpDouble(0.80, 0.30, inactiveT)!);
+      // 文字色分模式：浅色用深一档的灰（textSecondary）保证可读，
+      // 深色保持近白高对比（灰字在深底上会糊）
+      titleColor = (AppColors.isDark(context)
+              ? palette.textPrimary
+              : palette.textSecondary)
+          .withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!);
+      metaColor = (AppColors.isDark(context)
+              ? palette.textSecondary
+              : palette.textTertiary)
+          .withValues(alpha: lerpDouble(0.80, 0.30, inactiveT)!);
       triangleColor = palette.textTertiary.withValues(alpha: lerpDouble(0.90, 0.35, inactiveT)!);
       borderColor = AppColors.isDark(context)
           ? Colors.transparent
