@@ -2754,8 +2754,7 @@ class TimetableScreenState extends State<TimetableScreen>
       // 原位改放透明点击区——点击后原课程卡片淡入短暂显示 5s（见
       // _beginInactivePeek），左右滑动切换周页自动隐藏（同加号遮罩）
       if (isInactiveInCurrentWeek && !_showInactiveCourses) {
-        final hiddenCourse =
-            sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b);
+        final hiddenCourse = _pickFallbackCourse(sameStartCourses, week);
         // morph 飞行中：浮现卡片与真课程块同样由翻转卡片（复刻）接管，
         // 随 _morphBlockFade 渐隐/渐显（Opacity 包在 Positioned 内部，
         // 避免将 Positioned 包进 IgnorePointer/Opacity 破坏 Stack 布局）
@@ -2771,7 +2770,7 @@ class TimetableScreenState extends State<TimetableScreen>
         continue;
       }
         final course = isInactiveInCurrentWeek
-          ? sameStartCourses.reduce((a, b) => a.duration >= b.duration ? a : b)
+          ? _pickFallbackCourse(sameStartCourses, week)
           : activeCourses.first;
 
       final hasAlternativeCourses = sameStartCourses.length > 1;
@@ -2805,35 +2804,39 @@ class TimetableScreenState extends State<TimetableScreen>
 
   bool _shouldShowCourse(Course course, int week) {
     if (course.weeks == null || course.weeks!.isEmpty) return true;
-    
+
     final weeks = _parseWeeks(course.weeks!);
     return weeks.contains(week);
   }
 
   /// 多课程叠加但本周都不上时选「代表课程」：
-  /// 全部未开始 → 开始周离本周最近者；已全部结束 → 结束周离本周最近者
-  Course _pickFallbackCourse(List<Course> sameStartCourses, int week) {
-    int startWeekOf(Course c) {
-      final w = _parseWeeks(c.weeks ?? '');
-      return w.isEmpty ? week : w.first;
+  /// 全部未开始 → 开始周离本周最近者；已全部结束 → 结束周离本周最近者；
+  /// 并列时保持列表原序（稳定）。网格卡片、模糊层、非本周浮现位共用
+  Course _pickFallbackCourse(List<Course> courses, int week) {
+    Course pick(Course best, Course c, int Function(Course) dist) {
+      final dc = dist(c);
+      final db = dist(best);
+      if (dc < db) return c;
+      return best;
     }
 
-    int endWeekOf(Course c) {
-      final w = _parseWeeks(c.weeks ?? '');
-      return w.isEmpty ? week : w.last;
+    int startDist(Course c) {
+      final weeks = _parseWeeks(c.weeks ?? '');
+      if (weeks.isEmpty) return 0;
+      return weeks.reduce((a, b) => a < b ? a : b) - week;
     }
 
-    final notStarted = sameStartCourses.where((c) => startWeekOf(c) > week).toList();
-    if (notStarted.isNotEmpty) {
-      notStarted.sort((a, b) => startWeekOf(a).compareTo(startWeekOf(b)));
-      return notStarted.first;
+    int endDist(Course c) {
+      final weeks = _parseWeeks(c.weeks ?? '');
+      if (weeks.isEmpty) return 0;
+      return week - weeks.reduce((a, b) => a > b ? a : b);
     }
-    final ended = sameStartCourses.where((c) => endWeekOf(c) < week).toList();
-    if (ended.isNotEmpty) {
-      ended.sort((a, b) => endWeekOf(b).compareTo(endWeekOf(a)));
-      return ended.first;
+
+    final allNotStarted = courses.every((c) => startDist(c) > 0);
+    if (allNotStarted) {
+      return courses.reduce((best, c) => pick(best, c, startDist));
     }
-    return sameStartCourses.first;
+    return courses.reduce((best, c) => pick(best, c, endDist));
   }
 
   Set<int> _parseWeeks(String weeks) {
