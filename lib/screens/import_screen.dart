@@ -2410,7 +2410,7 @@ class _ShiguangHelpTipState extends State<_ShiguangHelpTip>
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: AppColors.of(context).borderWeak),
                 boxShadow: [
@@ -2425,10 +2425,10 @@ class _ShiguangHelpTipState extends State<_ShiguangHelpTip>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
+                  Text(
                     '如未适配您所在的高校，建议使用图片识别导入，更加高效便捷',
-                    style:
-                        TextStyle(fontSize: 12, color: Color(0xFF44465A)),
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.of(context).textPrimary),
                   ),
                   const SizedBox(height: 6),
                   Text(
