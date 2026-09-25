@@ -6564,7 +6564,22 @@ Widget _buildMarkdownContent(String content, {required BuildContext context, Tex
       .replaceAll(RegExp(r'^## ', multiLine: true), '##### ')
       .replaceAll(RegExp(r'^# ', multiLine: true), '##### ');
   
-  final markdown = GptMarkdown(
+  // 显式注入标题配色：gpt_markdown 的标题样式取自 TextTheme 的
+  // title/headline 系列，M3 下这些颜色是 onSurfaceVariant（灰）——
+  // 按；包提供的 GptMarkdownTheme 覆盖为 textPrimary，随界面模式切换
+  final gptTheme = GptMarkdownThemeData(
+    brightness: Theme.of(context).brightness,
+    h1: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: AppColors.of(context).textPrimary),
+    h2: TextStyle(fontSize: 23, fontWeight: FontWeight.w700, color: AppColors.of(context).textPrimary),
+    h3: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: AppColors.of(context).textPrimary),
+    h4: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.of(context).textPrimary),
+    h5: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.of(context).textPrimary),
+    h6: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.of(context).textPrimary),
+    hrLineColor: AppColors.of(context).borderWeak,
+  );
+  final markdown = GptMarkdownTheme(
+    gptThemeData: gptTheme,
+    child: GptMarkdown(
     processedContent,
     // 亮度 key：切界面模式时强制重新生成样式 span——gpt_markdown 的
     // MdWidget 只在 initState/didUpdateWidget(exp 或 config 变化) 时
@@ -6629,8 +6644,9 @@ Widget _buildMarkdownContent(String content, {required BuildContext context, Tex
         ),
       );
     },
+    ),
   );
-  
+
   return markdown;
 }
 
