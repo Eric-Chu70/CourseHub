@@ -3004,10 +3004,11 @@ class TimetableScreenState extends State<TimetableScreen>
               ],
       );
       titleColor = isDark
-          ? palette.textPrimary
+          // 深色下白字压暗一档：仍可读，但不比周围亮色卡片抢眼
+          ? palette.textPrimary.withValues(alpha: lerpDouble(0.74, 0.28, inactiveT)!)
           : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
       metaColor = isDark
-          ? palette.textSecondary
+          ? palette.textSecondary.withValues(alpha: lerpDouble(0.62, 0.24, inactiveT)!)
           : const Color(0xFFA2A8B0).withValues(alpha: lerpDouble(1.0, 0.6, inactiveT)!);
       triangleColor = isDark
           ? palette.textTertiary
