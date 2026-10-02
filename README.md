@@ -41,9 +41,9 @@
 
 ### 图片识别导入
 
-- 拍照或从相册选择课程表图片，自动 OCR 识别并导入
-- 使用 Google ML Kit 本地文字识别，隐私安全
+- 拍照或从相册选择课程表图片，由所选 AI 模型直接识别图片内容并导入
 - 识别结果经 AI 或正则解析为结构化课程数据
+- 使用内置模型时，带图片的请求按双倍计入每日用量
 
 ### 教务系统导入
 
@@ -118,7 +118,6 @@
 - **本地存储**：Hive + SharedPreferences
 - **状态管理**：Provider
 - **后端服务**：腾讯云 CloudBase（认证 + 云端同步）
-- **OCR**：Google ML Kit（本地文字识别）
 - **UI 设计**：Material Design 3，毛玻璃风格，动画过渡，触觉反馈
 
 ---
@@ -192,9 +191,9 @@ The app **includes a built-in model available for free for a limited time — no
 
 ### Image Recognition Import
 
-- Take a photo or select a timetable image from gallery for automatic OCR recognition and import
-- Uses Google ML Kit for on-device text recognition, ensuring privacy
+- Take a photo or select a timetable image from gallery; the selected AI model recognizes the image content directly and imports the courses
 - Recognition results parsed into structured course data via AI or regex
+- With the built-in model, image requests count as double toward the daily usage limit
 
 ### Academic System Import
 
@@ -263,7 +262,6 @@ Once configured, you can:
 - **Local Storage**: Hive + SharedPreferences
 - **State Management**: Provider
 - **Backend**: Tencent CloudBase (authentication + cloud sync)
-- **OCR**: Google ML Kit (on-device text recognition)
 - **UI Design**: Material Design 3, glassmorphism, animated transitions, haptic feedback
 
 ---
