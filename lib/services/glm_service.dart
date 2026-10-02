@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'cloud/cloud_backend.dart' show ensureCloudDeviceId;
 
 class CourseData {
   final String name;
@@ -101,17 +104,68 @@ class AIService {
 
   static const String _nonDoubaoEdgeFunctionUrl = 'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/NonDoubaoAPI';
 
-  // 内置模型（限时免费）：单一 Supabase Edge Function，请求体带 node 字段（1-4）
-  // 区分节点，函数内部按节点查表选择模型与密钥。请求/响应协议与 NonDoubaoAPI
-  // 完全一致（流式 SSE：content/status/thinking），客户端无需携带任何密钥
+  // 内置模型（限时免费）：经 CloudBase Run 云托管中转（BuiltinModel 逻辑原样
+  // 移植，见仓库 cloudbase/builtin-model-relay/）。请求体带 node 字段（1-4）
+  // 区分节点，容器内部按节点查表选择模型与密钥。请求/响应协议与 Supabase 版
+  // Edge Function 完全一致（流式 SSE：content/status/thinking），客户端无需
+  // 携带任何密钥；额外要求 x-device-id 头（服务端每日限量按设备计数）。
   static const String _builtinEndpointUrl =
-      'https://jnwhpbkhvumiyjwyjwhu.supabase.co/functions/v1/BuiltinModel';
+      'https://cloudservice-322644-10-1412312719.sh.run.tcloudbase.com';
+
+  // 客户端本地每日限量（与服务端 relay_config 的 device_daily 默认值对齐；
+  // 仅体验层——预检命中就不发请求，真正的执法在中转服务端）
+  static const int _builtinClientDailyLimit = 30;
+  static const String _builtinDailyUsagePrefKey = 'builtin_ai_daily_usage';
+
+  /// 内置模型「等首字节」的硬上限：比各页面自己的 UI 超时（对话页/任务分析
+  /// 30s）宽一档，只作为最后一道防线，防止没登记 owner 的调用把 socket 永久
+  /// 占在同一个云托管实例上
+  static const Duration _builtinFirstByteTimeout = Duration(seconds: 60);
   int _builtinNode = 1;
 
   // 会话级标记：每次进入 App（进程启动）后，首次通过内置模型发起 AI 请求时
   // 随机选择 1-4 号节点并写回偏好（供设置页/徽章展示真实节点）；会话内用户
   // 在设置页手动切换节点仍然生效，重启 App 后重新随机
   bool _builtinNodeRandomizedThisSession = false;
+
+  /// owner → 该发起人当前进行中的请求持有的 HttpClient。
+  ///
+  /// 存在意义：只取消 Dart 侧的 Stream 订阅**并不能真正中断已经在飞的请求**。
+  /// `async*` 生成器只有在下一次 `yield` 时才会感知取消并退出，而超时场景恰好
+  /// 卡在「等服务端首个字节」，永远不会有下一次 yield —— 于是底层的 HttpClient
+  /// 与 socket 会一直挂到服务端产出为止（连 `finally` 里的 close 都跑不到）。
+  /// 这就导致自动重试用新连接发出的新请求，和僵尸请求一起挤在同一个 Edge
+  /// Function 实例 / 上游账号上排队，于是第二次、第三次同样拿不到首字节。
+  /// 想真正让位，必须能从外部把这批 HttpClient 强制关掉。
+  ///
+  /// 用 owner 分组是为了不误伤：课表 OCR 识别、DDL 洞察等模块可能同时有请求
+  /// 在跑，对话页只关自己那一份。
+  final Map<Object, Set<HttpClient>> _activeStreamClients =
+      <Object, Set<HttpClient>>{};
+
+  /// 把 [owner] 名下的请求从登记表中摘除：调用方打算让它们在后台自行跑完
+  /// （例如对话页切换会话时的后台续写），此后 [abortActiveStreams] 不会再
+  /// 掐到它们。连接本身仍由各自方法的 finally 负责关闭，不会泄漏
+  void detachActiveStreams(Object owner) {
+    _activeStreamClients.remove(owner);
+  }
+
+  /// 中止 [owner] 名下所有进行中的流式请求：force 关闭底层 HttpClient，
+  /// 立即断开 socket 连接（不再等待服务端返回），把通道让给后续重试请求。
+  /// 返回被掐断的请求数（0 表示没有在飞请求，调用方可据此决定要不要退避）
+  int abortActiveStreams(Object owner) {
+    final clients = _activeStreamClients.remove(owner);
+    if (clients == null || clients.isEmpty) return 0;
+    debugPrint('[AI Service] Aborting ${clients.length} in-flight request(s)');
+    for (final client in clients) {
+      try {
+        client.close(force: true);
+      } catch (_) {
+        // 关闭已失效的连接无需处理
+      }
+    }
+    return clients.length;
+  }
 
   Future<void> _randomizeBuiltinNodeForSession() async {
     if (_builtinNodeRandomizedThisSession) return;
@@ -455,7 +509,7 @@ class AIService {
           _customApiUrl!.isEmpty ||
           _customApiKey == null ||
           _customApiKey!.isEmpty) {
-        throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
+        throw AiException('请先在开发者选项中配置自定义API地址和密钥');
       }
       if (resolvedModel == null || resolvedModel.isEmpty) {
         resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
@@ -465,7 +519,7 @@ class AIService {
     } else if (resolvedProvider == 'agnes') {
       await _ensureAgnesConfigLoaded();
       if ((_agnesApiKey ?? '').trim().isEmpty) {
-        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+        throw AiException('请先在AI配置中设置 Agnes AI 密钥');
       }
       if (resolvedModel == null || resolvedModel.isEmpty) {
         resolvedModel = _agnesModel;
@@ -538,15 +592,17 @@ class AIService {
     required String provider,
     String? model,
     String? reasoningEffort,
+    Set<HttpClient>? clientSink,
   }) async* {
     if (provider == 'custom') {
       await _ensureCustomConfigLoaded();
       if ((_customApiUrl ?? '').trim().isEmpty || (_customApiKey ?? '').trim().isEmpty) {
-        throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
+        throw AiException('请先在开发者选项中配置自定义API地址和密钥');
       }
     }
 
     final httpClient = HttpClient();
+    clientSink?.add(httpClient);
 
     final hasImagePayload = messages.any((msg) {
       final content = msg['content'];
@@ -579,7 +635,7 @@ class AIService {
       final response = await request.close();
       if (response.statusCode != 200) {
         final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
+        throw AiException('API请求失败: ${response.statusCode} - $errorBody');
       }
 
       String buffer = '';
@@ -625,46 +681,290 @@ class AIService {
         _lastStreamedModel = model;
       }
     } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
+      if (e is AiException) rethrow;
+      throw AiException('对话失败: $e');
     } finally {
+      clientSink?.remove(httpClient);
       httpClient.close();
     }
   }
 
-  /// 内置模型流式对话：经当前节点的 Supabase Edge Function 中转。
-  /// 协议与 NonDoubaoAPI 一致（流式 SSE：content/status/thinking/model），无需客户端密钥
+  // ── 内置模型本地每日限量（阶段 3 四层限量的第 1 层，纯体验层） ──
+
+  /// 本地每日用量：单 key 存 {date, count}，跨天自然复位
+  Future<({int count, String date})> _readBuiltinDailyUsage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _builtinTodayKey();
+    final raw = prefs.getString(_builtinDailyUsagePrefKey);
+    if (raw != null) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic> && decoded['date'] == today) {
+          return _rememberUsage(
+              (count: (decoded['count'] as num?)?.toInt() ?? 0, date: today));
+        }
+      } catch (_) {
+        // 损坏的计数按 0 处理
+      }
+    }
+    return _rememberUsage((count: 0, date: today));
+  }
+
+  /// 用量的同步缓存（值 + 它属于哪一天）。
+  ///
+  /// 磁盘读要 await，而「今日用量」那条会在对话框切阶段的动画里被重建，
+  /// 重建后的第一帧 future 还在 pending，只能回退成 0 —— 看起来就像用量
+  /// 被清零了（他 2026-10-02 报的这个跳变）。缓存按日期键失效，跨天不会
+  /// 把昨天的数带到今天。与 ReduceMotionFlags / AIAutoAnalysisFlags 同一套路。
+  static int? _usageCacheCount;
+  static String? _usageCacheDate;
+
+  static ({int count, String date}) _rememberUsage(
+      ({int count, String date}) usage) {
+    _usageCacheCount = usage.count;
+    _usageCacheDate = usage.date;
+    return usage;
+  }
+
+  /// 最近一次读到的今日用量；这个会话还没读过、或读的是昨天 → null
+  static int? get lastKnownBuiltinUsage =>
+      _usageCacheDate == _builtinTodayKey() ? _usageCacheCount : null;
+
+  Future<void> _incrementBuiltinDailyUsage(int weight) async {
+    final prefs = await SharedPreferences.getInstance();
+    final usage = await _readBuiltinDailyUsage();
+    final next = (count: usage.count + weight, date: usage.date);
+    await prefs.setString(
+      _builtinDailyUsagePrefKey,
+      jsonEncode({'date': next.date, 'count': next.count}),
+    );
+    // 同步缓存跟着走：否则刚发过请求的那一帧，重建出的用量条会退回旧值
+    _rememberUsage(next);
+  }
+
+  /// 退回一次本地额度（按 [weight] 扣回，最低 0）。
+  ///
+  /// 只用于「能证明请求没进中转 / 中转没接受」的失败：连不上（socket / 握手 /
+  /// 连接超时）、冷启动 5xx（网关直接挡下）、429（额度不足被拒）。这三种情况
+  /// 服务端同样没有计额度，本地不退就会出现「重试几次今天就没量了」——而失败
+  /// 重试本身往往只是同一个卡死连接的连带症状，不该由用户买单。
+  /// 已经拿到 200 流（或 500 这类进了中转的错误）一律保持「发起即计数」，
+  /// 不退，避免本地计数比服务端少。
+  Future<void> _refundBuiltinDailyUsage(int weight) async {
+    final prefs = await SharedPreferences.getInstance();
+    final usage = await _readBuiltinDailyUsage();
+    if (usage.count <= 0) return;
+    final next = (
+      count: math.max(0, usage.count - weight),
+      date: usage.date,
+    );
+    await prefs.setString(
+      _builtinDailyUsagePrefKey,
+      jsonEncode({'date': next.date, 'count': next.count}),
+    );
+    _rememberUsage(next);
+    debugPrint('[AI Service] Builtin daily usage refunded: ${next.count}');
+  }
+
+  static String _builtinTodayKey() {
+    final now = DateTime.now();
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    return '${now.year}-$month-$day';
+  }
+
+  /// 本地每日限量上限（与服务端 relay_config 的 device_daily 默认值对齐）。
+  /// UI 用量展示（AI 配置卡片 / 对话页节点菜单）以此为分母。
+  static int get builtinDailyLimit => _builtinClientDailyLimit;
+
+  /// 今日内置模型已用次数（本地计数，发起请求即 +1）。
+  /// AI 配置卡片与对话页节点菜单的「今日用量」展示用。
+  Future<int> builtinDailyUsageCount() async =>
+      (await _readBuiltinDailyUsage()).count;
+
+  /// 把中转/网关错误提炼成人话：JSON 体取 message，HTML 错误页（如 nginx
+  /// 503 冷启动页）只保留结论——绝不把原始 HTML 甩给用户
+  static String _summarizeBuiltinError(int statusCode, String body) {
+    final trimmed = body.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map<String, dynamic>) {
+          final msg =
+              (decoded['message'] ?? decoded['error_description'] ?? decoded['error'])
+                  ?.toString()
+                  .trim() ??
+              '';
+          if (msg.isNotEmpty && !msg.contains('<')) {
+            return '$msg（$statusCode）';
+          }
+        }
+      } catch (_) {
+        // 非 JSON，走下面的按状态码文案
+      }
+    }
+    switch (statusCode) {
+      case 500:
+        return '中转服务内部错误，请稍后再试（500）';
+      case 502:
+        return '中转服务暂时不可用，请稍后再试（502）';
+      case 503:
+        return '服务正在冷启动，请稍后再试（503）';
+      case 504:
+        return '上游响应超时，请稍后再试（504）';
+    }
+    final title = RegExp(r'<title[^>]*>([^<]*)</title>', caseSensitive: false)
+        .firstMatch(trimmed)
+        ?.group(1)
+        ?.trim();
+    if (title != null && title.isNotEmpty) {
+      return '$title（$statusCode）';
+    }
+    if (trimmed.isNotEmpty && !trimmed.contains('<')) {
+      final short =
+          trimmed.length > 80 ? '${trimmed.substring(0, 80)}…' : trimmed;
+      return '$short（$statusCode）';
+    }
+    return '服务暂时不可用（$statusCode）';
+  }
+
+  /// 网络层异常转人话（SocketException 原始文本很长且含端口号等噪音）
+  static String _describeBuiltinNetworkError(Object e) {
+    if (e is SocketException) return '网络连接失败，请检查网络后重试';
+    if (e is TimeoutException) return '连接超时，请稍后再试';
+    if (e is HandshakeException) return '安全连接失败，请检查网络环境';
+    if (e is HttpException) return '网络请求异常，请稍后再试';
+    return e.toString();
+  }
+
+  /// 限量拦截文案：客户端本地预检与服务端 429 共用同一套（scope 对齐），
+  /// 保证「app 拦截」和「服务器拦截」用户看到的内容一致
+  static String _builtinQuotaCopy(String scope) {
+    switch (scope) {
+      case 'device_daily':
+        return '今日内置模型次数已用完（每天 $_builtinClientDailyLimit 次），明天再来；也可在设置中切换 Agnes 或自填 API 密钥';
+      case 'global_daily':
+        return '内置模型今日额度已被用完，请稍后再试；也可在设置中切换 Agnes 或自填 API 密钥';
+      case 'global_monthly':
+        return '内置模型本月额度已用完；可在设置中切换 Agnes 或自填 API 密钥';
+      default:
+        return '内置模型额度已用完；可在设置中切换 Agnes 或自填 API 密钥';
+    }
+  }
+
+  /// 服务端 429（quota_exceeded）按 scope 取对应文案
+  static String _builtinQuotaMessage(String errorBody) {
+    String scope = '';
+    try {
+      final decoded = jsonDecode(errorBody);
+      if (decoded is Map<String, dynamic>) {
+        scope = decoded['scope']?.toString() ?? '';
+      }
+    } catch (_) {
+      // 非 JSON 错误体走默认文案
+    }
+    return _builtinQuotaCopy(scope);
+  }
+
+  /// 内置模型流式对话：经 CloudBase Run 云托管中转。
+  /// 协议与 Supabase 版 Edge Function 一致（流式 SSE：content/status/thinking/model），无需客户端密钥
   Stream<String> _chatWithBuiltinStream({
     required List<Map<String, dynamic>> messages,
     String? model,
     String? reasoningEffort,
+    Set<HttpClient>? clientSink,
   }) async* {
     // 任务分析、对话页、课表识别等全部内置模型请求都经由本方法：
     // 每次进入 App 后的首次请求在此随机选定本次会话使用的节点
     await _randomizeBuiltinNodeForSession();
+
+    // 中转域名尚未回填（部署 CloudBase Run 后填 _builtinEndpointUrl）
+    if (_builtinEndpointUrl.contains('REPLACE_WITH_RELAY_DOMAIN')) {
+      throw AiException('内置模型中转尚未部署，暂不可用；可在设置中切换 Agnes 或自填 API 密钥');
+    }
+
+    // 带图片的消息（课表 OCR 等）按双倍计：上游处理与实例 CPU 占用显著更高
+    // （服务端 relay_quota 同步按双倍执法；本地计数只是体验层预告）
+    final hasImagePayload = messages.any((msg) {
+      final content = msg['content'];
+      return content is List &&
+          content.any((part) => part is Map && part['type'] == 'image_url');
+    });
+    final usageWeight = hasImagePayload ? 2 : 1;
+
+    // 本地每日限量预检：命中就不发请求（真正的执法在中转服务端，按设备号计数）
+    final usage = await _readBuiltinDailyUsage();
+    if (usage.count >= _builtinClientDailyLimit) {
+      // 与服务端 device_daily 拦截同一套文案（app 拦截 = 服务器拦截内容）
+      throw AiException(_builtinQuotaCopy('device_daily'));
+    }
+    // 发起即计数；若整条请求走完时「一个字都没输出」，finally 里统一退额度
+    //（与服务端「首帧前失败即回滚」同一语义，两端计数保持一致）
+    await _incrementBuiltinDailyUsage(usageWeight);
+
     debugPrint('[AI Service] Builtin stream route node=$_builtinNode model=${model ?? ''} endpoint=$_builtinEndpointUrl');
 
     final httpClient = HttpClient();
+    clientSink?.add(httpClient);
+    // 是否已经向调用方输出过内容（首个思考/状态/正文帧）：这是「计不计数」的
+    // 分界——没开始输出就失败/被停（连接失败、网关拒绝、上游错误、用户首帧前
+    // 手动停止）→ 退额度；一旦开始输出，中途断开/手动停止都算已消费。
+    var outputStarted = false;
+    // 流是否走到了正常终点：异常退出 / 被外部 abort 时 force 关闭客户端，
+    // 让中转实例立刻看到客户端断开，而不是继续替这条僵尸连接跑完上游调用
+    var finishedCleanly = false;
     try {
-      final request = await httpClient.postUrl(Uri.parse(_builtinEndpointUrl));
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode({
+      final bodyJson = jsonEncode({
         'provider': 'builtin',
         'node': _builtinNode,
         'stream': true,
         // 内置模型不透传客户端模型名（对话页的"节点 X"为展示名），
-        // 由 Edge Function 内部决定实际使用的模型
+        // 由中转内部决定实际使用的模型
         if (reasoningEffort != null &&
             reasoningEffort.isNotEmpty &&
             const {'low', 'medium', 'high'}.contains(reasoningEffort))
           'reasoning_effort': reasoningEffort,
         'messages': messages,
-      }));
+      });
+      final deviceId = await ensureCloudDeviceId();
 
-      final response = await request.close();
+      Future<HttpClientResponse> sendOnce() async {
+        final request =
+            await httpClient.postUrl(Uri.parse(_builtinEndpointUrl));
+        request.headers.contentType = ContentType.json;
+        // 每日限量按设备计数（与 CloudBase HTTP 请求共用同一设备号）
+        request.headers.set('x-device-id', deviceId);
+        request.write(bodyJson);
+        return request.close();
+      }
+
+      // 首字节兜底看门狗（中转级）：调用方各自有 UI 超时，但只有登记了 owner
+      // 的请求才掐得动（对话页 30s、任务分析 30s）；课表图片识别、标题生成等
+      // 没登记 owner 的调用一旦卡住，socket 会一直占着同一个云托管实例，
+      // 连带把别人的重试一起拖死（表现同样是「重试永远失败，退出重进就好」）。
+      // 60s 一个字节都没等到就是死连接：抛错 → 退额度 → force 关闭连接。
+      var response =
+          await sendOnce().timeout(_builtinFirstByteTimeout);
+
+      // 云托管冷启动窗口：实例从 0 拉起（或刚空闲自退）时网关可能瞬时
+      // 502/503/504（nginx 错误页）。此时请求未到达中转、未计额度，
+      // 等 2.5s 自动重试一次，仍失败才把提炼后的错误交给用户
+      if (const {502, 503, 504}.contains(response.statusCode)) {
+        await response.drain<void>().catchError((_) {});
+        await Future<void>.delayed(const Duration(milliseconds: 2500));
+        response =
+            await sendOnce().timeout(_builtinFirstByteTimeout);
+      }
+
       if (response.statusCode != 200) {
         final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
+        // 非 200 = 一个字都没输出（429 被拒 / 网关挡下 / 上游报错透传）：
+        // 退额度统一放 finally（outputStarted 必为 false），这里只管抛
+        if (response.statusCode == 429) {
+          throw AiException(_builtinQuotaMessage(errorBody));
+        }
+        throw AiException(
+            _summarizeBuiltinError(response.statusCode, errorBody));
       }
 
       String buffer = '';
@@ -686,7 +986,7 @@ class AIService {
             final parsed = jsonDecode(data);
             final error = parsed['error'] as String?;
             if (error != null && error.isNotEmpty) {
-              throw GLMException('流式响应异常: $error');
+              throw AiException('流式响应异常: $error');
             }
             final content = parsed['content'] as String?;
             final status = parsed['status'] as String?;
@@ -694,12 +994,15 @@ class AIService {
             returnedModel ??= parsed['model'] as String?;
 
             if (thinking != null && thinking.isNotEmpty) {
+              outputStarted = true;
               yield '【思考】$thinking';
             }
             if (status != null && status.isNotEmpty) {
+              outputStarted = true;
               yield '【状态】$status';
             }
             if (content != null && content.isNotEmpty) {
+              outputStarted = true;
               yield content;
             }
           } catch (_) {
@@ -711,11 +1014,26 @@ class AIService {
       if (returnedModel != null) {
         _lastStreamedModel = returnedModel;
       }
+      finishedCleanly = true;
     } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
+      if (e is AiException) rethrow;
+      throw AiException(_describeBuiltinNetworkError(e));
     } finally {
-      httpClient.close();
+      // 统一退额度规则（与服务端同步）：一个字都没输出过就结束——连接失败、
+      // 网关/额度拒绝、上游错误、流中断在首帧前、用户首帧前手动停止——
+      // 都把发起时计的额度退回去；输出开始后中途停止/断开不退（已消费）。
+      // 放 finally 而不是 catch：用户手动停止走的是生成器取消，只进 finally
+      if (!outputStarted) {
+        await _refundBuiltinDailyUsage(usageWeight);
+      }
+      clientSink?.remove(httpClient);
+      try {
+        // 异常 / 被中断收尾时 force 关闭：普通 close 要等在飞连接跑完才释放
+        // socket，那条连接正好占着中转实例，下一次重试就会跟着一起排队。
+        httpClient.close(force: !finishedCleanly);
+      } catch (_) {
+        // 已被 abortActiveStreams 关过的客户端重复关闭会抛错，忽略
+      }
     }
   }
   /// 懒加载 Agnes 配置：内存缺失时从 SharedPreferences 读取
@@ -745,10 +1063,11 @@ class AIService {
     required List<Map<String, dynamic>> messages,
     String? model,
     String? reasoningEffort,
+    Set<HttpClient>? clientSink,
   }) async* {
     await _ensureAgnesConfigLoaded();
     if (_agnesApiKey == null || _agnesApiKey!.trim().isEmpty) {
-      throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+      throw AiException('请先在AI配置中设置 Agnes AI 密钥');
     }
 
     final requestModel = (model != null && model.trim().isNotEmpty)
@@ -757,6 +1076,7 @@ class AIService {
     final effort = await _resolvedAgnesReasoningEffort(reasoningEffort);
 
     final httpClient = HttpClient();
+    clientSink?.add(httpClient);
 
     try {
       final request = await httpClient.postUrl(Uri.parse(_agnesBaseUrl));
@@ -773,7 +1093,7 @@ class AIService {
 
       if (response.statusCode != 200) {
         final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('Agnes AI请求失败: ${response.statusCode} - $errorBody');
+        throw AiException('Agnes AI请求失败: ${response.statusCode} - $errorBody');
       }
 
       String buffer = '';
@@ -820,9 +1140,10 @@ class AIService {
 
       _lastStreamedModel = returnedModel ?? requestModel;
     } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('Agnes AI对话失败: $e');
+      if (e is AiException) rethrow;
+      throw AiException('Agnes AI对话失败: $e');
     } finally {
+      clientSink?.remove(httpClient);
       httpClient.close();
     }
   }
@@ -834,12 +1155,13 @@ class AIService {
     required List<Map<String, dynamic>> messages,
     String? model,
     String? reasoningEffort,
+    Set<HttpClient>? clientSink,
   }) async* {
     await _ensureCustomConfigLoaded();
     final apiUrl = (_customApiUrl ?? '').trim();
     final apiKey = (_customApiKey ?? '').trim();
     if (apiUrl.isEmpty || apiKey.isEmpty) {
-      throw GLMException('请先在开发者选项中配置自定义API地址和密钥');
+      throw AiException('请先在开发者选项中配置自定义API地址和密钥');
     }
 
     final requestModel = (model != null && model.trim().isNotEmpty)
@@ -856,6 +1178,7 @@ class AIService {
     debugPrint('[AI Service] Custom direct stream route model=$requestModel hasEffort=${validEffort != null}');
 
     final httpClient = HttpClient();
+    clientSink?.add(httpClient);
 
     try {
       Future<HttpClientResponse> send(Map<String, dynamic> body) async {
@@ -897,7 +1220,7 @@ class AIService {
 
       if (response.statusCode != 200) {
         final errorBody = await response.transform(utf8.decoder).join();
-        throw GLMException('API请求失败: ${response.statusCode} - $errorBody');
+        throw AiException('API请求失败: ${response.statusCode} - $errorBody');
       }
 
       String buffer = '';
@@ -938,7 +1261,7 @@ class AIService {
               errorMessage = errorRaw;
             }
             if (errorMessage != null && errorMessage.isNotEmpty) {
-              throw GLMException('流式响应异常: $errorMessage');
+              throw AiException('流式响应异常: $errorMessage');
             }
           }
 
@@ -959,9 +1282,10 @@ class AIService {
 
       _lastStreamedModel = returnedModel ?? requestModel;
     } catch (e) {
-      if (e is GLMException) rethrow;
-      throw GLMException('对话失败: $e');
+      if (e is AiException) rethrow;
+      throw AiException('对话失败: $e');
     } finally {
+      clientSink?.remove(httpClient);
       httpClient.close();
     }
   }
@@ -1188,96 +1512,117 @@ $ocrText
     String? provider,
     bool enableSearch = false,
     String? reasoningEffort,
+    // 发起人标识：传入后该次请求的 HttpClient 会被登记到该 owner 名下，
+    // 允许调用方用 [abortActiveStreams] 在中途真正中断请求。不传则不登记
+    Object? owner,
   }) async* {
-    final resolvedProvider = provider ??
-      (_provider == AIProvider.custom
-          ? 'custom'
-          : (_provider == AIProvider.agnes ? 'agnes' : 'builtin'));
-    String? resolvedModel = model;
-    if (resolvedProvider == 'agnes') {
-      await _ensureAgnesConfigLoaded();
-      if ((_agnesApiKey ?? '').trim().isEmpty) {
-        throw GLMException('请先在AI配置中设置 Agnes AI 密钥');
+    final clients = owner != null
+        ? _activeStreamClients.putIfAbsent(owner, () => <HttpClient>{})
+        : null;
+    try {
+        final resolvedProvider = provider ??
+          (_provider == AIProvider.custom
+              ? 'custom'
+              : (_provider == AIProvider.agnes ? 'agnes' : 'builtin'));
+      String? resolvedModel = model;
+      if (resolvedProvider == 'agnes') {
+        await _ensureAgnesConfigLoaded();
+        if ((_agnesApiKey ?? '').trim().isEmpty) {
+          throw AiException('请先在AI配置中设置 Agnes AI 密钥');
+        }
+        if (resolvedModel == null || resolvedModel.isEmpty) {
+          resolvedModel = _agnesModel;
+        }
+      } else if (resolvedProvider == 'custom' && (resolvedModel == null || resolvedModel.isEmpty)) {
+        resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
+            ? _customModel!.trim()
+            : _defaultCustomModel;
       }
-      if (resolvedModel == null || resolvedModel.isEmpty) {
-        resolvedModel = _agnesModel;
-      }
-    } else if (resolvedProvider == 'custom' && (resolvedModel == null || resolvedModel.isEmpty)) {
-      resolvedModel = (_customModel != null && _customModel!.trim().isNotEmpty)
-          ? _customModel!.trim()
-          : _defaultCustomModel;
-    }
 
 
-    final List<Map<String, dynamic>> messages = [];
+      final List<Map<String, dynamic>> messages = [];
     
-    if (systemPrompt != null) {
-      messages.add({'role': 'system', 'content': systemPrompt});
-    }
+      if (systemPrompt != null) {
+        messages.add({'role': 'system', 'content': systemPrompt});
+      }
     
-    if (history != null && history.isNotEmpty) {
-      for (final msg in history) {
+      if (history != null && history.isNotEmpty) {
+        for (final msg in history) {
+          messages.add({
+            'role': msg['role'] ?? 'user',
+            'content': msg['content'] ?? '',
+          });
+        }
+      }
+    
+      if (imageBase64 != null && imageBase64.isNotEmpty) {
         messages.add({
-          'role': msg['role'] ?? 'user',
-          'content': msg['content'] ?? '',
+          'role': 'user',
+          'content': [
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url': 'data:image/jpeg;base64,$imageBase64',
+              },
+            },
+            {
+              'type': 'text',
+              'text': userMessage,
+            },
+          ],
         });
+      } else {
+        messages.add({'role': 'user', 'content': userMessage});
+      }
+
+      debugPrint('[AI Service] chatWithModelStream route provider=$resolvedProvider model=${resolvedModel ?? ''} hasImage=${imageBase64 != null && imageBase64.isNotEmpty}');
+      if (resolvedProvider == 'agnes') {
+        // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
+        yield* _chatWithAgnesStream(
+          messages: messages,
+          model: resolvedModel,
+          reasoningEffort: reasoningEffort,
+          clientSink: clients,
+        );
+        return;
+      }
+      if (resolvedProvider == 'builtin') {
+        // 内置模型：经 CloudBase Run 中转（协议同原 Edge Function）
+        yield* _chatWithBuiltinStream(
+          messages: messages,
+          model: resolvedModel,
+          reasoningEffort: reasoningEffort,
+          clientSink: clients,
+        );
+        return;
+      }
+      if (resolvedProvider == 'custom') {
+        // 自定义API：客户端直连上游（不经 Supabase 中转，减少延迟）
+        yield* _chatWithCustomStream(
+          messages: messages,
+          model: resolvedModel,
+          reasoningEffort: reasoningEffort,
+          clientSink: clients,
+        );
+        return;
+      }
+      yield* _chatWithNonDoubaoStream(
+        messages: messages,
+        provider: resolvedProvider,
+        model: resolvedModel,
+        reasoningEffort: reasoningEffort,
+        clientSink: clients,
+      );
+    } finally {
+      // 本次流式请求结束（正常 / 异常 / 订阅被取消）后释放登记，
+      // 避免 owner 名下长期残留已失效的 HttpClient 引用。
+      // 只在集合已经空了才摘掉 owner 键：被 abort 的旧请求，它的收尾可能
+      // 晚于下一次重试的登记（force close 之后才抛出异常），无条件 remove
+      // 会把新请求的登记一起误删，下一次「重试」就又掐不动了
+      if (owner != null && (clients == null || clients.isEmpty)) {
+        _activeStreamClients.remove(owner);
       }
     }
-    
-    if (imageBase64 != null && imageBase64.isNotEmpty) {
-      messages.add({
-        'role': 'user',
-        'content': [
-          {
-            'type': 'image_url',
-            'image_url': {
-              'url': 'data:image/jpeg;base64,$imageBase64',
-            },
-          },
-          {
-            'type': 'text',
-            'text': userMessage,
-          },
-        ],
-      });
-    } else {
-      messages.add({'role': 'user', 'content': userMessage});
-    }
-
-    debugPrint('[AI Service] chatWithModelStream route provider=$resolvedProvider model=${resolvedModel ?? ''} hasImage=${imageBase64 != null && imageBase64.isNotEmpty}');
-    if (resolvedProvider == 'agnes') {
-      // Agnes AI：直连 OpenAI 兼容接口（不经 Supabase 中转）
-      yield* _chatWithAgnesStream(
-        messages: messages,
-        model: resolvedModel,
-        reasoningEffort: reasoningEffort,
-      );
-      return;
-    }
-    if (resolvedProvider == 'builtin') {
-      // 内置模型：经当前节点的 Supabase Edge Function 中转（协议同 NonDoubao）
-      yield* _chatWithBuiltinStream(
-        messages: messages,
-        model: resolvedModel,
-        reasoningEffort: reasoningEffort,
-      );
-      return;
-    }
-    if (resolvedProvider == 'custom') {
-      // 自定义API：客户端直连上游（不经 Supabase 中转，减少延迟）
-      yield* _chatWithCustomStream(
-        messages: messages,
-        model: resolvedModel,
-        reasoningEffort: reasoningEffort,
-      );
-      return;
-    }
-    yield* _chatWithNonDoubaoStream(
-      messages: messages,
-      provider: resolvedProvider,
-      model: resolvedModel,
-      reasoningEffort: reasoningEffort,
-    );
   }
 
   String? _lastStreamedModel;
@@ -1360,7 +1705,7 @@ ${jsonEncode(coursesJson)}
       return;
     }
     if (provider == 'builtin') {
-      // 内置模型：经当前节点的 Supabase Edge Function 中转
+      // 内置模型：经 CloudBase Run 中转
       yield* _chatWithBuiltinStream(messages: messages, model: model, reasoningEffort: reasoningEffort);
       return;
     }
@@ -1382,10 +1727,11 @@ ${jsonEncode(coursesJson)}
   }
 }
 
-class GLMException implements Exception {
+class AiException implements Exception {
   final String message;
-  GLMException(this.message);
+  AiException(this.message);
 
+  /// 只返回 message：错误弹层/聊天气泡直接展示文案，不带类名前缀
   @override
-  String toString() => 'GLMException: $message';
+  String toString() => message;
 }

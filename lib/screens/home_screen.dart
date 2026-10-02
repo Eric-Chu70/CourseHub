@@ -23,7 +23,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   int _currentIndex = 0;
   int? _pressedIndex;
   int? _hoveredIndex;
@@ -37,22 +38,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   final _aiAssistantKey = GlobalKey<AIAssistantScreenState>();
 
   late final List<Widget> _screens;
-  
+
   late final AnimationController _iconController;
   late final PageController _pageController;
-  
+
   late final AnimationController _navBarAnimController;
   late final Animation<double> _navBarAnimation;
-  
+
   late final AnimationController _fabAnimController;
   late final Animation<Offset> _fabSlideAnimation;
-  
+
   double _lastScrollOffset = 0;
   bool _navBarVisible = true;
   bool _fabVisible = true;
+
+  /// 课表页是否停在「本周」：false 时 FAB 左侧淡入「今」按钮（由课表屏上报）
+  bool _viewingThisWeek = true;
   bool _wallpaperEnabled = false;
   static const double _scrollThreshold = 50.0;
-  
+
   static const double _itemWidth = 60.0;
   static const double _itemMargin = 2.0;
   static const double _navPadding = 16.0;
@@ -68,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       TimetableScreen(
         key: _timetableKey,
         onScrollDirectionChanged: _onScrollDirectionChanged,
+        onViewedWeekChanged: _onViewedWeekChanged,
       ),
       // 热力图已语义化，跟随全局深浅
       HeatmapScreen(key: _heatmapKey),
@@ -82,14 +87,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       const ImportScreen(),
       const SettingsScreen(),
     ];
-    
+
     _iconController = AnimationController(
       duration: const Duration(milliseconds: 400),
       vsync: this,
     );
-    
+
     _pageController = PageController();
-    
+
     _navBarAnimController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -99,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       curve: Curves.easeOutCubic,
     );
     _navBarAnimController.forward();
-    
+
     _fabAnimController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -137,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } else if (_currentIndex == 1) {
       _heatmapKey.currentState?.refreshData();
     } else {
-      // 当前不在课表页/DDL页时，标记需要在切回时刷新
+      // 当前不在课表页/待办页时，标记需要在切回时刷新
       TimetableScreenState.markNeedsRefresh();
     }
   }
@@ -164,16 +169,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
 
     _iconController.forward(from: 0);
-    
+
     if (!_fabVisible && (index == 0 || index == 1)) {
       _fabVisible = true;
     }
-    
+
     if (index != 0) {
       _navBarVisible = true;
       _navBarAnimController.animateTo(1, duration: Duration.zero);
     }
-    
+
     if (_currentIndex == index) return;
 
     if (_currentIndex == 1 && index != 1) {
@@ -183,23 +188,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     if (_currentIndex == 0 && index != 0) {
       _timetableKey.currentState?.clearRetainedCompletedTasks();
     }
-    
+
     if (_currentIndex == 2) {
       _aiAssistantKey.currentState?.saveScrollPosition();
       // 离开对话页时强制清除输入框焦点，防止切回时键盘自动弹出
       _aiAssistantKey.currentState?.clearInputFocus();
     }
-    
+
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
-    
+
     setState(() {
       _currentIndex = index;
     });
-    
+
     if (index == 0) {
       _timetableKey.currentState?.refreshIfNeeded();
       _loadWallpaperEnabled();
@@ -214,25 +219,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   double _getSliderLeft() {
     return _itemMargin + (_itemWidth + _itemMargin * 2) * _currentIndex;
   }
-  
+
   void _handleScroll(ScrollNotification notification) {
     if (_currentIndex != 0) return;
-    
+
     if (notification is ScrollStartNotification) {
       if (notification.dragDetails != null) {
         _lastScrollOffset = notification.metrics.pixels;
       }
     } else if (notification is ScrollUpdateNotification) {
       final metrics = notification.metrics;
-      
+
       if (metrics.axis != Axis.vertical) return;
-      
+
       final isUserDrag = notification.dragDetails != null;
       if (!isUserDrag) return;
-      
+
       final currentOffset = metrics.pixels;
       final delta = currentOffset - _lastScrollOffset;
-      
+
       if (delta.abs() > 1) {
         if (delta > 0 && _navBarVisible) {
           _hideNavBar();
@@ -244,7 +249,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       }
     }
   }
-  
+
   void _hideNavBar({bool animated = true}) {
     if (_navBarVisible) {
       _navBarVisible = false;
@@ -258,7 +263,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       });
     }
   }
-  
+
   void _showNavBar() {
     if (!_navBarVisible) {
       _navBarVisible = true;
@@ -268,17 +273,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       });
     }
   }
-  
+
   void _onScrollDirectionChanged(bool isScrollingDown) {
     if (_currentIndex != 0) return;
-    
+
     if (isScrollingDown && _navBarVisible) {
       _hideNavBar();
     } else if (!isScrollingDown && !_navBarVisible) {
       _showNavBar();
     }
   }
-  
+
+  /// 课表屏浏览周次变化：停在非本周时，FAB 左侧淡入「今」按钮
+  void _onViewedWeekChanged(bool viewingThisWeek) {
+    if (!mounted || _viewingThisWeek == viewingThisWeek) return;
+    setState(() {
+      _viewingThisWeek = viewingThisWeek;
+    });
+  }
+
   void _onKeyboardShown() {
     // Keep nav bar layout independent from keyboard state.
   }
@@ -286,28 +299,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   void _onKeyboardHidden() {
     // Keep nav bar layout independent from keyboard state.
   }
-  
+
   void _onFABPressed() {
     if (_currentIndex == 0) {
-      _timetableKey.currentState?.showAddOptions();
+      _timetableKey.currentState
+          ?.showAddOptions(onGoToChat: () => _onTabChanged(2));
     } else if (_currentIndex == 1) {
-      _heatmapKey.currentState?.showAddOptions();
+      _heatmapKey.currentState
+          ?.showAddOptions(onGoToChat: () => _onTabChanged(2));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
-    
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+        statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
         statusBarBrightness: Theme.of(context).brightness,
         systemStatusBarContrastEnforced: false,
         systemNavigationBarColor: Colors.transparent,
         systemNavigationBarDividerColor: Colors.transparent,
-        systemNavigationBarIconBrightness: Theme.of(context).brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+        systemNavigationBarIconBrightness:
+            Theme.of(context).brightness == Brightness.dark
+                ? Brightness.light
+                : Brightness.dark,
         systemNavigationBarContrastEnforced: false,
       ),
       child: Scaffold(
@@ -332,13 +352,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   physics: const NeverScrollableScrollPhysics(),
                   onPageChanged: (index) {
                     // 页面切换动画结束后才暂停/恢复视频（切换过程中继续播放）
-                    _timetableKey.currentState?.onTabVisibilityChanged(index == 0);
+                    _timetableKey.currentState
+                        ?.onTabVisibilityChanged(index == 0);
                   },
                   children: _screens,
                 ),
               ),
-              // FAB - 只在课表页和DDL页显示
+              // FAB - 只在课表页和待办页显示
               _buildFABWithAnimation(bottomPadding),
+              // 「今」- 课表页浏览非本周时贴在 FAB 左侧
+              _buildThisWeekButton(bottomPadding),
               Positioned(
                 left: 0,
                 right: 0,
@@ -368,8 +391,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   }
 
   Widget _buildFABWithAnimation(double bottomPadding) {
-    final bool shouldShow = (_currentIndex == 0 || _currentIndex == 1) && _fabVisible;
-    
+    final bool shouldShow =
+        (_currentIndex == 0 || _currentIndex == 1) && _fabVisible;
+
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 350),
       curve: Curves.easeOutCubic,
@@ -388,7 +412,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                   Positioned.fill(
                     child: Container(
                       decoration: BoxDecoration(
-                        color: AppColors.of(context).glassShell.withValues(alpha: 0.35),
+                        color: AppColors.of(context)
+                            .glassShell
+                            .withValues(alpha: 0.35),
                         borderRadius: BorderRadius.circular(16),
                       ),
                     ),
@@ -406,12 +432,88 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                       onTap: _onFABPressed,
                       borderRadius: BorderRadius.circular(16),
                       child: const Center(
-                        child: Icon(Icons.add, color: Color(0xFF4A90E2), size: 28),
+                        child:
+                            Icon(Icons.add, color: Color(0xFF4A90E2), size: 28),
                       ),
                     ),
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 「今」按钮：课表屏停在非本周时出现，点击回到本周（假期回假期页）。
+  ///
+  /// 显隐与 FAB 共用同一闸门（课表页 + FAB 未被滚动收起），避免滚动收起时
+  /// 只剩一个孤立按钮；位置固定在 FAB 左侧（16 右边距 + 56 宽 + 12 间距），
+  /// 出现/消失为淡入淡出 + 缩放（0.8 → 1.0），不参与位移。外观刻意与 FAB
+  /// 逐项对齐（同一圆角/模糊/底色），两处样式若要改需同步。
+  Widget _buildThisWeekButton(double bottomPadding) {
+    final bool shouldShow =
+        _currentIndex == 0 && _fabVisible && !_viewingThisWeek;
+
+    return Positioned(
+      right: 84,
+      bottom: 100 + bottomPadding,
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        scale: shouldShow ? 1.0 : 0.8,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+          opacity: shouldShow ? 1.0 : 0.0,
+          child: IgnorePointer(
+            ignoring: !shouldShow,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Stack(
+                  children: [
+                    if (_wallpaperEnabled)
+                      Positioned.fill(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.of(context)
+                                .glassShell
+                                .withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () =>
+                              _timetableKey.currentState?.goToThisWeek(),
+                          borderRadius: BorderRadius.circular(16),
+                          child: const Center(
+                            child: Text(
+                              '今',
+                              style: TextStyle(
+                                color: Color(0xFF4A90E2),
+                                fontSize: 24,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -447,11 +549,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             child: ClipRRect(
               borderRadius: BorderRadius.circular(32),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                 child: Container(
                   height: 64,
                   decoration: BoxDecoration(
-                    color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.55 : 0.45),
+                    color: AppColors.of(context).glassShell.withValues(
+                        alpha: Theme.of(context).brightness == Brightness.dark
+                            ? 0.55
+                            : 0.45),
                     borderRadius: BorderRadius.circular(32),
                     border: Border.all(
                       color: AppColors.of(context).glassBorder,
@@ -473,7 +578,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         alignment: Alignment.center,
         children: [
           AnimatedPositioned(
-            duration: _isDragging ? Duration.zero : const Duration(milliseconds: 280),
+            duration:
+                _isDragging ? Duration.zero : const Duration(milliseconds: 280),
             curve: const Cubic(0.34, 1.15, 0.64, 1.0),
             left: _getSliderLeft() + _dragOffset,
             child: AnimatedScale(
@@ -493,11 +599,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildNavItem(0, Icons.calendar_today_outlined, '课表'),
-              _buildNavItem(1, Icons.local_fire_department_outlined, 'DDL'),
-              _buildNavItem(2, Icons.chat_bubble_outline, '对话'),
-              _buildNavItem(3, Icons.file_upload_outlined, '导入'),
-              _buildNavItem(4, Icons.settings_outlined, '设置'),
+              // 每项双图标：未选中描边 / 选中实底（系统导航栏惯例）。
+              // 待办=任务清单，对话=自绘正圆气球（内置气泡均为圆角矩形
+              // 或带加号，不够圆润），导入=向下箭头，设置=齿轮
+              _buildNavItem(
+                  0, Icons.calendar_month_outlined, Icons.calendar_month, '课表'),
+              _buildNavItem(1, Icons.checklist_outlined, Icons.checklist, '待办'),
+              _buildNavItem(
+                2,
+                Icons.chat_bubble_outline,
+                Icons.chat_bubble,
+                '对话',
+                customIcon: (highlighted, color) =>
+                    _RoundBubbleIcon(filled: highlighted, color: color),
+              ),
+              _buildNavItem(3, Icons.download_outlined, Icons.download, '导入'),
+              _buildNavItem(4, Icons.settings_outlined, Icons.settings, '设置'),
             ],
           ),
         ],
@@ -505,9 +622,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     );
   }
 
-  Widget _buildNavItem(int index, IconData icon, String label) {
+  Widget _buildNavItem(
+    int index,
+    IconData icon,
+    IconData activeIcon,
+    String label, {
+    Widget Function(bool highlighted, Color color)? customIcon,
+  }) {
     final isSelected = _currentIndex == index;
-    
+
     if (isSelected) {
       return GestureDetector(
         onHorizontalDragStart: (_) {
@@ -530,7 +653,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         },
         onHorizontalDragEnd: (_) {
           const itemExtent = _itemWidth + _itemMargin * 2;
-          final targetIndex = _currentIndex + (_dragOffset / itemExtent).round();
+          final targetIndex =
+              _currentIndex + (_dragOffset / itemExtent).round();
           final newIndex = targetIndex.clamp(0, 4);
           if (newIndex != _currentIndex) {
             _onTabChanged(newIndex, withHaptic: true);
@@ -566,13 +690,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             child: SizedBox(
               width: _itemWidth,
               height: 52,
-              child: _buildAnimatedIcon(icon, label, isSelected, _hoveredIndex == index),
+              child: _buildAnimatedIcon(
+                  icon, activeIcon, label, isSelected, _hoveredIndex == index,
+                  customIcon: customIcon),
             ),
           ),
         ),
       );
     }
-    
+
     return GestureDetector(
       onTap: () => _onTabChanged(index, withHaptic: true),
       behavior: HitTestBehavior.opaque,
@@ -583,14 +709,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           child: SizedBox(
             width: _itemWidth,
             height: 52,
-            child: _buildNavContent(icon, label, isSelected, _hoveredIndex == index && _isDragging),
+            child: _buildNavContent(icon, activeIcon, label, isSelected,
+                _hoveredIndex == index && _isDragging,
+                customIcon: customIcon),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildAnimatedIcon(IconData icon, String label, bool isSelected, bool isHovered) {
+  Widget _buildAnimatedIcon(
+    IconData icon,
+    IconData activeIcon,
+    String label,
+    bool isSelected,
+    bool isHovered, {
+    Widget Function(bool highlighted, Color color)? customIcon,
+  }) {
     return AnimatedBuilder(
       animation: _iconController,
       builder: (context, child) {
@@ -598,14 +733,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.85), weight: 30),
           TweenSequenceItem(tween: Tween(begin: 0.85, end: 1.1), weight: 30),
           TweenSequenceItem(tween: Tween(begin: 1.1, end: 1.0), weight: 40),
-        ]).evaluate(CurvedAnimation(parent: _iconController, curve: Curves.easeOut));
-        
+        ]).evaluate(
+            CurvedAnimation(parent: _iconController, curve: Curves.easeOut));
+
         final rotateValue = TweenSequence<double>([
           TweenSequenceItem(tween: Tween(begin: 0.0, end: -0.1), weight: 30),
           TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.05), weight: 30),
           TweenSequenceItem(tween: Tween(begin: 0.05, end: 0.0), weight: 40),
-        ]).evaluate(CurvedAnimation(parent: _iconController, curve: Curves.easeOut));
-        
+        ]).evaluate(
+            CurvedAnimation(parent: _iconController, curve: Curves.easeOut));
+
         return Transform.scale(
           scale: bounceValue,
           child: Transform.rotate(
@@ -614,32 +751,139 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           ),
         );
       },
-      child: _buildNavContent(icon, label, isSelected, isHovered),
+      child: _buildNavContent(icon, activeIcon, label, isSelected, isHovered,
+          customIcon: customIcon),
     );
   }
 
-  Widget _buildNavContent(IconData icon, String label, bool isSelected, bool isHovered) {
+  Widget _buildNavContent(
+    IconData icon,
+    IconData activeIcon,
+    String label,
+    bool isSelected,
+    bool isHovered, {
+    Widget Function(bool highlighted, Color color)? customIcon,
+  }) {
     final isHighlighted = isHovered || (!_isDragging && isSelected);
+    final highlightColor = isHighlighted
+        ? const Color(0xFF4A90E2)
+        : AppColors.of(context).textSecondary;
     return Column(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Icon(
-          icon,
-          size: 24,
-          color: isHighlighted ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-        ),
+        // 选中（或拖动悬停预选）时切实底字形，未选中保持描边；
+        // customIcon 优先（自绘图标自带描边/实底两态）
+        if (customIcon != null)
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: customIcon(isHighlighted, highlightColor),
+          )
+        else
+          Icon(
+            isHighlighted ? activeIcon : icon,
+            size: 24,
+            color: highlightColor,
+          ),
         const SizedBox(height: 4),
         Text(
           label,
           style: TextStyle(
             fontSize: 11,
-            color: isHighlighted ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
+            color: isHighlighted
+                ? const Color(0xFF4A90E2)
+                : AppColors.of(context).textSecondary,
             fontWeight: isHighlighted ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
       ],
     );
   }
+}
+
+/// 自绘对话气球：轮廓取自 Material 字体 maps_ugc（0xe3ca）的真实字形
+/// 外轮廓（fontTools 从 materialicons-regular.otf 提取，翻转 Y 并归一化），
+/// 字形里自带的加号换成三个对话点：描边态轮廓线+实心点，
+/// 实底态（选中）三点镂空。描边 2dp 与 M3 outlined 图标笔画一致。
+class _RoundBubbleIcon extends StatelessWidget {
+  final bool filled;
+  final Color color;
+  final double size;
+
+  const _RoundBubbleIcon(
+      {required this.filled, required this.color, this.size = 24});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _RoundBubblePainter(filled: filled, color: color),
+    );
+  }
+}
+
+class _RoundBubblePainter extends CustomPainter {
+  final bool filled;
+  final Color color;
+
+  _RoundBubblePainter({required this.filled, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final balloon = _balloonPath(size.width, size.height);
+
+    // 三个对话点：水平居中一排（替代 maps_ugc 字形自带的加号）
+    final dotR = size.width * 0.055;
+    final dots = Path()
+      ..addOval(Rect.fromCircle(
+          center: Offset(size.width * 0.34, size.height * 0.50), radius: dotR))
+      ..addOval(Rect.fromCircle(
+          center: Offset(size.width * 0.50, size.height * 0.50), radius: dotR))
+      ..addOval(Rect.fromCircle(
+          center: Offset(size.width * 0.66, size.height * 0.50), radius: dotR));
+
+    if (filled) {
+      // 实底态：三点从气球中镂空（真透明孔洞，透出胶囊底色）
+      final path = Path.combine(PathOperation.difference, balloon, dots);
+      canvas.drawPath(path, Paint()..color = color);
+    } else {
+      // 描边态：轮廓线 + 实心小点（同 sms_outlined 画法）
+      canvas.drawPath(
+        balloon,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0
+          ..strokeJoin = StrokeJoin.round
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.drawPath(dots, Paint()..color = color);
+    }
+  }
+
+  /// maps_ugc 气球外轮廓：正圆（圆心 0.5,0.5 半径 0.416）在左下被尾巴
+  /// 缺口打断——两条直线交汇于尾尖 (0.041, 0.959)，非凸出三角形。
+  static Path _balloonPath(double w, double h) {
+    return Path()
+      ..moveTo(w * 0.5000, h * 0.0840)
+      ..cubicTo(w * 0.2695, h * 0.0840, w * 0.0840, h * 0.2695, w * 0.0840,
+          h * 0.5000)
+      ..cubicTo(w * 0.0840, h * 0.5645, w * 0.0977, h * 0.6250, w * 0.1230,
+          h * 0.6797)
+      ..lineTo(w * 0.0410, h * 0.9590)
+      ..lineTo(w * 0.3203, h * 0.8770)
+      ..cubicTo(w * 0.3750, h * 0.9023, w * 0.4355, h * 0.9160, w * 0.5000,
+          h * 0.9160)
+      ..cubicTo(w * 0.7305, h * 0.9160, w * 0.9160, h * 0.7305, w * 0.9160,
+          h * 0.5000)
+      ..cubicTo(w * 0.9160, h * 0.2695, w * 0.7305, h * 0.0840, w * 0.5000,
+          h * 0.0840)
+      ..close();
+  }
+
+  @override
+  bool shouldRepaint(_RoundBubblePainter oldDelegate) =>
+      oldDelegate.filled != filled || oldDelegate.color != color;
 }

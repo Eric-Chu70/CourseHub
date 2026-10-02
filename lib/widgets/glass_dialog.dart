@@ -425,6 +425,8 @@ class _BlurredDropdownState<T> extends State<BlurredDropdown<T>> {
 
 /// 独立弹出统一样式下拉菜单（与 BlurredDropdown 同款菜单壳与动效）：
 /// 锚定 [context] 对应的控件，供顶部徽章等非下拉框场景复用。
+/// 传入 [anchorGlobalPosition] 时改用全局坐标点作为锚点（如消息长按点）：
+/// 菜单在该点下方展开，下方空间不足时自动翻转到锚点上方。
 /// 返回用户选中的值（未选择/点击遮罩关闭返回 null）。
 Future<T?> showBlurredMenu<T>({
   required BuildContext context,
@@ -435,10 +437,16 @@ Future<T?> showBlurredMenu<T>({
   bool centerOnAnchor = false,
   Map<T, String>? infoMessages,
   double menuHorizontalShift = 0,
+  Offset? anchorGlobalPosition,
+
+  /// 菜单底部的附加内容（如「今日用量」进度条）：以分隔线与选项区隔开，
+  /// 不参与选中回调；选项超出同框上限滚动时该区域固定不随滚动
+  Widget? footer,
 }) async {
   final renderBox = context.findRenderObject() as RenderBox;
-  final position = renderBox.localToGlobal(Offset.zero);
-  final size = renderBox.size;
+  final position =
+      anchorGlobalPosition ?? renderBox.localToGlobal(Offset.zero);
+  final size = anchorGlobalPosition != null ? Size.zero : renderBox.size;
   final width = menuWidth ?? size.width;
   final screenWidth = MediaQuery.of(context).size.width;
   final screenHeight = MediaQuery.of(context).size.height;
@@ -448,7 +456,9 @@ Future<T?> showBlurredMenu<T>({
   // 菜单最多同框显示 4 项（单项≈48px），超出滚动，避免长列表拉满整屏；
   // ≤4 项时放宽高度上限（含文字缩放留量），保证全部同框显示、不出滚动条
   var menuMaxHeight = spaceBelow > 50 ? spaceBelow : 250.0;
-  final maxMenuHeight = itemCount <= 4 ? 224.0 : 192.0;
+  var maxMenuHeight = itemCount <= 4 ? 224.0 : 192.0;
+  // 带 footer 时放宽上限，让选项 + footer 同框显示
+  if (footer != null) maxMenuHeight += 72;
   if (menuMaxHeight > maxMenuHeight) menuMaxHeight = maxMenuHeight;
 
   // 选中项索引与各项 Key：打开后定位滚动到选中项
@@ -478,6 +488,12 @@ Future<T?> showBlurredMenu<T>({
           ? position.dx + (size.width - width) / 2
           : position.dx + menuHorizontalShift)
       .clamp(0.0, rightBound);
+
+  // 点锚定（长按呼出）且锚点下方放不下 3 项菜单时，翻转到锚点上方展开
+  final bool flipAbove = anchorGlobalPosition != null && spaceBelow < 170;
+  if (flipAbove && menuMaxHeight > position.dy - 12) {
+    menuMaxHeight = position.dy - 12;
+  }
 
   final result = await showGeneralDialog<T>(
     context: context,
@@ -518,7 +534,8 @@ Future<T?> showBlurredMenu<T>({
               ),
               Positioned(
                 left: menuLeft,
-                top: position.dy + size.height + 4,
+                top: flipAbove ? null : position.dy + size.height + 4,
+                bottom: flipAbove ? screenHeight - position.dy + 4 : null,
                 width: width,
                 child: _MenuPopTransition(
                   animation: animation,
@@ -526,7 +543,11 @@ Future<T?> showBlurredMenu<T>({
                     color: Colors.transparent,
                     child: _blurredMenuShell(
                       radius: menuRadius,
-                      child: ConstrainedBox(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: ConstrainedBox(
                         constraints: BoxConstraints(maxHeight: menuMaxHeight),
                         child: ListView.builder(
                           shrinkWrap: true,
@@ -615,6 +636,23 @@ Future<T?> showBlurredMenu<T>({
                             );
                           },
                         ),
+                            ),
+                          ),
+                          if (footer != null) ...[
+                            Divider(
+                              height: 1,
+                              thickness: 0.5,
+                              indent: 14,
+                              endIndent: 14,
+                              color: AppColors.of(context).borderWeak,
+                            ),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                              child: footer,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   ),

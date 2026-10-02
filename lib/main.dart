@@ -7,12 +7,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'config/ai_feature_flags.dart';
 import 'dialogs/ai_consent_dialog.dart';
 import 'dialogs/update_dialog.dart';
 import 'screens/home_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/auth_service.dart';
 import 'services/glm_service.dart';
+import 'services/live_update_service.dart';
 import 'services/notification_service.dart';
 import 'services/update_service.dart';
 import 'services/wallpaper_storage_service.dart';
@@ -22,6 +24,7 @@ import 'theme/theme_controller.dart';
 import 'utils/storage.dart';
 import 'widgets/toast_notification.dart';
 import 'widgets/glass_dialog.dart';
+import 'widgets/gradient_blur_header.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
@@ -37,10 +40,10 @@ void main() async {
   }
 
   await Hive.initFlutter();
-  
+
   Hive.registerAdapter(CourseAdapter());
   Hive.registerAdapter(TaskAdapter());
-  
+
   await StorageService.init();
 
   // 主题模式（浅色默认）：runApp 前读取，MaterialApp.themeMode 监听
@@ -48,6 +51,10 @@ void main() async {
 
   // 旧版拼写迁移（Anges → Agnes）：同步旧 prefs 键与 provider 值
   await AIService.migrateLegacyAgnesKeys();
+
+  // AI 子开关缓存预热：待办页间距与 AI 卡片定相要在同一帧读到同一个值，
+  // 必须在 runApp 前把磁盘值灌进同步缓存
+  await AIAutoAnalysisFlags.refresh();
 
   // 壁纸首帧预载：趁原生启动页保持期间完成 prefs 读取 + 壁纸解码入缓存，
   // 让壁纸与课表同帧渲染（消除课表先出、壁纸后闪）。
@@ -83,17 +90,23 @@ void main() async {
   // 非关键初始化延迟到 runApp 之后执行
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     // 初始化桌面小组件数据
-    WidgetService.updateAllWidgets();
+    final widgetsReady = WidgetService.updateAllWidgets();
 
     // 壁纸维护：旧 cache 路径迁移到持久目录 + 孤儿文件清理
     WallpaperStorageService.migrateAndCleanup();
 
     try {
       await NotificationService.instance.init();
-      await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
+      await NotificationService.instance
+          .rescheduleTaskNotifications(StorageService.getTasks());
     } catch (e) {
       debugPrint('Notification init error: $e');
     }
+
+    // 课程实时活动：等小组件那份课程 JSON 落盘后再对齐偏好，原生随后按当前
+    // 时间自行排好「课前出现 / 课中推进 / 下课消失」的闹钟链
+    await widgetsReady;
+    await LiveUpdateService.instance.syncToNative();
 
     await AuthService.instance.init();
     await AIService.instance.loadConfig();
@@ -123,32 +136,32 @@ class _AppRoot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-        title: 'CourseHub',
-        debugShowCheckedModeBanner: false,
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-        ],
-        supportedLocales: const [
-          Locale('zh', 'CN'),
-          Locale('en', 'US'),
-        ],
-        locale: const Locale('zh', 'CN'),
-        themeMode: context.watch<ThemeController>().mode,
-        theme: buildAppTheme(Brightness.light),
-        darkTheme: buildAppTheme(Brightness.dark),
-        // 全局钳制系统字体缩放：保留无障碍放大能力但设上限，
-        // 防止大字体设置下固定宽度布局溢出/换行（builder 包裹 Navigator，
-        // 对话框/菜单等 Overlay 路由同样生效）
-        builder: (context, child) {
-          return MediaQuery.withClampedTextScaling(
-            minScaleFactor: 0.85,
-            maxScaleFactor: 1.3,
-            child: child!,
-          );
-        },
-        home: const MainScreen(),
+      title: 'CourseHub',
+      debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('zh', 'CN'),
+        Locale('en', 'US'),
+      ],
+      locale: const Locale('zh', 'CN'),
+      themeMode: context.watch<ThemeController>().mode,
+      theme: buildAppTheme(Brightness.light),
+      darkTheme: buildAppTheme(Brightness.dark),
+      // 全局钳制系统字体缩放：保留无障碍放大能力但设上限，
+      // 防止大字体设置下固定宽度布局溢出/换行（builder 包裹 Navigator，
+      // 对话框/菜单等 Overlay 路由同样生效）
+      builder: (context, child) {
+        return MediaQuery.withClampedTextScaling(
+          minScaleFactor: 0.85,
+          maxScaleFactor: 1.3,
+          child: child!,
+        );
+      },
+      home: const MainScreen(),
     );
   }
 }
@@ -197,6 +210,7 @@ class _MainScreenState extends State<MainScreen>
   /// 等首帧（全白）上屏后再起播，保证从纯白开始渐显
   Future<void> _runLaunchFade() async {
     final prefs = await SharedPreferences.getInstance();
+    ReduceMotionFlag.refresh();
     if (!mounted) return;
     if (prefs.getBool('reduce_motion_enabled') ?? false) {
       _launchFadeController.value = 1;
@@ -227,16 +241,34 @@ class _MainScreenState extends State<MainScreen>
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool('auto_update_check') ?? true)) return;
 
+    // 检查本身不节流（latest.json 是静态 CDN 拉取，纯流量计费近乎零成本）；
+    // 节流的对象是「推送打扰」——见下方 24h 冷却
     final result = await UpdateService.checkForUpdate(appVersion);
     if (!result.hasUpdate || result.info == null) return;
     final info = result.info!;
 
-    // 仅忽略此版本：忽略记录 >= 最新版本时静默跳过
+    // 仅忽略此版本：忽略记录 >= 最新版本时静默跳过（原功能不变）
     final ignored = prefs.getString('ignored_update_version');
     if (ignored != null &&
         UpdateService.compareVersions(ignored, info.version) >= 0) {
       return;
     }
+
+    // 推送冷却（24 小时）：上次弹推送、或版本更新后 24h 内不再弹，
+    // 24h 后恢复弹一次。用户没点没理也算——从弹出时刻起算；
+    // 点了「忽略此版本」走上面的永久跳过，与本冷却互不影响
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final pushedAt = prefs.getInt('update_pushed_at') ?? 0;
+    final updatedAt = prefs.getInt('app_updated_at') ?? 0;
+    final lastInterruptAt = pushedAt > updatedAt ? pushedAt : updatedAt;
+    if (nowMs - lastInterruptAt <
+        const Duration(hours: 24).inMilliseconds) {
+      return;
+    }
+
+    // 记录本次推送时刻（放在 mounted 检查之前：记录后再 await 会让
+    // 分析器认定 context 跨异步缺口；提前记录的误差不到一秒，可忽略）
+    await prefs.setInt('update_pushed_at', nowMs);
 
     // 等待欢迎/AI 同意对话框链结束，避免提示叠加
     await _startupPromptsDone.future;
@@ -274,6 +306,9 @@ class _MainScreenState extends State<MainScreen>
 
     if (lastVersion != appVersion) {
       await prefs.setString('last_app_version', appVersion);
+      // 版本更新时间：更新推送 24h 冷却的锚点之一（刚更新完不再立刻催）
+      await prefs.setInt(
+          'app_updated_at', DateTime.now().millisecondsSinceEpoch);
       if (mounted) {
         // 首次进入（无历史版本记录）显示完整欢迎对话框；
         // 版本更新（有历史版本）显示轻量更新完成对话框
@@ -298,7 +333,7 @@ class _MainScreenState extends State<MainScreen>
       shellPadding: const EdgeInsets.all(28),
       shellBoxShadow: [
         BoxShadow(
-          color: Colors.black.withOpacity(0.15),
+          color: Colors.black.withValues(alpha: 0.15),
           blurRadius: 30,
           offset: const Offset(0, 15),
         ),
@@ -307,69 +342,69 @@ class _MainScreenState extends State<MainScreen>
       builder: (context) => ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxDialogHeight),
         child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          isUpdate ? '✅ 更新已完成！v$appVersion' : '👋 欢迎使用 CourseHub',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.of(context).textPrimary,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (!isUpdate) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            'v$appVersion',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppColors.of(context).textTertiary,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          _buildFeatureItemRich(
-                            '📅 智能化的课程及任务管理',
-                            '一句话搞定课程和任务编辑，省心省事',
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFeatureItemRich(
-                            '🤖 你的知心学习搭子',
-                            '提供课程分析与学习建议，支持接入主流AI平台',
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFeatureItemRich(
-                            '☁️ 登陆账号数据云端同步',
-                            '支持多课表备份、同步与云端数据管理',
-                          ),
-                          const SizedBox(height: 28),
-                        ],
-                        if (isUpdate) const SizedBox(height: 28),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: () => Navigator.pop(context),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF4A90E2),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: Text(
-                              isUpdate ? '继续' : '开始使用',
-                              style: const TextStyle(fontSize: 16),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isUpdate ? '✅ 更新已完成！v$appVersion' : '👋 欢迎使用 CourseHub',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.of(context).textPrimary,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (!isUpdate) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'v$appVersion',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.of(context).textTertiary,
                   ),
                 ),
+                const SizedBox(height: 24),
+                _buildFeatureItemRich(
+                  '📅 智能化的课程及任务管理',
+                  '一句话搞定课程和任务编辑，省心省事',
+                ),
+                const SizedBox(height: 16),
+                _buildFeatureItemRich(
+                  '🤖 你的知心学习搭子',
+                  '提供课程分析与学习建议，支持接入主流AI平台',
+                ),
+                const SizedBox(height: 16),
+                _buildFeatureItemRich(
+                  '☁️ 登陆账号数据云端同步',
+                  '支持多课表备份、同步与云端数据管理',
+                ),
+                const SizedBox(height: 28),
+              ],
+              if (isUpdate) const SizedBox(height: 28),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4A90E2),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    isUpdate ? '继续' : '开始使用',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     ).whenComplete(() async {
       await _showAIConsentPromptAfterWelcome();
       // 提示链收尾：通知启动更新检查可以弹 toast 了
@@ -398,7 +433,8 @@ class _MainScreenState extends State<MainScreen>
     if (accepted && mounted) {
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const SettingsScreen(autoShowAIConfig: true)),
+        MaterialPageRoute(
+            builder: (context) => const SettingsScreen(autoShowAIConfig: true)),
       );
     }
   }

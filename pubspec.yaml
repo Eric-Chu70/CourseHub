@@ -42,6 +42,8 @@ dependencies:
   open_filex: ^4.5.0
   flutter_inappwebview: ^6.1.5
   yaml: ^3.1.2
+  # 打赏码「长按保存到相册」：Android 走 MediaStore 免权限，iOS/macOS/Windows 同样可用
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:
@@ -82,5 +84,8 @@ flutter:
     - assets/coursehub_logo.jpg
     - assets/icon/agnes_icon.png
     - assets/shiguang/
-    # 打赏码：把 wechat_qr.png / alipay_qr.png 放进 assets/donate/ 即可生效
+    # 打赏码：微信收款码 wechat_qr.jpg（长按可保存到相册）
     - assets/donate/
+  # 渐进模糊标题栏着色器（Impeller 路径；非 Impeller 走 Dart 内回退）
+  shaders:
+    - shaders/gradient_blur.frag

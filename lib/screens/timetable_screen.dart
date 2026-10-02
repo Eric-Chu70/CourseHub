@@ -18,22 +18,33 @@ import '../dialogs/course_dialog.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../widgets/animated_calendar.dart';
+import '../widgets/add_options_sheet.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/keyboard_keeper.dart';
 import '../widgets/blur_selection_menu.dart';
+import '../widgets/gradient_blur_header.dart';
 import '../widgets/app_text_field.dart';
 
 class TimetableScreen extends StatefulWidget {
   final Function(bool) onScrollDirectionChanged;
-  
-  const TimetableScreen({super.key, required this.onScrollDirectionChanged});
+
+  /// 「是否停在本周」的变化通知：外壳据此在加号 FAB 左侧淡入/淡出「今」按钮
+  final Function(bool)? onViewedWeekChanged;
+
+  const TimetableScreen(
+      {super.key,
+      required this.onScrollDirectionChanged,
+      this.onViewedWeekChanged});
 
   @override
   State<TimetableScreen> createState() => TimetableScreenState();
 }
 
 class TimetableScreenState extends State<TimetableScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+    with
+        TickerProviderStateMixin,
+        WidgetsBindingObserver,
+        AutomaticKeepAliveClientMixin {
   // 数据变更标志（参考对话页 _needsRefresh 模式，避免 tab 切换时无条件重载）
   static bool _needsRefresh = false;
   static void markNeedsRefresh() => _needsRefresh = true;
@@ -45,12 +56,23 @@ class TimetableScreenState extends State<TimetableScreen>
   DateTime _semesterStartDate = DateTime.now();
   int _currentWeek = 1;
 
+  /// PageView 实际停留的页索引（0 基）。不能复用 _currentWeek 判断是否停在
+  /// 本周：假期页（最后一页）上 _currentWeek 被夹在最后一周，与真实当前周不等
+  int _viewedWeekPage = 0;
+
+  /// 已上报给外壳的「是否停在本周」，用于去重（父级只在值变化时 setState）
+  bool _reportedViewingThisWeek = true;
+
+  /// initState 完成页定位后才开始上报：_loadData 在 initState 内被调用时
+  /// _viewedWeekPage 尚未赋值，此时上报会得出错误结论且无后续纠正
+  bool _weekPageReady = false;
+
   final List<String> _weekDays = ['一', '二', '三', '四', '五', '六', '日'];
-  
+
   late PageController _pageController;
-  
+
   int _previousWeek = 1;
-  
+
   double _pageOffset = 0.0;
   String? _wallpaperPath;
   int _wallpaperOpacity = 100;
@@ -58,7 +80,9 @@ class TimetableScreenState extends State<TimetableScreen>
 
   /// 深色模式下壁纸统一压暗，渲染时一律视为深色壁纸（文字/网格走浅色分支）
   bool get _effectiveWallpaperIsLight =>
-      Theme.of(context).brightness == Brightness.dark ? false : _wallpaperIsLight;
+      Theme.of(context).brightness == Brightness.dark
+          ? false
+          : _wallpaperIsLight;
   bool _wallpaperIsLight = true;
   bool _wallpaperBlurEnabled = false;
 
@@ -76,12 +100,14 @@ class TimetableScreenState extends State<TimetableScreen>
   /// 浮现，消除直接跳过渲染带来的一帧闪现
   int? _morphHiddenDay;
   int? _morphHiddenPeriod;
+
   /// 接管代数：每次 morph 对话框打开时自增。详情→编辑链中，详情关闭
   /// 动画播完（dismissed）时编辑对话框已接管同格标记——详情的
   /// land/restore 若不校验代数，会把 fade 拉回 1 并清掉编辑的接管
   /// 标记，课程块在编辑对话框打开期间就出现在网格上（提前出现
   /// 竞态，本次修复）；校验后过期代数的收尾回调全部跳过
   int _morphTakeoverSeq = 0;
+
   /// 源课程块的渐隐/渐显进度（1 完全可见 → 0 隐藏），170ms
   late final AnimationController _morphBlockFade;
   VideoPlayerController? _videoController;
@@ -92,10 +118,13 @@ class TimetableScreenState extends State<TimetableScreen>
   bool _isTabVisible = true;
   final GlobalKey _videoRepaintKey = GlobalKey();
   Uint8List? _wallpaperBytes;
+
   /// _wallpaperBytes 对应的壁纸路径：路径未变时跳过重复读盘（预载已备好）
   String? _wallpaperBytesPath;
+
   /// 冷启动首帧同步初始化只执行一次（防止刷新时把旧预载值覆盖到新 prefs 上）
   bool _wallpaperSyncInitDone = false;
+
   /// 视频控制器换装序号：每次控制器变更（载入/切换/恢复重建）自增，
   /// 初始化完成时校验——期间发生其它变更则本次结果作废销毁，
   /// 防止并发的换装互相覆盖（最后一个开始的不一定最后完成）
@@ -104,7 +133,8 @@ class TimetableScreenState extends State<TimetableScreen>
 
   // 长按课程块弹出的操作菜单（Overlay 浮层）
   OverlayEntry? _courseBlockMenuOverlay;
-  final GlobalKey<_CourseBlockActionMenuState> _courseBlockMenuKey = GlobalKey<_CourseBlockActionMenuState>();
+  final GlobalKey<_CourseBlockActionMenuState> _courseBlockMenuKey =
+      GlobalKey<_CourseBlockActionMenuState>();
   // 空白课程块的选中状态（第一次点击显示遮罩，第二次点击弹出添加对话框）
   int? _selectedEmptyDay;
   int? _selectedEmptyPeriod;
@@ -112,6 +142,7 @@ class TimetableScreenState extends State<TimetableScreen>
   int? _pendingEmptyDay;
   int? _pendingEmptyPeriod;
   late final AnimationController _emptySlotMaskController;
+
   /// 遮罩显示/收起共用的缓动视图（easeOut 正向 / easeInCubic 反向）：
   /// 遮罩本体与该格高斯模糊都用它，保证模糊 sigma 与遮罩透明度逐帧同步
   late final CurvedAnimation _emptySlotMaskCurved = CurvedAnimation(
@@ -155,6 +186,7 @@ class TimetableScreenState extends State<TimetableScreen>
   AnimationController? _vanishController;
   CurvedAnimation? _vanishCurved;
   OverlayEntry? _vanishOverlay;
+
   /// morph 关闭动画期间确认删除（课程详情入口）：幽灵延迟到 morph 落定
   /// 后播，避免与归位中的复刻卡片同位重叠（届时复刻已消失，幽灵从
   /// 满态开始，衔接连贯）
@@ -255,6 +287,11 @@ class TimetableScreenState extends State<TimetableScreen>
     _pageOffset = initialPage.toDouble();
     _pageController = PageController(initialPage: initialPage);
     _pageController.addListener(_onPageScroll);
+    _viewedWeekPage = initialPage;
+    _weekPageReady = true;
+    // 首帧后同步一次：假期/学期周数等使初始页与本周页不重合时，外壳按钮
+    // 需要立刻处于正确状态（值未变时 _notifyViewedWeek 自行短路）
+    WidgetsBinding.instance.addPostFrameCallback((_) => _notifyViewedWeek());
   }
 
   /// 仅当数据变更时才刷新（参考对话页 refreshRuntimeConfig 模式）
@@ -311,7 +348,8 @@ class TimetableScreenState extends State<TimetableScreen>
     if (_isVideoWallpaper && _videoController != null) {
       if (state == AppLifecycleState.resumed && _isTabVisible) {
         _resumeVideoWallpaper();
-      } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      } else if (state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.paused) {
         // inactive 比 paused 更早触发，立即暂停避免后台解码堆积导致掉帧
         _videoController!.pause();
       }
@@ -369,7 +407,9 @@ class TimetableScreenState extends State<TimetableScreen>
   /// 页面可见性变化（由 HomeScreen 在 tab 切换动画结束后调用）
   void onTabVisibilityChanged(bool visible) {
     _isTabVisible = visible;
-    if (_isVideoWallpaper && _videoController != null && _videoController!.value.isInitialized) {
+    if (_isVideoWallpaper &&
+        _videoController != null &&
+        _videoController!.value.isInitialized) {
       if (visible) {
         _videoController!.play();
       } else {
@@ -384,6 +424,8 @@ class TimetableScreenState extends State<TimetableScreen>
     _dailyPeriods = StorageService.getDailyPeriods();
     _semesterStartDate = StorageService.getSemesterStartDate();
     _currentWeek = StorageService.getCurrentWeek();
+    // 学期周数/当前周可能被设置页改动，本周页落点随之变化 → 重新上报
+    _notifyViewedWeek();
     // 冷启动时先用 main 预载的数据同步初始化壁纸（首帧即有壁纸），
     // 再走异步 _loadWallpaper 补全视频初始化等剩余逻辑
     _initWallpaperFromPreload();
@@ -429,8 +471,8 @@ class TimetableScreenState extends State<TimetableScreen>
     _reduceMotionEnabled = prefs.getBool('reduce_motion_enabled') ?? false;
     _showInactiveCourses = prefs.getBool('show_inactive_courses') ?? true;
     // 减弱动态效果开启时强制关闭卡片模糊（选项已在设置页隐藏）
-    final blur =
-        (prefs.getBool('wallpaper_blur_enabled') ?? false) && !_reduceMotionEnabled;
+    final blur = (prefs.getBool('wallpaper_blur_enabled') ?? false) &&
+        !_reduceMotionEnabled;
     final soundEnabled = prefs.getBool('wallpaper_video_sound') ?? false;
     _videoSoundEnabled = soundEnabled;
 
@@ -438,7 +480,10 @@ class TimetableScreenState extends State<TimetableScreen>
     if (enabled && path != null) {
       final ext = path.toLowerCase().split('.').last;
       final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
-      if (isVideo && _currentVideoPath == path && _videoController != null && _videoController!.value.isInitialized) {
+      if (isVideo &&
+          _currentVideoPath == path &&
+          _videoController != null &&
+          _videoController!.value.isInitialized) {
         _isVideoWallpaper = true;
         _videoController!.setVolume(_videoSoundEnabled ? 1 : 0);
         if (_isTabVisible) _videoController!.play();
@@ -497,7 +542,8 @@ class TimetableScreenState extends State<TimetableScreen>
         // 超时保护：长后台后系统可能回收解码器，ExoPlayer 可能永远到不了
         // READY，悬挂的 Future 会卡住后续一切换装——限时放弃，保持缩略图兜底
         final oldController = _videoController;
-        VideoPlayerController? replacement = VideoPlayerController.file(File(path));
+        VideoPlayerController? replacement =
+            VideoPlayerController.file(File(path));
         try {
           await replacement.initialize().timeout(const Duration(seconds: 5));
         } catch (_) {
@@ -685,7 +731,7 @@ class TimetableScreenState extends State<TimetableScreen>
       if (!mounted) return;
       toastNotification.show(context, message, type: type);
     }
-    
+
     final switcherDialogFuture = showBouncyDialog(
       context: context,
       barrierLabel: '切换课表',
@@ -707,538 +753,667 @@ class TimetableScreenState extends State<TimetableScreen>
       builder: (dialogContext) {
         switcherRoute = ModalRoute.of(dialogContext);
         return StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      final mediaQuery = MediaQuery.of(context);
-                      final keyboardHeight = mediaQuery.viewInsets.bottom;
-                      final topInset = mediaQuery.padding.top;
-                      final screenHeight = mediaQuery.size.height;
-                      double dialogMaxHeight = 450;
-                      final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-                      if (availableHeight < dialogMaxHeight) {
-                        dialogMaxHeight = availableHeight;
-                      }
-                      dialogMaxHeight = dialogMaxHeight.clamp(260.0, 450.0).toDouble();
+          builder: (context, setDialogState) {
+            final mediaQuery = MediaQuery.of(context);
+            final keyboardHeight = mediaQuery.viewInsets.bottom;
+            final topInset = mediaQuery.padding.top;
+            final screenHeight = mediaQuery.size.height;
+            double dialogMaxHeight = 450;
+            final availableHeight =
+                screenHeight - topInset - keyboardHeight - 24;
+            if (availableHeight < dialogMaxHeight) {
+              dialogMaxHeight = availableHeight;
+            }
+            dialogMaxHeight = dialogMaxHeight.clamp(260.0, 450.0).toDouble();
 
-                      return AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            constraints: BoxConstraints(maxHeight: dialogMaxHeight),
-                            child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '切换课表',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.of(context).textPrimary,
-                              ),
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              constraints: BoxConstraints(maxHeight: dialogMaxHeight),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '切换课表',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.of(context).textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      physics: const BouncingScrollPhysics(
+                          parent: AlwaysScrollableScrollPhysics()),
+                      itemCount: timetables.length,
+                      itemBuilder: (context, index) {
+                        final timetable = timetables[index];
+                        final isSelected = timetable.id == currentId;
+                        final isEditing = editingId == timetable.id;
+
+                        final Widget item = Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
+                                : AppColors.of(context).panel(0.4),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).borderWeak,
                             ),
-                            const SizedBox(height: 16),
-                            Flexible(
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                itemCount: timetables.length,
-                                itemBuilder: (context, index) {
-                                  final timetable = timetables[index];
-                                  final isSelected = timetable.id == currentId;
-                                  final isEditing = editingId == timetable.id;
-                                  
-                                  final Widget item = Container(
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? const Color(0xFF4A90E2).withValues(alpha: 0.1)
-                                          : AppColors.of(context).panel(0.4),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? const Color(0xFF4A90E2)
-                                            : AppColors.of(context).borderWeak,
-                                      ),
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        child: ListTile(
-                                      contentPadding: const EdgeInsets.only(left: 16, right: 4),
-                                      leading: Container(
-                                        width: 40,
-                                        height: 40,
-                                        decoration: BoxDecoration(
-                                          gradient: isSelected 
-                                              ? const LinearGradient(
-                                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                                  begin: Alignment.topLeft,
-                                                  end: Alignment.bottomRight,
-                                                )
-                                              : null,
-                                          color: isSelected ? null : AppColors.of(context).panel(0.4),
-                                          borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: ListTile(
+                                contentPadding:
+                                    const EdgeInsets.only(left: 16, right: 4),
+                                leading: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    gradient: isSelected
+                                        ? const LinearGradient(
+                                            colors: [
+                                              Color(0xFF4A90E2),
+                                              Color(0xFF5BA0F2)
+                                            ],
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                          )
+                                        : null,
+                                    color: isSelected
+                                        ? null
+                                        : AppColors.of(context).panel(0.4),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.calendar_month_rounded,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppColors.of(context).textSecondary,
+                                    size: 20,
+                                  ),
+                                ),
+                                title: AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 220),
+                                  switchInCurve: Curves.easeOut,
+                                  switchOutCurve: Curves.easeIn,
+                                  // 左锚点 morph + 左对齐布局：AnimatedSwitcher
+                                  // 默认会把收缩宽度的子项居中堆叠
+                                  transitionBuilder: (child, animation) =>
+                                      blurredMorphTransition(
+                                    child,
+                                    animation,
+                                    alignment: Alignment.centerLeft,
+                                  ),
+                                  layoutBuilder:
+                                      (currentChild, previousChildren) => Stack(
+                                    alignment: Alignment.centerLeft,
+                                    children: [
+                                      ...previousChildren,
+                                      if (currentChild != null) currentChild,
+                                    ],
+                                  ),
+                                  child: isEditing
+                                      ? SizedBox(
+                                          key: const ValueKey('edit'),
+                                          width: double.infinity,
+                                          // 无底板的通透输入框（去蓝色底板，
+                                          // 并显式关闭全局 grey50 填充）
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                vertical: 8),
+                                            child: AppTextField(
+                                              contextMenuBuilder:
+                                                  styledEditableContextMenu,
+                                              controller: editController,
+                                              focusNode: editFocusNode,
+                                              autofocus: true,
+                                              style: TextStyle(
+                                                fontWeight: isSelected
+                                                    ? FontWeight.bold
+                                                    : FontWeight.normal,
+                                                color: isSelected
+                                                    ? const Color(0xFF4A90E2)
+                                                    : AppColors.of(context)
+                                                        .textSecondary,
+                                              ),
+                                              decoration: const InputDecoration(
+                                                isDense: true,
+                                                filled: false,
+                                                contentPadding: EdgeInsets.zero,
+                                                border: InputBorder.none,
+                                              ),
+                                              onSubmitted: (value) async {
+                                                if (value.trim().isNotEmpty) {
+                                                  await StorageService
+                                                      .renameTimetable(
+                                                          timetable.id,
+                                                          value.trim());
+                                                  setDialogState(() {
+                                                    timetables[index] =
+                                                        TimetableInfo(
+                                                      id: timetable.id,
+                                                      name: value.trim(),
+                                                      createdAt:
+                                                          timetable.createdAt,
+                                                    );
+                                                    editingId = null;
+                                                  });
+                                                  showTimetableTip(
+                                                      '课表已重命名：${value.trim()}');
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                        )
+                                      : SizedBox(
+                                          key: const ValueKey('title'),
+                                          width: double.infinity,
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                vertical: 8),
+                                            child: Text(
+                                              timetable.name,
+                                              style: TextStyle(
+                                                fontWeight: isSelected
+                                                    ? FontWeight.bold
+                                                    : FontWeight.normal,
+                                                color: isSelected
+                                                    ? const Color(0xFF4A90E2)
+                                                    : AppColors.of(context)
+                                                        .textSecondary,
+                                              ),
+                                            ),
+                                          ),
                                         ),
-                                        child: Icon(
-                                          Icons.calendar_month_rounded,
-                                          color: isSelected ? Colors.white : AppColors.of(context).textSecondary,
-                                          size: 20,
-                                        ),
-                                      ),
-                                      title: AnimatedSwitcher(
-                                        duration: const Duration(milliseconds: 220),
+                                ),
+                                trailing: timetable.id != 'default'
+                                    ? AnimatedSwitcher(
+                                        duration:
+                                            const Duration(milliseconds: 220),
                                         switchInCurve: Curves.easeOut,
                                         switchOutCurve: Curves.easeIn,
-                                        // 左锚点 morph + 左对齐布局：AnimatedSwitcher
-                                        // 默认会把收缩宽度的子项居中堆叠
-                                        transitionBuilder: (child, animation) =>
-                                            blurredMorphTransition(
-                                              child,
-                                              animation,
-                                              alignment: Alignment.centerLeft,
-                                            ),
-                                        layoutBuilder: (currentChild, previousChildren) => Stack(
-                                          alignment: Alignment.centerLeft,
-                                          children: [
-                                            ...previousChildren,
-                                            if (currentChild != null) currentChild,
-                                          ],
-                                        ),
+                                        transitionBuilder:
+                                            blurredMorphTransition,
                                         child: isEditing
-                                            ? SizedBox(
-                                                key: const ValueKey('edit'),
-                                                width: double.infinity,
-                                                // 无底板的通透输入框（去蓝色底板，
-                                                // 并显式关闭全局 grey50 填充）
-                                                child: Padding(
-                                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                                child: AppTextField(
-                                                  contextMenuBuilder: styledEditableContextMenu,
-                                                  controller: editController,
-                                                  focusNode: editFocusNode,
-                                                  autofocus: true,
-                                                    style: TextStyle(
-                                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                      color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
+                                            ? Padding(
+                                                key: const ValueKey('check'),
+                                                padding: EdgeInsets.zero,
+                                                child: GestureDetector(
+                                                  onTap: () async {
+                                                    final value =
+                                                        editController.text;
+                                                    if (value
+                                                        .trim()
+                                                        .isNotEmpty) {
+                                                      await StorageService
+                                                          .renameTimetable(
+                                                              timetable.id,
+                                                              value.trim());
+                                                      setDialogState(() {
+                                                        timetables[index] =
+                                                            TimetableInfo(
+                                                          id: timetable.id,
+                                                          name: value.trim(),
+                                                          createdAt: timetable
+                                                              .createdAt,
+                                                        );
+                                                        editingId = null;
+                                                      });
+                                                      showTimetableTip(
+                                                          '课表已重命名：${value.trim()}');
+                                                    }
+                                                  },
+                                                  // 36x36 槽位与三点按钮（图标20+左右各8内边距）等大，
+                                                  // morph 后三点落位与勾勾完全一致
+                                                  child: SizedBox(
+                                                    width: 36,
+                                                    height: 36,
+                                                    child: Center(
+                                                      child: Container(
+                                                        width: 32,
+                                                        height: 32,
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: const Color(
+                                                              0xFF4A90E2),
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(8),
+                                                        ),
+                                                        child: const Icon(
+                                                            Icons.check,
+                                                            color: Colors.white,
+                                                            size: 18),
+                                                      ),
                                                     ),
-                                                    decoration: const InputDecoration(
-                                                      isDense: true,
-                                                      filled: false,
-                                                      contentPadding: EdgeInsets.zero,
-                                                      border: InputBorder.none,
-                                                    ),
-                                                    onSubmitted: (value) async {
-                                                      if (value.trim().isNotEmpty) {
-                                                        await StorageService.renameTimetable(timetable.id, value.trim());
+                                                  ),
+                                                ),
+                                              )
+                                            : Padding(
+                                                key: const ValueKey('menu'),
+                                                padding: EdgeInsets.zero,
+                                                child: Listener(
+                                                  behavior: HitTestBehavior
+                                                      .translucent,
+                                                  onPointerDown: (_) {
+                                                    HapticFeedback
+                                                        .selectionClick();
+                                                    // 解除焦点守卫：编辑态下打开另一个三点菜单时
+                                                    // 键盘随锚点抢焦正常收起，而不是被守卫抢回
+                                                    renameFocusGuardActive =
+                                                        false;
+                                                  },
+                                                  child: BlurredPopupMenuButton<
+                                                      String>(
+                                                    icon: Icon(Icons.more_vert,
+                                                        color: AppColors.of(
+                                                                context)
+                                                            .textTertiary,
+                                                        size: 20),
+                                                    items: const [
+                                                      BlurredPopupMenuItem(
+                                                        value: 'rename',
+                                                        icon:
+                                                            Icons.edit_outlined,
+                                                        label: '重命名',
+                                                        iconColor:
+                                                            Color(0xFF4A90E2),
+                                                      ),
+                                                      BlurredPopupMenuItem(
+                                                        value: 'delete',
+                                                        icon: Icons
+                                                            .delete_outline,
+                                                        label: '删除课表',
+                                                        iconColor: Colors.red,
+                                                        textColor: Colors.red,
+                                                      ),
+                                                    ],
+                                                    onSelected: (value) async {
+                                                      if (value == 'rename') {
+                                                        editController.text =
+                                                            timetable.name;
                                                         setDialogState(() {
-                                                          timetables[index] = TimetableInfo(
-                                                            id: timetable.id,
-                                                            name: value.trim(),
-                                                            createdAt: timetable.createdAt,
-                                                          );
-                                                          editingId = null;
+                                                          editingId =
+                                                              timetable.id;
                                                         });
-                                                        showTimetableTip('课表已重命名：${value.trim()}');
+                                                        // 武装焦点守卫（编辑期持续有效）+ 聚焦新编辑框
+                                                        // （450ms 后聚焦避开菜单路由 pop 过程中的焦点
+                                                        // 恢复竞态；窗口内的意外抢焦由守卫自动纠正，
+                                                        // 键盘弹出后不再"0.5s 意外收起"）
+                                                        renameFocusGuardActive =
+                                                            true;
+                                                        keyboardKeeper
+                                                            ?.dispose();
+                                                        keyboardKeeper =
+                                                            KeyboardKeeper(
+                                                          isFocused: () =>
+                                                              switcherDialogOpen &&
+                                                              editingId ==
+                                                                  timetable
+                                                                      .id &&
+                                                              editFocusNode
+                                                                  .hasFocus,
+                                                          refocus: () {
+                                                            editFocusNode
+                                                                .unfocus();
+                                                            // 必须隔帧再聚焦：同帧 unfocus+requestFocus
+                                                            // 会被框架合并成一次焦点应用（起止相同=
+                                                            // 无变化事件），连接不会重开
+                                                            WidgetsBinding
+                                                                .instance
+                                                                .addPostFrameCallback(
+                                                                    (_) {
+                                                              editFocusNode
+                                                                  .requestFocus();
+                                                            });
+                                                          },
+                                                        )..arm(dialogContext);
+                                                        Future.delayed(
+                                                            const Duration(
+                                                                milliseconds:
+                                                                    450), () {
+                                                          if (editingId ==
+                                                              timetable.id) {
+                                                            editFocusNode
+                                                                .requestFocus();
+                                                          }
+                                                        });
+                                                      } else if (value ==
+                                                          'delete') {
+                                                        final confirmed =
+                                                            await _confirmDeleteTimetable(
+                                                                timetable.name);
+                                                        if (confirmed != true ||
+                                                            !mounted) return;
+                                                        // 删除动画（对齐课程删除动画参数）：先让该列表项
+                                                        // 原位向内模糊淡出播完，再收起其占位高度，
+                                                        // 全部播完才真正删数据并从列表移除（列表与
+                                                        // 对话框高度平滑过渡，不闪现跳变）
+                                                        _vanishingTimetableId =
+                                                            timetable.id;
+                                                        _timetableVanishCurved
+                                                            ?.dispose();
+                                                        _timetableVanishController
+                                                            ?.dispose();
+                                                        _timetableVanishController =
+                                                            AnimationController(
+                                                          vsync: this,
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      220),
+                                                        );
+                                                        _timetableVanishCurved =
+                                                            CurvedAnimation(
+                                                          parent:
+                                                              _timetableVanishController!,
+                                                          curve: Curves
+                                                              .easeInCubic,
+                                                        );
+                                                        setDialogState(() {});
+                                                        await _timetableVanishController!
+                                                            .forward(from: 0);
+                                                        if (!mounted) return;
+                                                        // 占位收起：该项已不可见，逐帧收缩其占位高度，
+                                                        // 剩余项平滑上移补位、对话框高度同步收缩，
+                                                        // 避免从列表移除瞬间高度闪现跳变
+                                                        _vanishingTimetableId =
+                                                            null;
+                                                        _collapsingTimetableId =
+                                                            timetable.id;
+                                                        _timetableCollapseCurved
+                                                            ?.dispose();
+                                                        _timetableCollapseController
+                                                            ?.dispose();
+                                                        _timetableCollapseController =
+                                                            AnimationController(
+                                                          vsync: this,
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      200),
+                                                        );
+                                                        _timetableCollapseCurved =
+                                                            CurvedAnimation(
+                                                          parent:
+                                                              _timetableCollapseController!,
+                                                          curve: Curves
+                                                              .easeOutCubic,
+                                                        );
+                                                        setDialogState(() {});
+                                                        await _timetableCollapseController!
+                                                            .forward(from: 0);
+                                                        if (!mounted) return;
+                                                        final deletedName =
+                                                            timetable.name;
+                                                        await StorageService
+                                                            .deleteTimetable(
+                                                                timetable.id);
+                                                        currentId = StorageService
+                                                            .currentTimetableId;
+                                                        _loadData();
+                                                        setDialogState(() {
+                                                          timetables =
+                                                              StorageService
+                                                                  .getTimetables();
+                                                          editingId = null;
+                                                          _collapsingTimetableId =
+                                                              null;
+                                                        });
+                                                        setState(() {
+                                                          _previousWeek =
+                                                              _currentWeek;
+                                                          _currentWeek = 1;
+                                                          _pageOffset = 0;
+                                                        });
+                                                        if (_pageController
+                                                            .hasClients) {
+                                                          _pageController
+                                                              .jumpToPage(0);
+                                                        }
+                                                        showTimetableTip(
+                                                            '课表已删除：$deletedName');
                                                       }
                                                     },
                                                   ),
                                                 ),
-                                              )
-                                            : SizedBox(
-                                                key: const ValueKey('title'),
-                                                width: double.infinity,
-                                                child: Padding(
-                                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                                  child: Text(
-                                                    timetable.name,
-                                                    style: TextStyle(
-                                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                      color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-                                                    ),
-                                                  ),
-                                                ),
                                               ),
-                                      ),
-                                      trailing: timetable.id != 'default'
-                                          ? AnimatedSwitcher(
-                                              duration: const Duration(milliseconds: 220),
-                                              switchInCurve: Curves.easeOut,
-                                              switchOutCurve: Curves.easeIn,
-                                              transitionBuilder: blurredMorphTransition,
-                                              child: isEditing
-                                                  ? Padding(
-                                                      key: const ValueKey('check'),
-                                                      padding: EdgeInsets.zero,
-                                                      child: GestureDetector(
-                                                        onTap: () async {
-                                                          final value = editController.text;
-                                                          if (value.trim().isNotEmpty) {
-                                                            await StorageService.renameTimetable(timetable.id, value.trim());
-                                                            setDialogState(() {
-                                                              timetables[index] = TimetableInfo(
-                                                                id: timetable.id,
-                                                                name: value.trim(),
-                                                                createdAt: timetable.createdAt,
-                                                              );
-                                                              editingId = null;
-                                                            });
-                                                            showTimetableTip('课表已重命名：${value.trim()}');
-                                                          }
-                                                        },
-                                                        // 36x36 槽位与三点按钮（图标20+左右各8内边距）等大，
-                                                        // morph 后三点落位与勾勾完全一致
-                                                        child: SizedBox(
-                                                          width: 36,
-                                                          height: 36,
-                                                          child: Center(
-                                                            child: Container(
-                                                              width: 32,
-                                                              height: 32,
-                                                              decoration: BoxDecoration(
-                                                                color: const Color(0xFF4A90E2),
-                                                                borderRadius: BorderRadius.circular(8),
-                                                              ),
-                                                              child: const Icon(Icons.check, color: Colors.white, size: 18),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    )
-                                                  : Padding(
-                                                      key: const ValueKey('menu'),
-                                                      padding: EdgeInsets.zero,
-                                                      child: Listener(
-                                                        behavior: HitTestBehavior.translucent,
-                                                        onPointerDown: (_) {
-                                                          HapticFeedback.selectionClick();
-                                                          // 解除焦点守卫：编辑态下打开另一个三点菜单时
-                                                          // 键盘随锚点抢焦正常收起，而不是被守卫抢回
-                                                          renameFocusGuardActive = false;
-                                                        },
-                                                        child: BlurredPopupMenuButton<String>(
-                                                          icon: Icon(Icons.more_vert, color: AppColors.of(context).textTertiary, size: 20),
-                                                          items: const [
-                                                            BlurredPopupMenuItem(
-                                                              value: 'rename',
-                                                              icon: Icons.edit_outlined,
-                                                              label: '重命名',
-                                                              iconColor: Color(0xFF4A90E2),
-                                                            ),
-                                                            BlurredPopupMenuItem(
-                                                              value: 'delete',
-                                                              icon: Icons.delete_outline,
-                                                              label: '删除课表',
-                                                              iconColor: Colors.red,
-                                                              textColor: Colors.red,
-                                                            ),
-                                                          ],
-                                                          onSelected: (value) async {
-                                                            if (value == 'rename') {
-                                                              editController.text = timetable.name;
-                                                              setDialogState(() {
-                                                                editingId = timetable.id;
-                                                              });
-                                                              // 武装焦点守卫（编辑期持续有效）+ 聚焦新编辑框
-                                                              // （450ms 后聚焦避开菜单路由 pop 过程中的焦点
-                                                              // 恢复竞态；窗口内的意外抢焦由守卫自动纠正，
-                                                              // 键盘弹出后不再"0.5s 意外收起"）
-                                                              renameFocusGuardActive = true;
-                                                              keyboardKeeper?.dispose();
-                                                              keyboardKeeper = KeyboardKeeper(
-                                                                isFocused: () => switcherDialogOpen &&
-                                                                    editingId == timetable.id &&
-                                                                    editFocusNode.hasFocus,
-                                                                refocus: () {
-                                                                  editFocusNode.unfocus();
-                                                                  // 必须隔帧再聚焦：同帧 unfocus+requestFocus
-                                                                  // 会被框架合并成一次焦点应用（起止相同=
-                                                                  // 无变化事件），连接不会重开
-                                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                                    editFocusNode.requestFocus();
-                                                                  });
-                                                                },
-                                                              )..arm(dialogContext);
-                                                              Future.delayed(const Duration(milliseconds: 450), () {
-                                                                if (editingId == timetable.id) {
-                                                                  editFocusNode.requestFocus();
-                                                                }
-                                                              });
-                                                            } else if (value == 'delete') {
-                                                              final confirmed = await _confirmDeleteTimetable(timetable.name);
-                                                              if (confirmed != true || !mounted) return;
-                                                              // 删除动画（对齐课程删除动画参数）：先让该列表项
-                                                              // 原位向内模糊淡出播完，再收起其占位高度，
-                                                              // 全部播完才真正删数据并从列表移除（列表与
-                                                              // 对话框高度平滑过渡，不闪现跳变）
-                                                              _vanishingTimetableId = timetable.id;
-                                                              _timetableVanishCurved?.dispose();
-                                                              _timetableVanishController?.dispose();
-                                                              _timetableVanishController = AnimationController(
-                                                                vsync: this,
-                                                                duration: const Duration(milliseconds: 220),
-                                                              );
-                                                              _timetableVanishCurved = CurvedAnimation(
-                                                                parent: _timetableVanishController!,
-                                                                curve: Curves.easeInCubic,
-                                                              );
-                                                              setDialogState(() {});
-                                                              await _timetableVanishController!.forward(from: 0);
-                                                              if (!mounted) return;
-                                                              // 占位收起：该项已不可见，逐帧收缩其占位高度，
-                                                              // 剩余项平滑上移补位、对话框高度同步收缩，
-                                                              // 避免从列表移除瞬间高度闪现跳变
-                                                              _vanishingTimetableId = null;
-                                                              _collapsingTimetableId = timetable.id;
-                                                              _timetableCollapseCurved?.dispose();
-                                                              _timetableCollapseController?.dispose();
-                                                              _timetableCollapseController = AnimationController(
-                                                                vsync: this,
-                                                                duration: const Duration(milliseconds: 200),
-                                                              );
-                                                              _timetableCollapseCurved = CurvedAnimation(
-                                                                parent: _timetableCollapseController!,
-                                                                curve: Curves.easeOutCubic,
-                                                              );
-                                                              setDialogState(() {});
-                                                              await _timetableCollapseController!.forward(from: 0);
-                                                              if (!mounted) return;
-                                                              final deletedName = timetable.name;
-                                                              await StorageService.deleteTimetable(timetable.id);
-                                                              currentId = StorageService.currentTimetableId;
-                                                              _loadData();
-                                                              setDialogState(() {
-                                                                timetables = StorageService.getTimetables();
-                                                                editingId = null;
-                                                                _collapsingTimetableId = null;
-                                                              });
-                                                              setState(() {
-                                                                _previousWeek = _currentWeek;
-                                                                _currentWeek = 1;
-                                                                _pageOffset = 0;
-                                                              });
-                                                              if (_pageController.hasClients) {
-                                                                _pageController.jumpToPage(0);
-                                                              }
-                                                              showTimetableTip('课表已删除：$deletedName');
-                                                            }
-                                                          },
-                                                        ),
-                                                      ),
-                                                    ),
-                                            )
-                                          : null,
-                                      onTap: isEditing
-                                          ? null
-                                          : () async {
-                                              if (!isSelected) {
-                                                await StorageService.switchTimetable(timetable.id);
-                                                currentId = timetable.id;
-                                                _loadData();
-                                                if (mounted) {
-                                                  setState(() {
-                                                    _previousWeek = _currentWeek;
-                                                    _currentWeek = 1;
-                                                    _pageOffset = 0;
-                                                  });
-                                                }
-                                                if (_pageController.hasClients) {
-                                                  _pageController.jumpToPage(0);
-                                                }
-                                                setDialogState(() {
-                                                  timetables = StorageService.getTimetables();
-                                                });
-                                                showTimetableTip('已切换到课表：${timetable.name}');
-                                                Navigator.pop(context);
-                                              }
-                                            },
-                                        ),
-                                      ),
+                                      )
+                                    : null,
+                                onTap: isEditing
+                                    ? null
+                                    : () async {
+                                        if (!isSelected) {
+                                          await StorageService.switchTimetable(
+                                              timetable.id);
+                                          currentId = timetable.id;
+                                          _loadData();
+                                          if (mounted) {
+                                            setState(() {
+                                              _previousWeek = _currentWeek;
+                                              _currentWeek = 1;
+                                              _pageOffset = 0;
+                                            });
+                                          }
+                                          if (_pageController.hasClients) {
+                                            _pageController.jumpToPage(0);
+                                          }
+                                          setDialogState(() {
+                                            timetables =
+                                                StorageService.getTimetables();
+                                          });
+                                          showTimetableTip(
+                                              '已切换到课表：${timetable.name}');
+                                          Navigator.pop(context);
+                                        }
+                                      },
+                              ),
+                            ),
+                          ),
+                        );
+                        if (timetable.id == _collapsingTimetableId) {
+                          // 占位收起阶段（vanish 播完后）：该项已完全不可见，
+                          // 逐帧收缩其占位高度，剩余项平滑上移补位、对话框高度
+                          // 同步收缩，避免从列表移除瞬间高度闪现跳变。
+                          // easeOutCubic 起始速度与 vanish 的 easeInCubic 收尾速度衔接连续
+                          return AnimatedBuilder(
+                            animation: _timetableCollapseCurved ??
+                                kAlwaysDismissedAnimation,
+                            builder: (context, child) {
+                              final t = _timetableCollapseCurved?.value ?? 0.0;
+                              return SizeTransition(
+                                sizeFactor: AlwaysStoppedAnimation(
+                                    (1.0 - t).clamp(0.0, 1.0)),
+                                axisAlignment: -1.0,
+                                child: Opacity(opacity: 0.0, child: child),
+                              );
+                            },
+                            child: item,
+                          );
+                        }
+                        if (timetable.id == _expandingTimetableId) {
+                          // 新增占位展开阶段（collapse 的逆过程）：该项不可见，
+                          // 占位高度逐帧展开（对话框高度同步增长），播完转入
+                          // 出现阶段。easeInCubic 为 collapse easeOutCubic 的
+                          // 逆曲线（严格镜像对称）
+                          return AnimatedBuilder(
+                            animation: _timetableExpandCurved ??
+                                kAlwaysDismissedAnimation,
+                            builder: (context, child) {
+                              final t = _timetableExpandCurved?.value ?? 0.0;
+                              return IgnorePointer(
+                                child: SizeTransition(
+                                  sizeFactor:
+                                      AlwaysStoppedAnimation(t.clamp(0.0, 1.0)),
+                                  axisAlignment: -1.0,
+                                  child: Opacity(opacity: 0.0, child: child),
+                                ),
+                              );
+                            },
+                            child: item,
+                          );
+                        }
+                        if (timetable.id == _appearingTimetableId) {
+                          // 新增出现阶段（vanish 的逆过程）：由模糊变清晰 +
+                          // 由内部伸展 + 淡入，播完恢复正常交互。
+                          // easeOutCubic 为 vanish easeInCubic 的逆曲线
+                          return AnimatedBuilder(
+                            animation: _timetableAppearCurved ??
+                                kAlwaysDismissedAnimation,
+                            builder: (context, child) {
+                              final t = _timetableAppearCurved?.value ?? 0.0;
+                              return IgnorePointer(
+                                child: Opacity(
+                                  opacity: t.clamp(0.0, 1.0),
+                                  child: ImageFiltered(
+                                    imageFilter: ImageFilter.blur(
+                                      sigmaX: 14 * (1.0 - t),
+                                      sigmaY: 14 * (1.0 - t),
                                     ),
-                                  );
-                                  if (timetable.id == _collapsingTimetableId) {
-                                    // 占位收起阶段（vanish 播完后）：该项已完全不可见，
-                                    // 逐帧收缩其占位高度，剩余项平滑上移补位、对话框高度
-                                    // 同步收缩，避免从列表移除瞬间高度闪现跳变。
-                                    // easeOutCubic 起始速度与 vanish 的 easeInCubic 收尾速度衔接连续
-                                    return AnimatedBuilder(
-                                      animation: _timetableCollapseCurved ?? kAlwaysDismissedAnimation,
-                                      builder: (context, child) {
-                                        final t = _timetableCollapseCurved?.value ?? 0.0;
-                                        return SizeTransition(
-                                          sizeFactor: AlwaysStoppedAnimation((1.0 - t).clamp(0.0, 1.0)),
-                                          axisAlignment: -1.0,
-                                          child: Opacity(opacity: 0.0, child: child),
-                                        );
-                                      },
-                                      child: item,
-                                    );
-                                  }
-                                  if (timetable.id == _expandingTimetableId) {
-                                    // 新增占位展开阶段（collapse 的逆过程）：该项不可见，
-                                    // 占位高度逐帧展开（对话框高度同步增长），播完转入
-                                    // 出现阶段。easeInCubic 为 collapse easeOutCubic 的
-                                    // 逆曲线（严格镜像对称）
-                                    return AnimatedBuilder(
-                                      animation: _timetableExpandCurved ?? kAlwaysDismissedAnimation,
-                                      builder: (context, child) {
-                                        final t = _timetableExpandCurved?.value ?? 0.0;
-                                        return IgnorePointer(
-                                          child: SizeTransition(
-                                            sizeFactor: AlwaysStoppedAnimation(t.clamp(0.0, 1.0)),
-                                            axisAlignment: -1.0,
-                                            child: Opacity(opacity: 0.0, child: child),
-                                          ),
-                                        );
-                                      },
-                                      child: item,
-                                    );
-                                  }
-                                  if (timetable.id == _appearingTimetableId) {
-                                    // 新增出现阶段（vanish 的逆过程）：由模糊变清晰 +
-                                    // 由内部伸展 + 淡入，播完恢复正常交互。
-                                    // easeOutCubic 为 vanish easeInCubic 的逆曲线
-                                    return AnimatedBuilder(
-                                      animation: _timetableAppearCurved ?? kAlwaysDismissedAnimation,
-                                      builder: (context, child) {
-                                        final t = _timetableAppearCurved?.value ?? 0.0;
-                                        return IgnorePointer(
-                                          child: Opacity(
-                                            opacity: t.clamp(0.0, 1.0),
-                                            child: ImageFiltered(
-                                              imageFilter: ImageFilter.blur(
-                                                sigmaX: 14 * (1.0 - t),
-                                                sigmaY: 14 * (1.0 - t),
-                                              ),
-                                              child: Transform.scale(
-                                                scale: 0.55 + 0.45 * t,
-                                                child: child,
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                      child: item,
-                                    );
-                                  }
-                                  if (timetable.id != _vanishingTimetableId) return item;
-                                  // 删除中动画（参数对齐课程删除动画）：模糊增大 + 向内缩小 +
-                                  // 淡出，逐帧驱动；数据在动画播完后才真正删除移除
-                                  return AnimatedBuilder(
-                                    animation: _timetableVanishCurved ?? kAlwaysDismissedAnimation,
-                                    builder: (context, child) {
-                                      final t = _timetableVanishCurved?.value ?? 0.0;
-                                      return IgnorePointer(
-                                        child: Opacity(
-                                          opacity: (1.0 - t).clamp(0.0, 1.0),
-                                          child: ImageFiltered(
-                                            imageFilter: ImageFilter.blur(
-                                              sigmaX: 14 * t,
-                                              sigmaY: 14 * t,
-                                            ),
-                                            child: Transform.scale(
-                                              scale: 1.0 - 0.45 * t,
-                                              child: child,
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    child: item,
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            AppTextField(
-                              contextMenuBuilder: styledEditableContextMenu,
-                              controller: nameController,
-                              focusNode: nameFocusNode,
-                              autofocus: autoFocusNewField,
-                              decoration: InputDecoration(
-                                hintText: '新建课表名称',
-                                hintStyle: TextStyle(color: AppColors.of(context).textTertiary, fontSize: 14),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                filled: true,
-                                fillColor: AppColors.of(context).panel(0.4),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
+                                    child: Transform.scale(
+                                      scale: 0.55 + 0.45 * t,
+                                      child: child,
+                                    ),
+                                  ),
                                 ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: const BorderSide(color: Color(0xFF4A90E2)),
-                                ),
-                                suffixIcon: IconButton(
-                                  icon: const Icon(Icons.add, color: Color(0xFF4A90E2)),
-                                  onPressed: () async {
-                                    final name = nameController.text.trim();
-                                    if (name.isNotEmpty) {
-                                      await StorageService.createTimetable(name);
-                                      currentId = StorageService.currentTimetableId;
-                                      _loadData();
-                                      if (mounted) {
-                                        setState(() {
-                                          _previousWeek = _currentWeek;
-                                          _currentWeek = 1;
-                                          _pageOffset = 0;
-                                        });
-                                      }
-                                      if (_pageController.hasClients) {
-                                        _pageController.jumpToPage(0);
-                                      }
-                                      setDialogState(() {
-                                        timetables = StorageService.getTimetables();
-                                      });
-                                      nameController.clear();
-                                      showTimetableTip('课表已新建并切换：$name');
-                                      // 新增课表项出现动画（删除动画的逆过程，对称）：
-                                      // 先占位展开（对话框变长）再由模糊变清晰 +
-                                      // 由内部伸展 + 淡入；对话框保持打开（与删除后
-                                      // 行为一致），用户可继续添加或自行关闭
-                                      await _playTimetableAppearAnimation(
-                                        StorageService.currentTimetableId,
-                                        setDialogState,
-                                      );
-                                    }
-                                  },
+                              );
+                            },
+                            child: item,
+                          );
+                        }
+                        if (timetable.id != _vanishingTimetableId) return item;
+                        // 删除中动画（参数对齐课程删除动画）：模糊增大 + 向内缩小 +
+                        // 淡出，逐帧驱动；数据在动画播完后才真正删除移除
+                        return AnimatedBuilder(
+                          animation: _timetableVanishCurved ??
+                              kAlwaysDismissedAnimation,
+                          builder: (context, child) {
+                            final t = _timetableVanishCurved?.value ?? 0.0;
+                            return IgnorePointer(
+                              child: Opacity(
+                                opacity: (1.0 - t).clamp(0.0, 1.0),
+                                child: ImageFiltered(
+                                  imageFilter: ImageFilter.blur(
+                                    sigmaX: 14 * t,
+                                    sigmaY: 14 * t,
+                                  ),
+                                  child: Transform.scale(
+                                    scale: 1.0 - 0.45 * t,
+                                    child: child,
+                                  ),
                                 ),
                               ),
-                              onSubmitted: (value) async {
-                                final name = value.trim();
-                                if (name.isNotEmpty) {
-                                  await StorageService.createTimetable(name);
-                                  currentId = StorageService.currentTimetableId;
-                                  _loadData();
-                                  if (mounted) {
-                                    setState(() {
-                                      _previousWeek = _currentWeek;
-                                      _currentWeek = 1;
-                                      _pageOffset = 0;
-                                    });
-                                  }
-                                  if (_pageController.hasClients) {
-                                    _pageController.jumpToPage(0);
-                                  }
-                                  setDialogState(() {
-                                    timetables = StorageService.getTimetables();
-                                  });
-                                  nameController.clear();
-                                  showTimetableTip('课表已新建并切换：$name');
-                                  // 新增课表项出现动画（删除动画的逆过程，对称）：
-                                  // 先占位展开（对话框变长）再由模糊变清晰 +
-                                  // 由内部伸展 + 淡入；对话框保持打开（与删除后
-                                  // 行为一致），用户可继续添加或自行关闭
-                                  await _playTimetableAppearAnimation(
-                                    StorageService.currentTimetableId,
-                                    setDialogState,
-                                  );
-                                }
-                              },
-                            ),
-                          ],
-                        ),
-                      );
+                            );
+                          },
+                          child: item,
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AppTextField(
+                    contextMenuBuilder: styledEditableContextMenu,
+                    controller: nameController,
+                    focusNode: nameFocusNode,
+                    autofocus: autoFocusNewField,
+                    decoration: InputDecoration(
+                      hintText: '新建课表名称',
+                      hintStyle: TextStyle(
+                          color: AppColors.of(context).textTertiary,
+                          fontSize: 14),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      filled: true,
+                      fillColor: AppColors.of(context).panel(0.4),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            BorderSide(color: AppColors.of(context).borderWeak),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFF4A90E2)),
+                      ),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.add, color: Color(0xFF4A90E2)),
+                        onPressed: () async {
+                          final name = nameController.text.trim();
+                          if (name.isNotEmpty) {
+                            await StorageService.createTimetable(name);
+                            currentId = StorageService.currentTimetableId;
+                            _loadData();
+                            if (mounted) {
+                              setState(() {
+                                _previousWeek = _currentWeek;
+                                _currentWeek = 1;
+                                _pageOffset = 0;
+                              });
+                            }
+                            if (_pageController.hasClients) {
+                              _pageController.jumpToPage(0);
+                            }
+                            setDialogState(() {
+                              timetables = StorageService.getTimetables();
+                            });
+                            nameController.clear();
+                            showTimetableTip('课表已新建并切换：$name');
+                            // 新增课表项出现动画（删除动画的逆过程，对称）：
+                            // 先占位展开（对话框变长）再由模糊变清晰 +
+                            // 由内部伸展 + 淡入；对话框保持打开（与删除后
+                            // 行为一致），用户可继续添加或自行关闭
+                            await _playTimetableAppearAnimation(
+                              StorageService.currentTimetableId,
+                              setDialogState,
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    onSubmitted: (value) async {
+                      final name = value.trim();
+                      if (name.isNotEmpty) {
+                        await StorageService.createTimetable(name);
+                        currentId = StorageService.currentTimetableId;
+                        _loadData();
+                        if (mounted) {
+                          setState(() {
+                            _previousWeek = _currentWeek;
+                            _currentWeek = 1;
+                            _pageOffset = 0;
+                          });
+                        }
+                        if (_pageController.hasClients) {
+                          _pageController.jumpToPage(0);
+                        }
+                        setDialogState(() {
+                          timetables = StorageService.getTimetables();
+                        });
+                        nameController.clear();
+                        showTimetableTip('课表已新建并切换：$name');
+                        // 新增课表项出现动画（删除动画的逆过程，对称）：
+                        // 先占位展开（对话框变长）再由模糊变清晰 +
+                        // 由内部伸展 + 淡入；对话框保持打开（与删除后
+                        // 行为一致），用户可继续添加或自行关闭
+                        await _playTimetableAppearAnimation(
+                          StorageService.currentTimetableId,
+                          setDialogState,
+                        );
+                      }
                     },
-                  );
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
     // 对话框关闭（遮罩点击/切换课表/返回键等任何 pop 路径）后，
@@ -1295,20 +1470,20 @@ class TimetableScreenState extends State<TimetableScreen>
 
   /// 第1周所在的周一。按开学日期所在自然周对齐，
   /// 避免“开学日期不管选几号都被当作星期一”导致的星期与日期错位。
-  DateTime get _mondayOfWeek1 =>
-      _semesterStartDate.subtract(Duration(days: _semesterStartDate.weekday - 1));
+  DateTime get _mondayOfWeek1 => _semesterStartDate
+      .subtract(Duration(days: _semesterStartDate.weekday - 1));
 
   DateTime _getDateForDay(int dayIndex) {
-    final startOfWeek = _mondayOfWeek1.add(Duration(days: (_currentWeek - 1) * 7));
+    final startOfWeek =
+        _mondayOfWeek1.add(Duration(days: (_currentWeek - 1) * 7));
     return startOfWeek.add(Duration(days: dayIndex));
   }
 
   List<Course> _getCoursesForSlot(int day, int period) {
-    return _courses.where((c) => 
-      c.day == day && 
-      c.time <= period && 
-      c.time + c.duration > period
-    ).toList();
+    return _courses
+        .where((c) =>
+            c.day == day && c.time <= period && c.time + c.duration > period)
+        .toList();
   }
 
   bool _isCourseStart(Course course, int period) {
@@ -1320,14 +1495,16 @@ class TimetableScreenState extends State<TimetableScreen>
     super.build(context);
     const timeColumnWidth = 40.0;
     final topPadding = MediaQuery.of(context).padding.top;
-    final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
+    final hasWallpaper = _wallpaperEnabled &&
+        _wallpaperPath != null &&
+        File(_wallpaperPath!).existsSync();
 
     return Scaffold(
       backgroundColor: hasWallpaper
-        ? const Color(0xFF1A1A2E)
-        : Theme.of(context).brightness == Brightness.dark
-            ? AppPalette.dark.scaffold
-            : const Color(0xFFF8F9FC),
+          ? const Color(0xFF1A1A2E)
+          : Theme.of(context).brightness == Brightness.dark
+              ? AppPalette.dark.scaffold
+              : const Color(0xFFF8F9FC),
       body: RepaintBoundary(
         child: Stack(
           children: [
@@ -1342,9 +1519,12 @@ class TimetableScreenState extends State<TimetableScreen>
                 builder: (context, child) {
                   double dx = 0;
                   if (_isInHoliday) {
-                    final page = _pageController.hasClients ? _pageController.page : null;
+                    final page = _pageController.hasClients
+                        ? _pageController.page
+                        : null;
                     if (page != null && page >= _effectiveTotalWeeks - 1) {
-                      final progress = (page - (_effectiveTotalWeeks - 1)).clamp(0.0, 1.0);
+                      final progress =
+                          (page - (_effectiveTotalWeeks - 1)).clamp(0.0, 1.0);
                       dx = -progress * MediaQuery.of(context).size.width;
                     }
                   }
@@ -1353,7 +1533,8 @@ class TimetableScreenState extends State<TimetableScreen>
                     child: child,
                   );
                 },
-                child: _buildPinnedHeader(topPadding, timeColumnWidth, hasWallpaper: hasWallpaper),
+                child: _buildPinnedHeader(topPadding, timeColumnWidth,
+                    hasWallpaper: hasWallpaper),
               ),
             ),
           ],
@@ -1362,65 +1543,44 @@ class TimetableScreenState extends State<TimetableScreen>
     );
   }
 
-  Widget _buildPinnedHeader(double topPadding, double timeColumnWidth, {bool hasWallpaper = false}) {
-    // 结构拆分：毛玻璃背景带（ClipRRect 仅作模糊区域与带体边界）与内容层
-    // 分离。原实现把内容包进同一个 ClipRRect——其底边恰好压在日期行下缘，
-    // 左右滑切换周时日期/周数文字墨迹随「设备回退字体度量 × 系统字体缩放」
-    // 膨胀（主题字体未打包，各机型回退字体行高 1.4~1.55em 不等），底部会被
-    // 裁剪切掉。拆分后内容层不再有纵向裁剪（横向由外层 Stack 的屏幕边界
-    // 裁剪，与原行为一致——原裁剪框即全屏宽）；毛玻璃带的矩形、模糊区域、
-    // 底部分割线逐像素保持原样，静止视效不变。
-    return Stack(
-      children: [
-        ClipRRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              // 高度 = 原「边框上下 0.5×2 + topPadding + 周选择行 48 + 日期行 52」
-              height: topPadding + 48 + 52 + 1.0,
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? AppColors.of(context).glassShell
-                        .withValues(alpha: hasWallpaper ? 0.45 : 0.85)
-                    : (hasWallpaper
-                        ? Colors.white.withValues(alpha: 0.35)
-                        : AppColors.of(context).glassShell.withValues(alpha: 0.75)),
-                border: Border(
-                  bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
-                ),
-              ),
-            ),
-          ),
-        ),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(height: topPadding),
-            Stack(
-              children: [
-                _buildWeekSelectorRow(),
-                // 视频壁纸设置按钮（与切换课表按钮对称，仅视频壁纸时显示）
-                if (_isVideoWallpaper)
-                  Positioned(
-                    left: 8,
-                    top: 0,
-                    bottom: 0,
-                    child: Center(
-                      child: IconButton(
-                        icon: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.equalizer, color: Color(0xFF4A90E2), size: 18),
-                        ),
-                        onPressed: _showVideoWallpaperSettings,
-                      ),
-                    ),
-                  ),
+  Widget _buildPinnedHeader(double topPadding, double timeColumnWidth,
+      {bool hasWallpaper = false}) {
+    // 无界渐变标题栏（同设置页）：模糊/雾化自顶部向底缘衰减归零、无
+    // 分隔线。标题行为「周选择行 + 日期行」两行自定义内容（titleRow），
+    // 叠在渐变带上方；原实现在内容上再包一层均匀毛玻璃会把渐变带
+    // 重新压成实心块，故去掉。
+    //
+    // 结构拆分备注（保留原意）：内容层不包 ClipRRect——左右滑切换周时
+    // 日期/周数文字墨迹随「设备回退字体度量 × 系统字体缩放」膨胀，
+    // 纵向裁剪会切掉文字底部（横向由外层 Stack 的屏幕边界裁剪）。
+    return GradientBlurHeader(
+      topPadding: topPadding,
+      barHeight: 48 + 52,
+      // 双行表头贴回底缘（其它页默认上移 6px）
+      titleLift: 0,
+      // 模糊归零点只下探 6px 轻贴网格线顶端：雾面铺到网格线头即收，
+      // 不再侵染格内内容；衰减带保持 0.26 缓坡
+      blurDecayBand: 0.26,
+      blurBottomExtend: 6,
+      // 减弱动态坡面维持原 50% 平台（双行表头贴底需较陡坡面）；
+      // 顶部坡面单独设置：最高浓度到 0.97 即可，不到 1.0
+      reduceMotionFadeStart: 0.50,
+      reduceMotionTopAlpha: 0.97,
+      // 课表页底部 25% 保持出厂那一版：0 → 0.5（12.5%）→ 0.85 两段
+      // 线性（四页已改为 0 → 0.95 单段，此处不跟随）
+      reduceMotionBottomAlpha: 0.85,
+      reduceMotionBottomMidAlpha: 0.5,
+      title: '课程表',
+      titleRow: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Stack(
+            children: [
+              _buildWeekSelectorRow(),
+              // 视频壁纸设置按钮（与切换课表按钮对称，仅视频壁纸时显示）
+              if (_isVideoWallpaper)
                 Positioned(
-                  right: 8,
+                  left: 8,
                   top: 0,
                   bottom: 0,
                   child: Center(
@@ -1431,23 +1591,44 @@ class TimetableScreenState extends State<TimetableScreen>
                           color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Icon(Icons.swap_horiz, color: Color(0xFF4A90E2), size: 18),
+                        child: const Icon(Icons.equalizer,
+                            color: Color(0xFF4A90E2), size: 18),
                       ),
-                      onPressed: _showTimetableSwitcher,
+                      onPressed: _showVideoWallpaperSettings,
                     ),
                   ),
                 ),
-              ],
-            ),
-            AnimatedBuilder(
-              animation: _pageController,
-              builder: (context, _) {
-                return _buildDateHeaderRow(timeColumnWidth, hasWallpaper: hasWallpaper, wallpaperIsLight: _effectiveWallpaperIsLight);
-              },
-            ),
-          ],
-        ),
-      ],
+              Positioned(
+                right: 8,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.swap_horiz,
+                          color: Color(0xFF4A90E2), size: 18),
+                    ),
+                    onPressed: _showTimetableSwitcher,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          AnimatedBuilder(
+            animation: _pageController,
+            builder: (context, _) {
+              return _buildDateHeaderRow(timeColumnWidth,
+                  hasWallpaper: hasWallpaper,
+                  wallpaperIsLight: _effectiveWallpaperIsLight);
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -1455,12 +1636,38 @@ class TimetableScreenState extends State<TimetableScreen>
   int get _effectiveTotalWeeks => StorageService.getSemesterWeeks();
 
   /// 假期状态下 PageView 额外追加一页假期页
-  int get _pageCount => _isInHoliday ? _effectiveTotalWeeks + 1 : _effectiveTotalWeeks;
+  int get _pageCount =>
+      _isInHoliday ? _effectiveTotalWeeks + 1 : _effectiveTotalWeeks;
 
   bool get _isInHoliday {
     final semesterWeeks = StorageService.getSemesterWeeks();
     final currentWeek = StorageService.getCurrentWeek();
     return currentWeek > semesterWeeks;
+  }
+
+  /// 「本周」对应的页索引（0 基）：假期时本周即假期页（最后一页），
+  /// 故按总页数夹取，避免当前周超出学期周数时算出越界页
+  int get _thisWeekPage {
+    final target = StorageService.getCurrentWeek() - 1;
+    final last = _pageCount - 1;
+    if (last < 0) return 0;
+    return target < 0 ? 0 : (target > last ? last : target);
+  }
+
+  /// 当前停留页是否就是本周页
+  bool get _isViewingThisWeek => _viewedWeekPage == _thisWeekPage;
+
+  /// 上报「是否停在本周」：先按值去重，再延到帧末通知父级——调用点
+  /// （initState / _loadData / onPageChanged）可能处于父级 build 过程中，
+  /// 直接回调父级 setState 会触发「setState during build」
+  void _notifyViewedWeek() {
+    if (!_weekPageReady) return;
+    final viewing = _isViewingThisWeek;
+    if (viewing == _reportedViewingThisWeek) return;
+    _reportedViewingThisWeek = viewing;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onViewedWeekChanged?.call(viewing);
+    });
   }
 
   Widget _buildWeekSelectorRow() {
@@ -1470,11 +1677,15 @@ class TimetableScreenState extends State<TimetableScreen>
         ? (_pageController.page?.round() ?? (_currentWeek - 1))
         : (_currentWeek - 1);
     final currentPage = rawPage.clamp(0, totalWeeks - 1);
-    final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
+    final hasWallpaper = _wallpaperEnabled &&
+        _wallpaperPath != null &&
+        File(_wallpaperPath!).existsSync();
     final headerTextColor = hasWallpaper
-        ? (_effectiveWallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
+        ? (_effectiveWallpaperIsLight
+            ? const Color(0xFF1A1A2E)
+            : const Color(0xFFE8E8E8))
         : AppColors.of(context).textPrimary;
-    
+
     return SizedBox(
       height: 48,
       child: Center(
@@ -1504,7 +1715,8 @@ class TimetableScreenState extends State<TimetableScreen>
               height: 28,
               child: AnimatedBuilder(
                 animation: _pageController,
-                builder: (context, _) => _buildAnimatedWeekNumber(totalWeeks, headerTextColor),
+                builder: (context, _) =>
+                    _buildAnimatedWeekNumber(totalWeeks, headerTextColor),
               ),
             ),
             Text(
@@ -1519,7 +1731,8 @@ class TimetableScreenState extends State<TimetableScreen>
             const SizedBox(width: 8),
             _buildWeekNavButton(
               icon: Icons.chevron_right,
-              onPressed: currentPage < pageCount - 1 ? () => _navigateWeek(1) : null,
+              onPressed:
+                  currentPage < pageCount - 1 ? () => _navigateWeek(1) : null,
             ),
           ],
         ),
@@ -1528,7 +1741,8 @@ class TimetableScreenState extends State<TimetableScreen>
   }
 
   Widget _buildAnimatedWeekNumber(int totalWeeks, Color textColor) {
-    final page = (_pageController.hasClients ? _pageController.page : null) ?? (_currentWeek - 1).toDouble();
+    final page = (_pageController.hasClients ? _pageController.page : null) ??
+        (_currentWeek - 1).toDouble();
     final pageOffset = page.clamp(0.0, (totalWeeks - 1).toDouble());
     final integerPart = pageOffset.floor();
     final fractionalPart = pageOffset - integerPart;
@@ -1593,32 +1807,39 @@ class TimetableScreenState extends State<TimetableScreen>
     );
   }
 
-  Widget _buildDateHeaderRow(double timeWidth, {bool hasWallpaper = false, bool wallpaperIsLight = true}) {
+  Widget _buildDateHeaderRow(double timeWidth,
+      {bool hasWallpaper = false, bool wallpaperIsLight = true}) {
     final screenWidth = MediaQuery.of(context).size.width;
     final dayWidth = (screenWidth - timeWidth) / 7;
-    final page = (_pageController.hasClients ? _pageController.page : null) ?? (_currentWeek - 1).toDouble();
+    final page = (_pageController.hasClients ? _pageController.page : null) ??
+        (_currentWeek - 1).toDouble();
     final pageOffset = page.clamp(0.0, (_effectiveTotalWeeks - 1).toDouble());
     final currentWeekIndex = pageOffset.floor();
     final fractionalPart = (pageOffset - currentWeekIndex).clamp(0.0, 1.0);
-    
-    final currentStartOfWeek = _mondayOfWeek1.add(Duration(days: currentWeekIndex * 7));
-    final nextStartOfWeek = _mondayOfWeek1.add(Duration(days: (currentWeekIndex + 1) * 7));
-    
+
+    final currentStartOfWeek =
+        _mondayOfWeek1.add(Duration(days: currentWeekIndex * 7));
+    final nextStartOfWeek =
+        _mondayOfWeek1.add(Duration(days: (currentWeekIndex + 1) * 7));
+
     Color dayLabelColor;
     Color dateNumberColor;
     if (hasWallpaper) {
       dayLabelColor = wallpaperIsLight ? Colors.grey.shade600 : Colors.white;
-      dateNumberColor = wallpaperIsLight ? Colors.grey.shade900 : Colors.grey.shade200;
+      dateNumberColor =
+          wallpaperIsLight ? Colors.grey.shade900 : Colors.grey.shade200;
     } else {
       dayLabelColor = AppColors.of(context).textSecondary;
       dateNumberColor = AppColors.of(context).textPrimary;
     }
-    
+
     // 淡入淡出用文字颜色透明度而非 Opacity（原因见 _buildAnimatedWeekNumber
     // 注释）：避免滑动期间 saveLayer 图层边界裁掉文字墨迹底部 1-2px
     Widget buildDateColumn(DateTime date, int dayIndex, double fade) {
       final isToday = _isToday(date);
       Color withFade(Color color) => color.withValues(alpha: fade);
+      final dayLabel = isToday ? const Color(0xFF4A90E2) : dayLabelColor;
+      final dateNumber = isToday ? const Color(0xFF4A90E2) : dateNumberColor;
       return SizedBox(
         width: dayWidth,
         child: Column(
@@ -1628,7 +1849,7 @@ class TimetableScreenState extends State<TimetableScreen>
               '周${_weekDays[dayIndex]}',
               style: TextStyle(
                 fontSize: 12,
-                color: withFade(isToday ? const Color(0xFF4A90E2) : dayLabelColor),
+                color: withFade(dayLabel),
                 fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
               ),
             ),
@@ -1637,7 +1858,7 @@ class TimetableScreenState extends State<TimetableScreen>
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: withFade(isToday ? const Color(0xFF4A90E2) : dateNumberColor),
+                color: withFade(dateNumber),
               ),
             ),
           ],
@@ -1682,12 +1903,14 @@ class TimetableScreenState extends State<TimetableScreen>
       ),
     );
   }
-  
+
   void _showWeekPickerDialog() {
     int selectedWeek = _currentWeek;
     final int totalWeeks = _effectiveTotalWeeks;
-    final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: (selectedWeek - 1).clamp(0, totalWeeks - 1));
-    
+    final FixedExtentScrollController scrollController =
+        FixedExtentScrollController(
+            initialItem: (selectedWeek - 1).clamp(0, totalWeeks - 1));
+
     showBouncyDialog(
       context: context,
       barrierLabel: '选择周数',
@@ -1703,106 +1926,111 @@ class TimetableScreenState extends State<TimetableScreen>
         ),
       ],
       builder: (context) => StatefulBuilder(
-                    builder: (context, setDialogState) {
-                      return SizedBox(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '选择周数',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.of(context).textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 150,
-                              child: ListWheelScrollView.useDelegate(
-                                controller: scrollController,
-                                itemExtent: 40,
-                                perspective: 0.005,
-                                diameterRatio: 1.5,
-                                physics: const FixedExtentScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                onSelectedItemChanged: (index) {
-                                  setDialogState(() {
-                                    selectedWeek = index + 1;
-                                  });
-                                },
-                                childDelegate: ListWheelChildBuilderDelegate(
-                                  childCount: totalWeeks,
-                                  builder: (context, index) {
-                                    final week = index + 1;
-                                    final isSelected = week == selectedWeek;
-                                    return Container(
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        '第 $week 周',
-                                        style: TextStyle(
-                                          fontSize: isSelected ? 18 : 16,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: AppColors.of(context).textSecondary,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () {
-                                      Navigator.pop(context);
-                                      if (selectedWeek != _currentWeek) {
-                                        setState(() {
-                                          _currentWeek = selectedWeek;
-                                        });
-                                        _pageController.animateToPage(
-                                          selectedWeek - 1,
-                                          duration: const Duration(milliseconds: 400),
-                                          curve: Curves.easeInOut,
-                                        );
-                                      }
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                    child: const Text('确定'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+        builder: (context, setDialogState) {
+          return SizedBox(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '选择周数',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.of(context).textPrimary,
                   ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 150,
+                  child: ListWheelScrollView.useDelegate(
+                    controller: scrollController,
+                    itemExtent: 40,
+                    perspective: 0.005,
+                    diameterRatio: 1.5,
+                    physics: const FixedExtentScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    onSelectedItemChanged: (index) {
+                      setDialogState(() {
+                        selectedWeek = index + 1;
+                      });
+                    },
+                    childDelegate: ListWheelChildBuilderDelegate(
+                      childCount: totalWeeks,
+                      builder: (context, index) {
+                        final week = index + 1;
+                        final isSelected = week == selectedWeek;
+                        return Container(
+                          alignment: Alignment.center,
+                          child: Text(
+                            '第 $week 周',
+                            style: TextStyle(
+                              fontSize: isSelected ? 18 : 16,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.of(context).textSecondary,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          if (selectedWeek != _currentWeek) {
+                            setState(() {
+                              _currentWeek = selectedWeek;
+                            });
+                            _pageController.animateToPage(
+                              selectedWeek - 1,
+                              duration: const Duration(milliseconds: 400),
+                              curve: Curves.easeInOut,
+                            );
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text('确定'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -1851,16 +2079,34 @@ class TimetableScreenState extends State<TimetableScreen>
     }
   }
 
+  /// 回到本周（假期时回到假期页）：供外壳的「今」按钮调用，动画时长与曲线
+  /// 同周切换箭头。落点不在此处提前回写，统一由 onPageChanged 更新并上报
+  void goToThisWeek() {
+    final target = _thisWeekPage;
+    if (_viewedWeekPage == target) return;
+    if (_pageController.hasClients) {
+      _pageController.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      setState(() => _viewedWeekPage = target);
+      _notifyViewedWeek();
+    }
+  }
+
   /// 构建壁纸背景：视频壁纸优先显示首帧过渡图，视频就绪后覆盖播放
   Widget _buildWallpaperBackground() {
     final wallpaper = _buildWallpaperLayer();
-    // 深色模式压暗壁纸：与深色界面观感统一，也保证浅色文字可读
+    // 深色模式压暗壁纸：与深色界面观感统一，也保证浅色文字可读。
+    // 强度刻意压低：壁纸本身多偏暗，再叠浓黑纱会整体发闷
     if (Theme.of(context).brightness == Brightness.dark) {
       return Stack(
         fit: StackFit.expand,
         children: [
           wallpaper,
-          ColoredBox(color: Colors.black.withValues(alpha: 0.42)),
+          ColoredBox(color: Colors.black.withValues(alpha: 0.25)),
         ],
       );
     }
@@ -1869,7 +2115,8 @@ class TimetableScreenState extends State<TimetableScreen>
 
   Widget _buildWallpaperLayer() {
     if (_isVideoWallpaper) {
-      final videoReady = _videoController != null && _videoController!.value.isInitialized;
+      final videoReady =
+          _videoController != null && _videoController!.value.isInitialized;
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -1917,7 +2164,9 @@ class TimetableScreenState extends State<TimetableScreen>
   Widget _buildPageView() {
     final totalWeeks = _effectiveTotalWeeks;
     final pageCount = _pageCount;
-    final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
+    final hasWallpaper = _wallpaperEnabled &&
+        _wallpaperPath != null &&
+        File(_wallpaperPath!).existsSync();
     return Stack(
       children: [
         if (hasWallpaper)
@@ -1935,17 +2184,20 @@ class TimetableScreenState extends State<TimetableScreen>
             itemCount: pageCount,
             onPageChanged: (index) {
               setState(() {
+                _viewedWeekPage = index;
                 _previousWeek = _currentWeek;
                 // 假期页（最后一页）的 _currentWeek 保持为最后一周
                 _currentWeek = (index >= totalWeeks) ? totalWeeks : index + 1;
               });
+              _notifyViewedWeek();
             },
             itemBuilder: (context, index) {
               // 最后一页为假期页
               if (_isInHoliday && index == totalWeeks) {
                 return _buildHolidayPage(hasWallpaper: hasWallpaper);
               }
-              return _buildTimetableForWeek(index + 1, hasWallpaper: hasWallpaper);
+              return _buildTimetableForWeek(index + 1,
+                  hasWallpaper: hasWallpaper);
             },
           ),
         ),
@@ -2015,7 +2267,8 @@ class TimetableScreenState extends State<TimetableScreen>
                     label: '新建课表',
                     icon: Icons.add,
                     textColor: textColor,
-                    onTap: () => _showTimetableSwitcher(autoFocusNewField: true),
+                    onTap: () =>
+                        _showTimetableSwitcher(autoFocusNewField: true),
                   ),
                 ],
               ),
@@ -2080,23 +2333,28 @@ class TimetableScreenState extends State<TimetableScreen>
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-          if (notification is ScrollUpdateNotification) {
-            _pageScrollOffsets[week] = notification.metrics.pixels;
-          }
-          return false;
-        },
+        if (notification is ScrollUpdateNotification) {
+          _pageScrollOffsets[week] = notification.metrics.pixels;
+        }
+        return false;
+      },
       child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+        physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics()),
         child: Padding(
           padding: EdgeInsets.only(top: headerHeight),
           child: Row(
             children: [
-              _buildTimeColumn(cellHeight, timeColumnWidth, hasWallpaper: hasWallpaper),
+              _buildTimeColumn(cellHeight, timeColumnWidth,
+                  hasWallpaper: hasWallpaper),
               Expanded(
                 child: Row(
                   children: List.generate(7, (dayIndex) {
                     return Expanded(
-                      child: _buildDayColumn(dayIndex, cellHeight, week,
+                      child: _buildDayColumn(
+                        dayIndex,
+                        cellHeight,
+                        week,
                         hasWallpaper: hasWallpaper,
                         transparencyFactor: t,
                         scrollOffset: scrollOffset,
@@ -2118,77 +2376,94 @@ class TimetableScreenState extends State<TimetableScreen>
 
   bool _isToday(DateTime date) {
     final now = DateTime.now();
-    return date.year == now.year && date.month == now.month && date.day == now.day;
+    return date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
   }
 
-  Widget _buildTimeColumn(double cellHeight, double width, {bool hasWallpaper = false}) {
+  Widget _buildTimeColumn(double cellHeight, double width,
+      {bool hasWallpaper = false}) {
     final timeTextColor = hasWallpaper
-        ? (_effectiveWallpaperIsLight ? const Color(0xFF666E78) : const Color(0xFFD0D0D0))
+        ? (_effectiveWallpaperIsLight
+            ? const Color(0xFF666E78)
+            : const Color(0xFFD0D0D0))
         : AppColors.of(context).textTertiary;
     final timeNumColor = hasWallpaper
-        ? (_effectiveWallpaperIsLight ? const Color(0xFF1A1A2E) : const Color(0xFFE8E8E8))
+        ? (_effectiveWallpaperIsLight
+            ? const Color(0xFF1A1A2E)
+            : const Color(0xFFE8E8E8))
         : AppColors.of(context).textPrimary;
-    return Container(
-      width: width,
-      decoration: BoxDecoration(
-        color: Theme.of(context).brightness == Brightness.dark
-                            ? AppColors.of(context).glassShell
-                                .withValues(alpha: hasWallpaper ? 0.55 : 1.0)
-                            : (hasWallpaper
-                                ? Colors.white.withValues(alpha: 0.5)
-                                : AppColors.of(context).surfaceAlt),
-        border: Border(
-          right: BorderSide(color: AppColors.of(context).borderWeak),
-        ),
-      ),
-      child: Column(
-        children: List.generate(_dailyPeriods, (index) {
-          final timeSlot = index < _timeSlots.length ? _timeSlots[index] : null;
-          return Container(
-            height: cellHeight,
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: AppColors.of(context).borderWeak),
-              ),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '${index + 1}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: timeNumColor,
-                    ),
+    // 遮罩改圆角矩形卡片：与课程块同款（radius 5、左右 2px 间隙），
+    // 去掉通栏直角 + 右描边形态；壁纸模式深色下遮罩仍减淡（0.55→0.38）
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(5),
+        child: Container(
+          width: width - 4,
+          decoration: BoxDecoration(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? AppColors.of(context)
+                    .glassShell
+                    .withValues(alpha: hasWallpaper ? 0.38 : 1.0)
+                : (hasWallpaper
+                    ? Colors.white.withValues(alpha: 0.5)
+                    : AppColors.of(context).surfaceAlt),
+          ),
+          child: Column(
+            children: List.generate(_dailyPeriods, (index) {
+              final timeSlot =
+                  index < _timeSlots.length ? _timeSlots[index] : null;
+              return Container(
+                height: cellHeight,
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: AppColors.of(context).borderWeak),
                   ),
-                  if (timeSlot != null) ...[
-                    Text(
-                      timeSlot['start']!,
-                      style: TextStyle(
-                        fontSize: 8,
-                        color: timeTextColor,
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: timeNumColor,
+                        ),
                       ),
-                    ),
-                    Text(
-                      timeSlot['end']!,
-                      style: TextStyle(
-                        fontSize: 8,
-                        color: timeTextColor,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          );
-        }),
+                      if (timeSlot != null) ...[
+                        Text(
+                          timeSlot['start']!,
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: timeTextColor,
+                          ),
+                        ),
+                        Text(
+                          timeSlot['end']!,
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: timeTextColor,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildDayColumn(int dayIndex, double cellHeight, int week, {
+  Widget _buildDayColumn(
+    int dayIndex,
+    double cellHeight,
+    int week, {
     bool hasWallpaper = false,
     double transparencyFactor = 1.0,
     double scrollOffset = 0.0,
@@ -2211,10 +2486,13 @@ class TimetableScreenState extends State<TimetableScreen>
               _morphBlockFade.value <= 0.05) {
             continue;
           }
-          final sameStartCourses = _courses.where((c) =>
-            c.day == dayIndex && c.time == period).toList();
+          final sameStartCourses = _courses
+              .where((c) => c.day == dayIndex && c.time == period)
+              .toList();
           if (sameStartCourses.isEmpty) continue;
-          final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
+          final activeCourses = sameStartCourses
+              .where((c) => _shouldShowCourse(c, week))
+              .toList();
           // 「显示非本周课程」关闭：非本周课程块不渲染，也不加模糊区域
           if (activeCourses.isEmpty && !_showInactiveCourses) continue;
           final course = activeCourses.isEmpty
@@ -2252,7 +2530,8 @@ class TimetableScreenState extends State<TimetableScreen>
       }
       return Container(
         decoration: BoxDecoration(
-          color: hasWallpaper ? Colors.transparent : AppColors.of(context).surface,
+          color:
+              hasWallpaper ? Colors.transparent : AppColors.of(context).surface,
           border: Border(
             right: BorderSide(color: AppColors.of(context).borderWeak),
           ),
@@ -2366,7 +2645,10 @@ class TimetableScreenState extends State<TimetableScreen>
                   ),
                 ),
               ),
-            ..._buildCourseWidgets(dayIndex, cellHeight, week,
+            ..._buildCourseWidgets(
+              dayIndex,
+              cellHeight,
+              week,
               hasWallpaper: hasWallpaper,
               transparencyFactor: transparencyFactor,
               scrollOffset: scrollOffset,
@@ -2410,9 +2692,7 @@ class TimetableScreenState extends State<TimetableScreen>
     // 实际渲染到位，手速快会抢在这一帧点击原位），统一按"有课程即拦截"
     // 处理，彻底杜绝课程卡片处出现加号遮罩
     for (final c in _courses) {
-      if (c.day == day &&
-          period >= c.time &&
-          period < c.time + c.duration) {
+      if (c.day == day && period >= c.time && period < c.time + c.duration) {
         return;
       }
     }
@@ -2429,8 +2709,11 @@ class TimetableScreenState extends State<TimetableScreen>
       final maskContext = _emptySlotMaskContext;
       if (maskContext != null) {
         final renderObject = maskContext.findRenderObject();
-        if (renderObject is RenderBox && renderObject.attached && renderObject.hasSize) {
-          sourceRect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+        if (renderObject is RenderBox &&
+            renderObject.attached &&
+            renderObject.hasSize) {
+          sourceRect =
+              renderObject.localToGlobal(Offset.zero) & renderObject.size;
         }
       }
       _showCourseDialog(
@@ -2561,8 +2844,7 @@ class TimetableScreenState extends State<TimetableScreen>
     _inactivePeekPauseCount = 0;
     _inactivePeekPausedRemaining = null;
     if (_inactivePeekCourseId == null) return;
-    if (_inactivePeekController != null &&
-        _inactivePeekController!.value > 0) {
+    if (_inactivePeekController != null && _inactivePeekController!.value > 0) {
       final id = _inactivePeekCourseId;
       _inactivePeekController!.reverse().whenComplete(() {
         if (mounted && _inactivePeekCourseId == id) {
@@ -2590,63 +2872,64 @@ class TimetableScreenState extends State<TimetableScreen>
     // 展开该卡片时课表网格与其它课程卡片消失、所在列变灰）
     double? morphOpacity,
   }) {
-    Widget content = _inactivePeekCourseId == course.id && _inactivePeekCurved != null
-        ? Builder(
-              builder: (context) {
-                // 浮现期间可点按/长按（与正常课程块一致）：点击打开课程
-                // 详情（morph 从浮现卡片原位起飞，起飞前瞬时清除浮现，
-                // 复刻与浮现卡片像素重合无闪现）；长按弹出课程块菜单
-                final card = _buildCourseCellCard(
-                  course,
-                  isInactiveInCurrentWeek: true,
-                  hasWallpaper: hasWallpaper,
-                  transparencyFactor: transparencyFactor,
-                );
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    // 卡片保持显示、倒计时暂停（morph 复刻 t=0 与浮现
-                    // 卡片像素重合），详情关闭后续接剩余倒计时
-                    _pauseInactivePeek();
-                    _showCourseDetail(
-                      course,
-                      sourceContext: context,
-                      sourceWidget: card,
-                    );
-                  },
-                  onLongPress: () => _showCourseBlockMenu(course, context),
-                  child: AnimatedBuilder(
-                    animation: _inactivePeekCurved!,
-                    builder: (context, _) {
-                      final t = _inactivePeekCurved!.value;
-                      final blur = 12 * (1 - t);
-                      // t=0 完全不可见；blur≈0 时跳过 ImageFiltered
-                      //（sigma≈0 的 blur 在 Impeller 上渲染成空白）
-                      return Opacity(
-                        opacity: t,
-                        child: Transform.scale(
-                          scale: 0.55 + 0.45 * t,
-                          child: blur > 0.05
-                              ? ImageFiltered(
-                                  imageFilter: ImageFilter.blur(
-                                    sigmaX: blur,
-                                    sigmaY: blur,
-                                  ),
-                                  child: card,
-                                )
-                              : card,
-                        ),
+    Widget content =
+        _inactivePeekCourseId == course.id && _inactivePeekCurved != null
+            ? Builder(
+                builder: (context) {
+                  // 浮现期间可点按/长按（与正常课程块一致）：点击打开课程
+                  // 详情（morph 从浮现卡片原位起飞，起飞前瞬时清除浮现，
+                  // 复刻与浮现卡片像素重合无闪现）；长按弹出课程块菜单
+                  final card = _buildCourseCellCard(
+                    course,
+                    isInactiveInCurrentWeek: true,
+                    hasWallpaper: hasWallpaper,
+                    transparencyFactor: transparencyFactor,
+                  );
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      // 卡片保持显示、倒计时暂停（morph 复刻 t=0 与浮现
+                      // 卡片像素重合），详情关闭后续接剩余倒计时
+                      _pauseInactivePeek();
+                      _showCourseDetail(
+                        course,
+                        sourceContext: context,
+                        sourceWidget: card,
                       );
                     },
-                  ),
-                );
-              },
-            )
-          : GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () => _beginInactivePeek(course),
-              child: const SizedBox.expand(),
-            );
+                    onLongPress: () => _showCourseBlockMenu(course, context),
+                    child: AnimatedBuilder(
+                      animation: _inactivePeekCurved!,
+                      builder: (context, _) {
+                        final t = _inactivePeekCurved!.value;
+                        final blur = 12 * (1 - t);
+                        // t=0 完全不可见；blur≈0 时跳过 ImageFiltered
+                        //（sigma≈0 的 blur 在 Impeller 上渲染成空白）
+                        return Opacity(
+                          opacity: t,
+                          child: Transform.scale(
+                            scale: 0.55 + 0.45 * t,
+                            child: blur > 0.05
+                                ? ImageFiltered(
+                                    imageFilter: ImageFilter.blur(
+                                      sigmaX: blur,
+                                      sigmaY: blur,
+                                    ),
+                                    child: card,
+                                  )
+                                : card,
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              )
+            : GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _beginInactivePeek(course),
+                child: const SizedBox.expand(),
+              );
     // morph 接管期：整个 Positioned 的内容随 _morphBlockFade 渐隐/渐显
     //（包在 Positioned 内部，Positioned 仍是 Stack 的直接子级）
     if (morphOpacity != null) {
@@ -2664,7 +2947,9 @@ class TimetableScreenState extends State<TimetableScreen>
   }
 
   /// 空白课程块选中后的灰白色遮罩（与非本周课程样式一致，仅占一个小节），中部显示灰色加号
-    Widget _buildEmptySlotSelection(int period, double cellHeight, {
+  Widget _buildEmptySlotSelection(
+    int period,
+    double cellHeight, {
     bool hasWallpaper = false,
     double transparencyFactor = 1.0,
   }) {
@@ -2673,17 +2958,24 @@ class TimetableScreenState extends State<TimetableScreen>
     // 与非本周卡片完全一致：浅色沿用 GitHub 原版色值与配比，
     // 深色用令牌版（无白描边），加号与卡片标题同级
     final backgroundStart = AppColors.isDark(context)
-        ? palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!)
-        : const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!);
+        ? palette.surfaceAlt
+            .withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!)
+        : const Color(0xFFF4F5F7)
+            .withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!);
     final backgroundEnd = AppColors.isDark(context)
-        ? palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!)
-        : const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!);
+        ? palette.surfaceAlt
+            .withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!)
+        : const Color(0xFFEDEFF2)
+            .withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!);
     final borderColor = AppColors.isDark(context)
         ? Colors.transparent
-        : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
+        : const Color(0xFFDDE1E6)
+            .withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
     final iconColor = AppColors.isDark(context)
-        ? palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
-        : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
+        ? palette.textPrimary
+            .withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
+        : const Color(0xFF8C939C)
+            .withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
 
     return Positioned(
       top: period * cellHeight + 2,
@@ -2728,7 +3020,10 @@ class TimetableScreenState extends State<TimetableScreen>
     );
   }
 
-  List<Widget> _buildCourseWidgets(int dayIndex, double cellHeight, int week, {
+  List<Widget> _buildCourseWidgets(
+    int dayIndex,
+    double cellHeight,
+    int week, {
     bool hasWallpaper = false,
     double transparencyFactor = 1.0,
     double scrollOffset = 0.0,
@@ -2754,7 +3049,8 @@ class TimetableScreenState extends State<TimetableScreen>
       final isMorphSourceCell =
           dayIndex == _morphHiddenDay && period == _morphHiddenPeriod;
 
-      final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
+      final activeCourses =
+          sameStartCourses.where((c) => _shouldShowCourse(c, week)).toList();
       final isInactiveInCurrentWeek = activeCourses.isEmpty;
       // 设置页「显示非本周课程」关闭：非本周课程不再以灰色卡片显示，
       // 原位改放透明点击区——点击后原课程卡片淡入短暂显示 5s（见
@@ -2775,7 +3071,7 @@ class TimetableScreenState extends State<TimetableScreen>
         widgets.add(cell);
         continue;
       }
-        final course = isInactiveInCurrentWeek
+      final course = isInactiveInCurrentWeek
           ? _pickFallbackCourse(sameStartCourses, week)
           : activeCourses.first;
 
@@ -2847,7 +3143,8 @@ class TimetableScreenState extends State<TimetableScreen>
 
   Set<int> _parseWeeks(String weeks) {
     final result = <int>{};
-    String cleaned = weeks.replaceAll('连', '').replaceAll('周', '').replaceAll(' ', '');
+    String cleaned =
+        weeks.replaceAll('连', '').replaceAll('周', '').replaceAll(' ', '');
     final parts = cleaned.split(',');
     for (var part in parts) {
       part = part.trim();
@@ -2983,7 +3280,8 @@ class TimetableScreenState extends State<TimetableScreen>
       titleColor = displayColor;
       metaColor = displayColor;
       triangleColor = displayColor;
-      borderColor = displayColor.withValues(alpha: lerpDouble(0.2, 0.06, effectiveT)!);
+      borderColor =
+          displayColor.withValues(alpha: lerpDouble(0.2, 0.06, effectiveT)!);
     } else {
       // 非本周设计：去色表达"本周不重要"。浅色模式沿用 GitHub 原版的
       // 色值与透明度配比；深色模式用令牌版（文字不随透明度衰减）
@@ -2995,27 +3293,37 @@ class TimetableScreenState extends State<TimetableScreen>
         end: Alignment.bottomRight,
         colors: isDark
             ? [
-                palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
-                palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
+                palette.surfaceAlt
+                    .withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+                palette.surfaceAlt
+                    .withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
               ]
             : [
-                const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
-                const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+                const Color(0xFFF4F5F7)
+                    .withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
+                const Color(0xFFEDEFF2)
+                    .withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
               ],
       );
       titleColor = isDark
           // 深色下白字压暗一档：仍可读，但不比周围亮色卡片抢眼
-          ? palette.textPrimary.withValues(alpha: lerpDouble(0.83, 0.31, inactiveT)!)
-          : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
+          ? palette.textPrimary
+              .withValues(alpha: lerpDouble(0.83, 0.31, inactiveT)!)
+          : const Color(0xFF8C939C)
+              .withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!);
       metaColor = isDark
-          ? palette.textSecondary.withValues(alpha: lerpDouble(0.70, 0.27, inactiveT)!)
-          : const Color(0xFFA2A8B0).withValues(alpha: lerpDouble(1.0, 0.6, inactiveT)!);
+          ? palette.textSecondary
+              .withValues(alpha: lerpDouble(0.70, 0.27, inactiveT)!)
+          : const Color(0xFFA2A8B0)
+              .withValues(alpha: lerpDouble(1.0, 0.6, inactiveT)!);
       triangleColor = isDark
           ? palette.textTertiary
-          : const Color(0xFFCDD2D9).withValues(alpha: lerpDouble(1.0, 0.65, inactiveT)!);
+          : const Color(0xFFCDD2D9)
+              .withValues(alpha: lerpDouble(1.0, 0.65, inactiveT)!);
       borderColor = isDark
           ? Colors.transparent
-          : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
+          : const Color(0xFFDDE1E6)
+              .withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!);
     }
 
     return Container(
@@ -3036,19 +3344,31 @@ class TimetableScreenState extends State<TimetableScreen>
               children: [
                 Text(
                   course.name,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: titleColor, height: 1.15),
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: titleColor,
+                      height: 1.15),
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (course.location != null && course.location!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 1),
-                    child: Text('@${course.location!}', style: TextStyle(fontSize: 9, color: metaColor, height: 1.1), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    child: Text('@${course.location!}',
+                        style: TextStyle(
+                            fontSize: 9, color: metaColor, height: 1.1),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
                   ),
                 if (course.teacher != null && course.teacher!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 1),
-                    child: Text(course.teacher!, style: TextStyle(fontSize: 9, color: metaColor, height: 1.1), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    child: Text(course.teacher!,
+                        style: TextStyle(
+                            fontSize: 9, color: metaColor, height: 1.1),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
                   ),
               ],
             ),
@@ -3056,7 +3376,11 @@ class TimetableScreenState extends State<TimetableScreen>
               Positioned(
                 right: 0,
                 bottom: 0,
-                child: SizedBox(width: 12, height: 12, child: CustomPaint(painter: _CornerTrianglePainter(color: triangleColor))),
+                child: SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CustomPaint(
+                        painter: _CornerTrianglePainter(color: triangleColor))),
               ),
           ],
         ),
@@ -3067,12 +3391,16 @@ class TimetableScreenState extends State<TimetableScreen>
   /// 按当前课表状态推导参数，构建课程块卡片的静态复刻：
   /// 长按菜单等入口打开 morph 对话框时用作翻转动画的「正面」
   Widget _buildCourseCellReplica(Course course) {
-    final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
+    final hasWallpaper = _wallpaperEnabled &&
+        _wallpaperPath != null &&
+        File(_wallpaperPath!).existsSync();
     final t = hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0;
     final sameStartCourses = _courses
         .where((c) => c.day == course.day && c.time == course.time)
         .toList();
-    final activeCourses = sameStartCourses.where((c) => _shouldShowCourse(c, _currentWeek)).toList();
+    final activeCourses = sameStartCourses
+        .where((c) => _shouldShowCourse(c, _currentWeek))
+        .toList();
     return _buildCourseCellCard(
       course,
       isInactiveInCurrentWeek: activeCourses.isEmpty,
@@ -3085,7 +3413,9 @@ class TimetableScreenState extends State<TimetableScreen>
   /// 加号遮罩的静态复刻（样式与 _buildEmptySlotSelection 一致）：
   /// 第二次点击空白格弹出添加课程对话框时用作翻转动画的「正面」
   Widget _buildEmptySlotMaskReplica() {
-    final hasWallpaper = _wallpaperEnabled && _wallpaperPath != null && File(_wallpaperPath!).existsSync();
+    final hasWallpaper = _wallpaperEnabled &&
+        _wallpaperPath != null &&
+        File(_wallpaperPath!).existsSync();
     final t = hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0;
     final inactiveT = hasWallpaper ? t : 0.4;
     final palette = AppColors.of(context);
@@ -3097,18 +3427,23 @@ class TimetableScreenState extends State<TimetableScreen>
           end: Alignment.bottomRight,
           colors: isDarkL
               ? [
-                  palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
-                  palette.surfaceAlt.withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
+                  palette.surfaceAlt
+                      .withValues(alpha: lerpDouble(1.0, 0.30, inactiveT)!),
+                  palette.surfaceAlt
+                      .withValues(alpha: lerpDouble(1.0, 0.22, inactiveT)!),
                 ]
               : [
-                  const Color(0xFFF4F5F7).withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
-                  const Color(0xFFEDEFF2).withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
+                  const Color(0xFFF4F5F7)
+                      .withValues(alpha: lerpDouble(1.0, 0.25, inactiveT)!),
+                  const Color(0xFFEDEFF2)
+                      .withValues(alpha: lerpDouble(1.0, 0.18, inactiveT)!),
                 ],
         ),
         border: Border.all(
           color: isDarkL
               ? Colors.transparent
-              : const Color(0xFFDDE1E6).withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!),
+              : const Color(0xFFDDE1E6)
+                  .withValues(alpha: lerpDouble(0.85, 0.7, inactiveT)!),
         ),
         borderRadius: BorderRadius.circular(5),
       ),
@@ -3117,14 +3452,17 @@ class TimetableScreenState extends State<TimetableScreen>
           Icons.add,
           size: 24,
           color: isDarkL
-              ? palette.textPrimary.withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
-              : const Color(0xFF8C939C).withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!),
+              ? palette.textPrimary
+                  .withValues(alpha: lerpDouble(0.92, 0.35, inactiveT)!)
+              : const Color(0xFF8C939C)
+                  .withValues(alpha: lerpDouble(1.0, 0.7, inactiveT)!),
         ),
       ),
     );
   }
 
-  void _showCourseDetail(Course course, {BuildContext? sourceContext, Widget? sourceWidget}) {
+  void _showCourseDetail(Course course,
+      {BuildContext? sourceContext, Widget? sourceWidget}) {
     final slotCourses = _courses
         .where((c) => c.day == course.day && c.time == course.time)
         .toList();
@@ -3139,8 +3477,11 @@ class TimetableScreenState extends State<TimetableScreen>
     Rect? sourceRect;
     if (sourceContext != null) {
       final renderObject = sourceContext.findRenderObject();
-      if (renderObject is RenderBox && renderObject.attached && renderObject.hasSize) {
-        sourceRect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+      if (renderObject is RenderBox &&
+          renderObject.attached &&
+          renderObject.hasSize) {
+        sourceRect =
+            renderObject.localToGlobal(Offset.zero) & renderObject.size;
       }
     }
 
@@ -3190,14 +3531,14 @@ class TimetableScreenState extends State<TimetableScreen>
       _flushPendingVanish();
     }
 
-    int currentPage = slotCourses.indexWhere((c) => _shouldShowCourse(c, _currentWeek));
+    int currentPage =
+        slotCourses.indexWhere((c) => _shouldShowCourse(c, _currentWeek));
     if (currentPage == -1) {
       currentPage = slotCourses.indexWhere((c) => c.id == course.id);
     }
     if (currentPage == -1) {
       currentPage = 0;
     }
-    var previousPage = currentPage;
 
     final pageController = PageController(initialPage: currentPage);
     final editButtonKey = GlobalKey();
@@ -3217,409 +3558,452 @@ class TimetableScreenState extends State<TimetableScreen>
     // 减弱动态时由 showBouncyDialog 的壳包裹（无模糊、高不透明度），
     // 默认路径在 builder 内自行包 morph 专用壳
     Widget buildDetailContent() => StatefulBuilder(
-            builder: (context, setDialogState) {
+          builder: (context, setDialogState) {
             final currentCourse = slotCourses[currentPage];
             final courseColor = _parseColor(currentCourse.color);
             final dialogTasks = _getDialogTasksForCourse(currentCourse);
-            final slideSign = currentPage >= previousPage ? 1.0 : -1.0;
-            final dialogWidth = math.min(420.0, MediaQuery.of(context).size.width - 48);
+            final dialogWidth =
+                math.min(420.0, MediaQuery.of(context).size.width - 48);
             final headerHeight = _calculateCourseHeaderHeight(
               course: currentCourse,
               dialogWidth: dialogWidth,
               textDirection: Directionality.of(context),
             );
-            final headerContentHeight = (headerHeight - 40).clamp(24.0, double.infinity).toDouble();
-            final iconBoxSize = headerContentHeight.clamp(24.0, 48.0).toDouble();
-            final iconGlyphSize = (iconBoxSize * 0.5).clamp(14.0, 24.0).toDouble();
-            final closeBoxSize = headerContentHeight.clamp(24.0, 30.0).toDouble();
-            final closeGlyphSize = (closeBoxSize * 0.6).clamp(14.0, 18.0).toDouble();
-            final dynamicMaxHeight = (505.0 + (dialogTasks.length.clamp(0, 5) * 20.0))
-                .clamp(505.0, 590.0)
-                .toDouble();
+            final headerContentHeight =
+                (headerHeight - 40).clamp(24.0, double.infinity).toDouble();
+            final iconBoxSize =
+                headerContentHeight.clamp(24.0, 48.0).toDouble();
+            final iconGlyphSize =
+                (iconBoxSize * 0.5).clamp(14.0, 24.0).toDouble();
+            final closeBoxSize =
+                headerContentHeight.clamp(24.0, 30.0).toDouble();
+            final closeGlyphSize =
+                (closeBoxSize * 0.6).clamp(14.0, 18.0).toDouble();
+            final dynamicMaxHeight =
+                (505.0 + (dialogTasks.length.clamp(0, 5) * 20.0))
+                    .clamp(505.0, 590.0)
+                    .toDouble();
 
             final Widget content = Column(
-                              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Opacity(
+                  opacity: 0.82,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 320),
+                    curve: Curves.easeInOutCubic,
+                    height: headerHeight,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          courseColor.withValues(alpha: 0.42),
+                          courseColor.withValues(alpha: 0.16),
+                        ],
+                      ),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Row(
+                      children: [
+                        // 课程图标：单一静态组件（不随课程重建），
+                        // 尺寸随头部高度平滑缩放、颜色随课程渐变，
+                        // 垂直位置随头部高度动画自然平滑位移保持居中
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOut,
+                          width: iconBoxSize,
+                          height: iconBoxSize,
+                          decoration: BoxDecoration(
+                            color: courseColor.withValues(alpha: 0.28),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Center(
+                            child: TweenAnimationBuilder<Color?>(
+                              duration: const Duration(milliseconds: 260),
+                              tween: ColorTween(end: courseColor),
+                              builder: (context, color, child) {
+                                return Icon(
+                                  Icons.book,
+                                  size: iconGlyphSize,
+                                  color: color,
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 350),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeIn,
+                            // 切换课程时文字原地模糊淡入淡出 + 轻微
+                            // 原地缩放（参考登录对话框副标题切换）；
+                            // 「减弱动态效果」开启时去掉模糊，保留
+                            // 同时长的淡入淡出与缩放
+                            transitionBuilder: (child, anim) {
+                              if (_reduceMotionEnabled) {
+                                return FadeTransition(
+                                  opacity: anim,
+                                  child: AnimatedBuilder(
+                                    animation: anim,
+                                    builder: (context, grandChild) =>
+                                        Transform.scale(
+                                      scale: 0.94 + 0.06 * anim.value,
+                                      child: grandChild,
+                                    ),
+                                    child: child,
+                                  ),
+                                );
+                              }
+                              return FadeTransition(
+                                opacity: anim,
+                                child: AnimatedBuilder(
+                                  animation: anim,
+                                  builder: (context, grandChild) =>
+                                      ImageFiltered(
+                                    imageFilter: ImageFilter.blur(
+                                      sigmaX: 8 * (1.0 - anim.value),
+                                      sigmaY: 8 * (1.0 - anim.value),
+                                    ),
+                                    child: Transform.scale(
+                                      scale: 0.94 + 0.06 * anim.value,
+                                      child: grandChild,
+                                    ),
+                                  ),
+                                  child: child,
+                                ),
+                              );
+                            },
+                            layoutBuilder: (currentChild, previousChildren) {
+                              return currentChild ?? const SizedBox.shrink();
+                            },
+                            child: Column(
+                              key: ValueKey(currentCourse.id),
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Opacity(
-                                  opacity: 0.82,
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 320),
-                                    curve: Curves.easeInOutCubic,
-                                    height: headerHeight,
-                                    padding: const EdgeInsets.all(20),
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          courseColor.withValues(alpha: 0.42),
-                                          courseColor.withValues(alpha: 0.16),
-                                        ],
-                                      ),
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                                    ),
-                                    child: Row(
-                                children: [
-                                  AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 260),
-                                    switchInCurve: Curves.easeOut,
-                                    switchOutCurve: Curves.easeIn,
-                                    transitionBuilder: (child, anim) {
-                                      return FadeTransition(
-                                        opacity: anim,
-                                        child: SlideTransition(
-                                          position: Tween<Offset>(
-                                            begin: Offset(-0.12 * slideSign, 0),
-                                            end: Offset.zero,
-                                          ).animate(anim),
-                                          child: child,
-                                        ),
-                                      );
-                                    },
-                                    layoutBuilder: (currentChild, previousChildren) {
-                                      return currentChild ?? const SizedBox.shrink();
-                                    },
-                                    child: Container(
-                                      key: ValueKey('course_icon_${currentCourse.id}'),
-                                      width: iconBoxSize,
-                                      height: iconBoxSize,
-                                      decoration: BoxDecoration(
-                                        color: courseColor.withValues(alpha: 0.28),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Icon(
-                                        Icons.book,
-                                        color: courseColor,
-                                        size: iconGlyphSize,
-                                      ),
-                                    ),
+                                Text(
+                                  currentCourse.name,
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: courseColor,
+                                    height: 1.2,
                                   ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: AnimatedSwitcher(
-                                      duration: const Duration(milliseconds: 220),
-                                      switchInCurve: Curves.easeOut,
-                                      switchOutCurve: Curves.easeIn,
-                                      transitionBuilder: (child, anim) {
-                                        return FadeTransition(
-                                          opacity: anim,
-                                          child: SlideTransition(
-                                            position: Tween<Offset>(
-                                              begin: Offset(0.08 * slideSign, 0),
-                                              end: Offset.zero,
-                                            ).animate(anim),
-                                            child: child,
-                                          ),
-                                        );
-                                      },
-                                      layoutBuilder: (currentChild, previousChildren) {
-                                        return currentChild ?? const SizedBox.shrink();
-                                      },
-                                      child: Column(
-                                        key: ValueKey(currentCourse.id),
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            currentCourse.name,
-                                            style: TextStyle(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.bold,
-                                              color: courseColor,
-                                              height: 1.2,
-                                            ),
-                                            maxLines: 4,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          if (currentCourse.location != null && currentCourse.location!.isNotEmpty)
-                                            Text(
-                                              '@${currentCourse.location!}',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: AppColors.of(context).textSecondary,
-                                                height: 1.2,
-                                              ),
-                                              maxLines: 3,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          if (currentCourse.teacher != null && currentCourse.teacher!.isNotEmpty)
-                                            Text(
-                                              currentCourse.teacher!,
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: AppColors.of(context).textSecondary,
-                                                height: 1.2,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 260),
-                                    switchInCurve: Curves.easeOut,
-                                    switchOutCurve: Curves.easeIn,
-                                    transitionBuilder: (child, anim) {
-                                      return FadeTransition(
-                                        opacity: anim,
-                                        child: SlideTransition(
-                                          position: Tween<Offset>(
-                                            begin: Offset(0.12 * slideSign, 0),
-                                            end: Offset.zero,
-                                          ).animate(anim),
-                                          child: child,
-                                        ),
-                                      );
-                                    },
-                                    layoutBuilder: (currentChild, previousChildren) {
-                                      return currentChild ?? const SizedBox.shrink();
-                                    },
-                                    child: GestureDetector(
-                                      key: ValueKey('close_btn_${currentCourse.id}'),
-                                      onTap: () => Navigator.pop(context),
-                                      child: Container(
-                                        width: closeBoxSize,
-                                        height: closeBoxSize,
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withValues(alpha: 0.05),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Icon(
-                                          Icons.close,
-                                          size: closeGlyphSize,
-                                          color: AppColors.of(context).textSecondary,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                  maxLines: 4,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                ),
-                            Flexible(
-                              child: PageView.builder(
-                                controller: pageController,
-                                physics: slotCourses.length > 1
-                                    ? const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics())
-                                    : const NeverScrollableScrollPhysics(),
-                                onPageChanged: (index) {
-                                  setDialogState(() {
-                                    previousPage = currentPage;
-                                    currentPage = index;
-                                  });
-                                },
-                                itemCount: slotCourses.length,
-                                itemBuilder: (context, index) {
-                                  final pageCourse = slotCourses[index];
-                                  final pageColor = _parseColor(pageCourse.color);
-                                  final pageTimeSlot = pageCourse.time < _timeSlots.length ? _timeSlots[pageCourse.time] : null;
-                                  final pageTasks = _getDialogTasksForCourse(pageCourse);
+                                if (currentCourse.location != null &&
+                                    currentCourse.location!.isNotEmpty)
+                                  Text(
+                                    '@${currentCourse.location!}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color:
+                                          AppColors.of(context).textSecondary,
+                                      height: 1.2,
+                                    ),
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                if (currentCourse.teacher != null &&
+                                    currentCourse.teacher!.isNotEmpty)
+                                  Text(
+                                    currentCourse.teacher!,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color:
+                                          AppColors.of(context).textSecondary,
+                                      height: 1.2,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // 关闭按钮：单一静态组件——不缩放、不变色，
+                        // 仅随头部高度动画平滑位移保持居中（高度不变
+                        // 时完全静止，消除此前按课程 id 重建的闪现）
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            width: closeBoxSize,
+                            height: closeBoxSize,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              Icons.close,
+                              size: closeGlyphSize,
+                              color: AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: PageView.builder(
+                    controller: pageController,
+                    physics: slotCourses.length > 1
+                        ? const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics())
+                        : const NeverScrollableScrollPhysics(),
+                    onPageChanged: (index) {
+                      setDialogState(() {
+                        currentPage = index;
+                      });
+                    },
+                    itemCount: slotCourses.length,
+                    itemBuilder: (context, index) {
+                      final pageCourse = slotCourses[index];
+                      final pageColor = _parseColor(pageCourse.color);
+                      final pageTimeSlot = pageCourse.time < _timeSlots.length
+                          ? _timeSlots[pageCourse.time]
+                          : null;
+                      final pageTasks = _getDialogTasksForCourse(pageCourse);
 
-                                  return SingleChildScrollView(
-                                    physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                    padding: const EdgeInsets.all(20),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: _buildDetailRowCompact(
-                                                Icons.calendar_today,
-                                                '时间',
-                                                '周${_weekDays[pageCourse.day]} ${pageTimeSlot != null ? pageTimeSlot['start']! : '第${pageCourse.time + 1}节'}',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                    if (!mounted) return;
-                                                    _showCourseDialog(course: pageCourse, initialFocusSection: CourseEditFocusSection.time);
-                                                  });
-                                                },
-                                              ),
-                                            ),
-                                            const SizedBox(width: 16),
-                                            Expanded(
-                                              child: _buildDetailRowCompact(
-                                                Icons.access_time,
-                                                '时长',
-                                                '${pageCourse.duration} 节',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                    if (!mounted) return;
-                                                    _showCourseDialog(course: pageCourse, initialFocusSection: CourseEditFocusSection.time);
-                                                  });
-                                                },
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 12),
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: _buildDetailRowCompact(
-                                                Icons.location_on_outlined,
-                                                '地点',
-                                                pageCourse.location != null && pageCourse.location!.isNotEmpty
-                                                    ? pageCourse.location!
-                                                    : '未设置',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                    if (!mounted) return;
-                                                    _showCourseDialog(course: pageCourse, initialFocusSection: CourseEditFocusSection.basicInfo);
-                                                  });
-                                                },
-                                              ),
-                                            ),
-                                            const SizedBox(width: 16),
-                                            Expanded(
-                                              child: _buildDetailRowCompact(
-                                                Icons.date_range,
-                                                '周次',
-                                                pageCourse.weeks != null && pageCourse.weeks!.isNotEmpty
-                                                    ? pageCourse.weeks!
-                                                    : '未设置',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                    if (!mounted) return;
-                                                    _showCourseDialog(course: pageCourse, initialFocusSection: CourseEditFocusSection.weeks);
-                                                  });
-                                                },
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 20),
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              '相关任务',
-                                              style: TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.bold,
-                                                color: AppColors.of(context).textPrimary,
-                                              ),
-                                            ),
-                                            TextButton.icon(
-                                              onPressed: () => _showAddTaskDialog(pageCourse, pageColor, setDialogState, pageTasks),
-                                              icon: const Icon(Icons.add, size: 18),
-                                              label: const Text('添加任务'),
-                                              style: TextButton.styleFrom(
-                                                foregroundColor: pageColor,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        if (pageTasks.isEmpty)
-                                          Center(
-                                            child: Padding(
-                                              padding: const EdgeInsets.all(20),
-                                              child: Text(
-                                                '暂无任务',
-                                                style: TextStyle(
-                                                  color: AppColors.of(context).textTertiary,
-                                                ),
-                                              ),
-                                            ),
-                                          )
-                                        else
-                                          ...pageTasks.map((task) => _buildTaskItem(task, pageColor, setDialogState, pageTasks)),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                            if (slotCourses.length > 1)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: Column(
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: List.generate(slotCourses.length, (index) {
-                                        final selected = index == currentPage;
-                                        return AnimatedContainer(
-                                          duration: const Duration(milliseconds: 220),
-                                          margin: const EdgeInsets.symmetric(horizontal: 4),
-                                          width: selected ? 18 : 6,
-                                          height: 6,
-                                          decoration: BoxDecoration(
-                                            color: selected
-                                                ? courseColor.withValues(alpha: 0.9)
-                                                : AppColors.of(context).panel(0.4),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                        );
-                                      }),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${currentPage + 1}/${slotCourses.length}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.of(context).textTertiary,
-                                      ),
-                                    ),
-                                  ],
+                      return SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics()),
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildDetailRowCompact(
+                                    Icons.calendar_today,
+                                    '时间',
+                                    '周${_weekDays[pageCourse.day]} ${pageTimeSlot != null ? pageTimeSlot['start']! : '第${pageCourse.time + 1}节'}',
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        if (!mounted) return;
+                                        _showCourseDialog(
+                                            course: pageCourse,
+                                            initialFocusSection:
+                                                CourseEditFocusSection.time);
+                                      });
+                                    },
+                                  ),
                                 ),
-                              ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: ElevatedButton.icon(
-                                      key: editButtonKey,
-                                      onPressed: () async {
-                                        final action = await _showCourseEditActionMenu(anchorKey: editButtonKey);
-                                        if (action == 'edit_current') {
-                                          _openCourseEditorFromDetail(course: currentCourse, addSameSlotCourse: false);
-                                        } else if (action == 'add_same_slot') {
-                                          _openCourseEditorFromDetail(course: currentCourse, addSameSlotCourse: true);
-                                        }
-                                      },
-                                      icon: const Icon(Icons.edit_outlined, size: 18),
-                                      label: const Text('编辑课程'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: courseColor,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 12),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                      ),
-                                    ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: _buildDetailRowCompact(
+                                    Icons.access_time,
+                                    '时长',
+                                    '${pageCourse.duration} 节',
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        if (!mounted) return;
+                                        _showCourseDialog(
+                                            course: pageCourse,
+                                            initialFocusSection:
+                                                CourseEditFocusSection.time);
+                                      });
+                                    },
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: ElevatedButton.icon(
-                                      onPressed: () => _deleteCourseWithConfirmation(
-                                        currentCourse,
-                                        popContextAfterDelete: context,
-                                      ),
-                                      icon: const Icon(Icons.delete_outline, size: 18),
-                                      label: const Text('删除课程'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.red,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 12),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildDetailRowCompact(
+                                    Icons.location_on_outlined,
+                                    '地点',
+                                    pageCourse.location != null &&
+                                            pageCourse.location!.isNotEmpty
+                                        ? pageCourse.location!
+                                        : '未设置',
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        if (!mounted) return;
+                                        _showCourseDialog(
+                                            course: pageCourse,
+                                            initialFocusSection:
+                                                CourseEditFocusSection
+                                                    .basicInfo);
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: _buildDetailRowCompact(
+                                    Icons.date_range,
+                                    '周次',
+                                    pageCourse.weeks != null &&
+                                            pageCourse.weeks!.isNotEmpty
+                                        ? pageCourse.weeks!
+                                        : '未设置',
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        if (!mounted) return;
+                                        _showCourseDialog(
+                                            course: pageCourse,
+                                            initialFocusSection:
+                                                CourseEditFocusSection.weeks);
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '相关任务',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.of(context).textPrimary,
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () => _showAddTaskDialog(
+                                      pageCourse,
+                                      pageColor,
+                                      setDialogState,
+                                      pageTasks),
+                                  icon: const Icon(Icons.add, size: 18),
+                                  label: const Text('添加任务'),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: pageColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            if (pageTasks.isEmpty)
+                              Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Text(
+                                    '暂无任务',
+                                    style: TextStyle(
+                                      color: AppColors.of(context).textTertiary,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              ...pageTasks.map((task) => _buildTaskItem(
+                                  task, pageColor, setDialogState, pageTasks)),
                           ],
-                        );
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                if (slotCourses.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(slotCourses.length, (index) {
+                            final selected = index == currentPage;
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 220),
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              width: selected ? 18 : 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? courseColor.withValues(alpha: 0.9)
+                                    : AppColors.of(context).panel(0.4),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            );
+                          }),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${currentPage + 1}/${slotCourses.length}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.of(context).textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          key: editButtonKey,
+                          onPressed: () async {
+                            final action = await _showCourseEditActionMenu(
+                                anchorKey: editButtonKey);
+                            if (action == 'edit_current') {
+                              _openCourseEditorFromDetail(
+                                  course: currentCourse,
+                                  addSameSlotCourse: false);
+                            } else if (action == 'add_same_slot') {
+                              _openCourseEditorFromDetail(
+                                  course: currentCourse,
+                                  addSameSlotCourse: true);
+                            }
+                          },
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          label: const Text('编辑课程'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: courseColor,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => _deleteCourseWithConfirmation(
+                            currentCourse,
+                            popContextAfterDelete: context,
+                          ),
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          label: const Text('删除课程'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
             // 减弱动态效果：内容直接交给 showBouncyDialog 的壳
             // （无模糊、高不透明度）；默认路径包 morph 专用壳
             if (_reduceMotionEnabled) {
@@ -3627,14 +4011,16 @@ class TimetableScreenState extends State<TimetableScreen>
               // 必须按任务数收紧（dynamicMaxHeight），否则固定 590 上限
               // 会把对话框拉长，与默认 morph 路径高度不一致
               return ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
+                constraints:
+                    BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
                 child: content,
               );
             }
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
+                constraints:
+                    BoxConstraints(maxWidth: 420, maxHeight: dynamicMaxHeight),
                 // 壳换成 GlassDialogShell：孔洞内未压暗背景的毛玻璃（提亮层洗灰），
                 // key 供 morph/孔洞精确测量壳矩形
                 child: GlassDialogShell(
@@ -3655,8 +4041,8 @@ class TimetableScreenState extends State<TimetableScreen>
                 ),
               ),
             );
-                },
-              );
+          },
+        );
 
     // 减弱动态效果：取消 morph 容器变换，改走统一对话框淡入淡出样式
     // （改动同全局对话框：壳仅半透明无模糊、四周压暗裁切与开闭动画
@@ -3699,7 +4085,8 @@ class TimetableScreenState extends State<TimetableScreen>
       // dismissed 时真块突然替换 → 闪现 + 颜色不一致（本次修复根源）。
       // morph 卡片必须全程不透明：淡入白纱（翻转期）由 morph 内部自控，
       // 落定帧与真课程块像素一致，路由移除与真块出现同帧无缝交接
-      transitionBuilder: (context, animation, secondaryAnimation, child) => child,
+      transitionBuilder: (context, animation, secondaryAnimation, child) =>
+          child,
       pageBuilder: (context, animation, secondaryAnimation) {
         // morph 动画（打开先快后慢，关闭缩回课程块时减速）由 host 内部构建
         return _MorphDialogHost(
@@ -3732,8 +4119,11 @@ class TimetableScreenState extends State<TimetableScreen>
     Rect? anchorRect;
     if (cellContext != null) {
       final renderObject = cellContext.findRenderObject();
-      if (renderObject is RenderBox && renderObject.attached && renderObject.hasSize) {
-        anchorRect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+      if (renderObject is RenderBox &&
+          renderObject.attached &&
+          renderObject.hasSize) {
+        anchorRect =
+            renderObject.localToGlobal(Offset.zero) & renderObject.size;
       }
     }
     if (anchorRect == null || anchorRect.isEmpty) return;
@@ -3808,8 +4198,7 @@ class TimetableScreenState extends State<TimetableScreen>
     final card = _buildCourseCellCard(
       course,
       hasWallpaper: hasWallpaper,
-      transparencyFactor:
-          hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0,
+      transparencyFactor: hasWallpaper ? (100 - _wallpaperOpacity) / 50.0 : 0.0,
     );
     // 替换进行中的幽灵（连续快速删除）
     _vanishOverlay?.remove();
@@ -3919,7 +4308,8 @@ class TimetableScreenState extends State<TimetableScreen>
   }
 
   /// 删除课程确认对话框（长按菜单与课程详情共用），确认后删除课程及其相关任务
-  Future<void> _deleteCourseWithConfirmation(Course course, {BuildContext? popContextAfterDelete}) async {
+  Future<void> _deleteCourseWithConfirmation(Course course,
+      {BuildContext? popContextAfterDelete}) async {
     final courseTasks = _getDialogTasksForCourse(course);
     final confirmed = await showBouncyDialog<bool>(
       context: context,
@@ -3937,74 +4327,80 @@ class TimetableScreenState extends State<TimetableScreen>
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 56,
-                                height: 56,
-                                decoration: BoxDecoration(
-                                  color: Colors.red.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: const Icon(Icons.delete_outline, color: Colors.red, size: 28),
-                              ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                '确认删除',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '确定要删除课程"${course.name}"吗？\n相关任务也会被删除。',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
-                              ),
-                              const SizedBox(height: 24),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: GestureDetector(
-                                      onTap: () => Navigator.pop(context, false),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(vertical: 14),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.of(context).panel(0.4),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            '取消',
-                                            style: TextStyle(color: AppColors.of(context).textSecondary, fontWeight: FontWeight.w600),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: GestureDetector(
-                                      onTap: () => Navigator.pop(context, true),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(vertical: 14),
-                                        decoration: BoxDecoration(
-                                          color: Colors.red,
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: const Center(
-                                          child: Text(
-                                            '删除',
-                                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.delete_outline,
+                    color: Colors.red, size: 28),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '确认删除',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '确定要删除课程"${course.name}"吗？\n相关任务也会被删除。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 14, color: AppColors.of(context).textSecondary),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context, false),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        decoration: BoxDecoration(
+                          color: AppColors.of(context).panel(0.4),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '取消',
+                            style: TextStyle(
+                                color: AppColors.of(context).textSecondary,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(context, true),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            '删除',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
+        ),
+      ),
     );
     if (confirmed == true) {
       // 数据删除前测量课程块矩形（morph 隐藏用 Opacity 不卸载布局，
@@ -4084,7 +4480,8 @@ class TimetableScreenState extends State<TimetableScreen>
                   color: Colors.red.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: const Icon(Icons.delete_outline, color: Colors.red, size: 28),
+                child: const Icon(Icons.delete_outline,
+                    color: Colors.red, size: 28),
               ),
               const SizedBox(height: 16),
               const Text(
@@ -4095,7 +4492,8 @@ class TimetableScreenState extends State<TimetableScreen>
               Text(
                 '确定要删除课表“$name”吗？\n该课表内的所有课程和任务也会被删除。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: AppColors.of(context).textSecondary),
+                style: TextStyle(
+                    fontSize: 14, color: AppColors.of(context).textSecondary),
               ),
               const SizedBox(height: 24),
               Row(
@@ -4112,7 +4510,9 @@ class TimetableScreenState extends State<TimetableScreen>
                         child: Center(
                           child: Text(
                             '取消',
-                            style: TextStyle(color: AppColors.of(context).textSecondary, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                                color: AppColors.of(context).textSecondary,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
@@ -4131,7 +4531,9 @@ class TimetableScreenState extends State<TimetableScreen>
                         child: const Center(
                           child: Text(
                             '删除',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
@@ -4163,7 +4565,8 @@ class TimetableScreenState extends State<TimetableScreen>
     required double dialogWidth,
     required TextDirection textDirection,
   }) {
-    final textAreaWidth = (dialogWidth - 40 - 48 - 16 - 8 - 30).clamp(120.0, 320.0);
+    final textAreaWidth =
+        (dialogWidth - 40 - 48 - 16 - 8 - 30).clamp(120.0, 320.0);
 
     final namePainter = TextPainter(
       text: TextSpan(
@@ -4220,7 +4623,8 @@ class TimetableScreenState extends State<TimetableScreen>
     if (button == null || overlay == null) return null;
 
     final topLeft = button.localToGlobal(Offset.zero, ancestor: overlay);
-    final bottomRight = button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay);
+    final bottomRight = button
+        .localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay);
     const menuWidth = 188.0;
     const menuHeight = 97.0;
     final maxLeft = overlay.size.width - menuWidth - 12;
@@ -4247,7 +4651,8 @@ class TimetableScreenState extends State<TimetableScreen>
               left: left,
               top: top,
               child: FadeTransition(
-                opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                opacity:
+                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
                 child: Material(
                   color: Colors.transparent,
                   child: SizedBox(
@@ -4255,14 +4660,23 @@ class TimetableScreenState extends State<TimetableScreen>
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(16),
                       child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.78 : 0.7),
+                            color: AppColors.of(context).glassShell.withValues(
+                                alpha: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? 0.78
+                                    : 0.7),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: AppColors.of(context).glassBorder, width: 0.5),
+                            border: Border.all(
+                                color: AppColors.of(context).glassBorder,
+                                width: 0.5),
                             boxShadow: [
-                              BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 12, offset: const Offset(0, 4)),
+                              BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.15),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4)),
                             ],
                           ),
                           child: ClipRRect(
@@ -4273,15 +4687,21 @@ class TimetableScreenState extends State<TimetableScreen>
                                 _buildCourseEditMenuItem(
                                   icon: Icons.edit_outlined,
                                   label: '编辑当前课程',
-                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                                  onTap: () => Navigator.pop(context, 'edit_current'),
+                                  borderRadius: const BorderRadius.vertical(
+                                      top: Radius.circular(16)),
+                                  onTap: () =>
+                                      Navigator.pop(context, 'edit_current'),
                                 ),
-                                Divider(height: 1, color: AppColors.of(context).borderWeak),
+                                Divider(
+                                    height: 1,
+                                    color: AppColors.of(context).borderWeak),
                                 _buildCourseEditMenuItem(
                                   icon: Icons.add_circle_outline,
                                   label: '添加同时段课程',
-                                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-                                  onTap: () => Navigator.pop(context, 'add_same_slot'),
+                                  borderRadius: const BorderRadius.vertical(
+                                      bottom: Radius.circular(16)),
+                                  onTap: () =>
+                                      Navigator.pop(context, 'add_same_slot'),
                                 ),
                               ],
                             ),
@@ -4335,19 +4755,26 @@ class TimetableScreenState extends State<TimetableScreen>
     );
   }
 
-  Widget _buildTaskItem(Task task, Color courseColor, StateSetter setDialogState, List<Task> dialogTasks) {
+  Widget _buildTaskItem(Task task, Color courseColor,
+      StateSetter setDialogState, List<Task> dialogTasks) {
     final isOverdue = task.dueDate.isBefore(DateTime.now());
-    final priorityColor = task.priority == '高' ? Colors.red : 
-                          task.priority == '中' ? Colors.orange : Colors.green;
+    final priorityColor = task.priority == '高'
+        ? Colors.red
+        : task.priority == '中'
+            ? Colors.orange
+            : Colors.green;
     final isCompleted = task.completed;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.of(context).panel(0.4),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isCompleted ? AppColors.of(context).borderWeak : AppColors.of(context).borderWeak),
+        border: Border.all(
+            color: isCompleted
+                ? AppColors.of(context).borderWeak
+                : AppColors.of(context).borderWeak),
       ),
       child: Row(
         children: [
@@ -4385,7 +4812,9 @@ class TimetableScreenState extends State<TimetableScreen>
                 color: isCompleted ? courseColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: isCompleted ? courseColor : AppColors.of(context).textTertiary,
+                  color: isCompleted
+                      ? courseColor
+                      : AppColors.of(context).textTertiary,
                   width: 2,
                 ),
               ),
@@ -4399,7 +4828,9 @@ class TimetableScreenState extends State<TimetableScreen>
             width: 4,
             height: 40,
             decoration: BoxDecoration(
-              color: isCompleted ? AppColors.of(context).textTertiary : (isOverdue ? Colors.red : priorityColor),
+              color: isCompleted
+                  ? AppColors.of(context).textTertiary
+                  : (isOverdue ? Colors.red : priorityColor),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -4411,18 +4842,21 @@ class TimetableScreenState extends State<TimetableScreen>
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
-                        color: isCompleted 
+                        color: isCompleted
                             ? Colors.white.withValues(alpha: 0.4)
-                                            : priorityColor.withValues(alpha: 0.1),
+                            : priorityColor.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         task.type,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isCompleted ? AppColors.of(context).textTertiary : priorityColor,
+                          color: isCompleted
+                              ? AppColors.of(context).textTertiary
+                              : priorityColor,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -4434,8 +4868,11 @@ class TimetableScreenState extends State<TimetableScreen>
                         style: TextStyle(
                           fontWeight: FontWeight.w500,
                           fontSize: 13,
-                          color: isCompleted ? AppColors.of(context).textTertiary : null,
-                          decoration: isCompleted ? TextDecoration.lineThrough : null,
+                          color: isCompleted
+                              ? AppColors.of(context).textTertiary
+                              : null,
+                          decoration:
+                              isCompleted ? TextDecoration.lineThrough : null,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -4448,9 +4885,11 @@ class TimetableScreenState extends State<TimetableScreen>
                   '截止: ${intl.DateFormat('MM/dd HH:mm').format(task.dueDate)}${isOverdue && !isCompleted ? ' (已逾期)' : ''}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isCompleted 
-                        ? AppColors.of(context).textTertiary 
-                        : (isOverdue ? Colors.red : AppColors.of(context).textSecondary),
+                    color: isCompleted
+                        ? AppColors.of(context).textTertiary
+                        : (isOverdue
+                            ? Colors.red
+                            : AppColors.of(context).textSecondary),
                     decoration: isCompleted ? TextDecoration.lineThrough : null,
                   ),
                 ),
@@ -4462,7 +4901,8 @@ class TimetableScreenState extends State<TimetableScreen>
               behavior: HitTestBehavior.translucent,
               onPointerDown: (_) => HapticFeedback.selectionClick(),
               child: BlurredPopupMenuButton<String>(
-                icon: Icon(Icons.more_vert, color: AppColors.of(context).textTertiary, size: 20),
+                icon: Icon(Icons.more_vert,
+                    color: AppColors.of(context).textTertiary, size: 20),
                 items: const [
                   BlurredPopupMenuItem(
                     value: 'edit',
@@ -4488,7 +4928,8 @@ class TimetableScreenState extends State<TimetableScreen>
                     _loadData();
                     setState(() {});
                     if (context.mounted) {
-                      toastNotification.show(context, '任务已删除', type: ToastType.error);
+                      toastNotification.show(context, '任务已删除',
+                          type: ToastType.error);
                     }
                   }
                 },
@@ -4499,13 +4940,14 @@ class TimetableScreenState extends State<TimetableScreen>
     );
   }
 
-  void _showAddTaskDialog(Course course, Color courseColor, StateSetter setDialogState, List<Task> dialogTasks) {
+  void _showAddTaskDialog(Course course, Color courseColor,
+      StateSetter setDialogState, List<Task> dialogTasks) {
     final nameController = TextEditingController();
     DateTime dueDate = DateTime.now().add(const Duration(days: 7));
     String type = '作业';
     String priority = '中';
     final noteController = TextEditingController();
-    
+
     showBouncyDialog(
       context: context,
       barrierLabel: '添加任务',
@@ -4522,303 +4964,365 @@ class TimetableScreenState extends State<TimetableScreen>
       ],
       avoidKeyboard: true,
       builder: (context) => StatefulBuilder(
-          builder: (context, setState) {
-            final screenHeight = MediaQuery.of(context).size.height;
-            final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-            final topInset = MediaQuery.of(context).padding.top;
-            final isSmallScreen = screenHeight < 700;
-            final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
-            double dialogMaxHeight = baseMaxHeight;
-            final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-            if (availableHeight < dialogMaxHeight) {
-              dialogMaxHeight = availableHeight;
-            }
-            dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
+        builder: (context, setState) {
+          final screenHeight = MediaQuery.of(context).size.height;
+          final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+          final topInset = MediaQuery.of(context).padding.top;
+          final isSmallScreen = screenHeight < 700;
+          final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
+          double dialogMaxHeight = baseMaxHeight;
+          final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+          if (availableHeight < dialogMaxHeight) {
+            dialogMaxHeight = availableHeight;
+          }
+          dialogMaxHeight =
+              dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
 
-            return AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            constraints: BoxConstraints(
-                              maxWidth: 400,
-                              maxHeight: dialogMaxHeight,
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            constraints: BoxConstraints(
+              maxWidth: 400,
+              maxHeight: dialogMaxHeight,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Opacity(
+                  opacity: 0.82,
+                  child: Container(
+                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          courseColor,
+                          courseColor.withValues(alpha: 0.8)
+                        ],
+                      ),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(Icons.add_task,
+                              color: Colors.white,
+                              size: isSmallScreen ? 20 : 22),
+                        ),
+                        SizedBox(width: isSmallScreen ? 10 : 14),
+                        Expanded(
+                          child: Text(
+                            '添加任务 - ${course.name}',
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 16 : 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
                             ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Opacity(
-                                  opacity: 0.82,
-                                  child: Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [courseColor, courseColor.withValues(alpha: 0.8)],
-                                      ),
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                                    ),
-                                    child: Row(
-                                children: [
-                                  Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(Icons.add_task, color: Colors.white, size: isSmallScreen ? 20 : 22),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 14),
-                                  Expanded(
-                                    child: Text(
-                                      '添加任务 - ${course.name}',
-                                      style: TextStyle(
-                                        fontSize: isSmallScreen ? 16 : 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Icon(Icons.close, color: Colors.white, size: 18),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                                    ),
-                                  ),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    AppTextField(
-                                      contextMenuBuilder: styledEditableContextMenu,
-                                      controller: nameController,
-                                      decoration: InputDecoration(
-                                        labelText: '任务名称',
-                                        prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7)),
-                                        filled: true,
-                                        fillColor: AppColors.of(context).panel(0.4),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.category_outlined, color: courseColor.withValues(alpha: 0.7), size: 20),
-                                        const SizedBox(width: 8),
-                                        Text('任务类型', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.of(context).panel(0.4),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: AppColors.of(context).borderWeak),
-                                      ),
-                                      child: BlurredDropdown<String>(
-                                        value: type,
-                                        isExpanded: true,
-                                        icon: Icon(Icons.expand_more, color: courseColor),
-                                        items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                          value: e,
-                                          child: Text(e),
-                                        )).toList(),
-                                        onChanged: (v) => setState(() => type = v!),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    InkWell(
-                                      onTap: () async {
-                                        final date = await showAnimatedDatePicker(
-                                          context: context,
-                                          initialDate: dueDate,
-                                          firstDate: DateTime.now(),
-                                          lastDate: DateTime.now().add(const Duration(days: 365)),
-                                        );
-                                        if (date != null) {
-                                          if (!context.mounted) return;
-                                          final time = await show3DTimePicker(
-                                            context: context,
-                                            initialHour: dueDate.hour,
-                                            initialMinute: dueDate.minute,
-                                            title: '选择截止时间',
-                                          );
-                                          if (time != null) {
-                                            setState(() {
-                                              dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                                            });
-                                          }
-                                        }
-                                      },
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(16),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.of(context).panel(0.4),
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.calendar_today, color: courseColor.withValues(alpha: 0.7)),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text('截止日期', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
-                                                  Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: const TextStyle(fontWeight: FontWeight.w500)),
-                                                ],
-                                              ),
-                                            ),
-                                            Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.flag_outlined, color: courseColor.withValues(alpha: 0.7), size: 20),
-                                        const SizedBox(width: 8),
-                                        Text('优先级', style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary)),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: ['高', '中', '低'].map((p) {
-                                        final isSelected = priority == p;
-                                        Color priorityColor;
-                                        if (p == '高') {
-                                          priorityColor = Colors.red;
-                                        } else if (p == '中') priorityColor = Colors.orange;
-                                        else priorityColor = Colors.green;
-                                        
-                                        return Expanded(
-                                          child: GestureDetector(
-                                            onTap: () => setState(() => priority = p),
-                                            child: Container(
-                                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                                              padding: const EdgeInsets.symmetric(vertical: 10),
-                                              decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).panel(0.4),
-                                                borderRadius: BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
-                                                  width: isSelected ? 2 : 1,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                p,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
-                                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    AppTextField(
-                                      contextMenuBuilder: styledEditableContextMenu,
-                                      controller: noteController,
-                                      maxLines: 1,
-                                      decoration: InputDecoration(
-                                        labelText: '备注（可选）',
-                                        prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7)),
-                                        filled: true,
-                                        fillColor: AppColors.of(context).panel(0.4),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                              child: SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  onPressed: () async {
-                                    if (nameController.text.trim().isEmpty) return;
-                                    final isMergedCourse = StorageService.getCourses()
-                                          .where((c) => c.name == course.name)
-                                          .length > 1;
-                                    final taskCourseId = isMergedCourse
-                                        ? 'course_name:${course.name}'
-                                        : course.id;
-                                    final task = Task(
-                                      id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                      courseId: taskCourseId,
-                                      name: nameController.text.trim(),
-                                      dueDate: dueDate,
-                                      type: type,
-                                      priority: priority,
-                                      note: noteController.text.trim(),
-                                    );
-                                    await StorageService.addTask(task);
-                                    dialogTasks.add(task);
-                                    _loadData();
-                                    setDialogState(() {});
-                                    if (context.mounted) Navigator.pop(context);
-                                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                                      toastNotification.show(context, '添加任务成功', type: ToastType.success);
-                                    });
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: courseColor,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: const Text('添加任务', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                                ),
-                              ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 18),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics()),
+                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AppTextField(
+                          contextMenuBuilder: styledEditableContextMenu,
+                          controller: nameController,
+                          decoration: InputDecoration(
+                            labelText: '任务名称',
+                            prefixIcon: Icon(Icons.task,
+                                color: courseColor.withValues(alpha: 0.7)),
+                            filled: true,
+                            fillColor: AppColors.of(context).panel(0.4),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
                             ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide:
+                                  BorderSide(color: courseColor, width: 2),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Icon(Icons.category_outlined,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: 20),
+                            const SizedBox(width: 8),
+                            Text('任务类型',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                        AppColors.of(context).textSecondary)),
                           ],
                         ),
-            );
-          },
-        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.of(context).panel(0.4),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: AppColors.of(context).borderWeak),
+                          ),
+                          child: BlurredDropdown<String>(
+                            value: type,
+                            isExpanded: true,
+                            icon: Icon(Icons.expand_more, color: courseColor),
+                            items: ['作业', '考试', '报告', '其他']
+                                .map((e) => DropdownMenuItem(
+                                      value: e,
+                                      child: Text(e),
+                                    ))
+                                .toList(),
+                            onChanged: (v) => setState(() => type = v!),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        InkWell(
+                          onTap: () async {
+                            final date = await showAnimatedDatePicker(
+                              context: context,
+                              initialDate: dueDate,
+                              firstDate: DateTime.now(),
+                              lastDate:
+                                  DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if (date != null) {
+                              if (!context.mounted) return;
+                              final time = await show3DTimePicker(
+                                context: context,
+                                initialHour: dueDate.hour,
+                                initialMinute: dueDate.minute,
+                                title: '选择截止时间',
+                              );
+                              if (time != null) {
+                                setState(() {
+                                  dueDate = DateTime(date.year, date.month,
+                                      date.day, time.hour, time.minute);
+                                });
+                              }
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppColors.of(context).panel(0.4),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.calendar_today,
+                                    color: courseColor.withValues(alpha: 0.7)),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text('截止日期',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.of(context)
+                                                  .textSecondary)),
+                                      Text(
+                                          intl.DateFormat('yyyy/MM/dd HH:mm')
+                                              .format(dueDate),
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w500)),
+                                    ],
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right,
+                                    color: AppColors.of(context).textTertiary),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Icon(Icons.flag_outlined,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: 20),
+                            const SizedBox(width: 8),
+                            Text('优先级',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                        AppColors.of(context).textSecondary)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: ['高', '中', '低'].map((p) {
+                            final isSelected = priority == p;
+                            Color priorityColor;
+                            if (p == '高') {
+                              priorityColor = Colors.red;
+                            } else if (p == '中')
+                              priorityColor = Colors.orange;
+                            else
+                              priorityColor = Colors.green;
+
+                            return Expanded(
+                              child: GestureDetector(
+                                onTap: () => setState(() => priority = p),
+                                child: Container(
+                                  margin:
+                                      const EdgeInsets.symmetric(horizontal: 4),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? priorityColor.withValues(alpha: 0.15)
+                                        : AppColors.of(context).panel(0.4),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? priorityColor
+                                          : AppColors.of(context).borderWeak,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    p,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: isSelected
+                                          ? priorityColor
+                                          : AppColors.of(context).textSecondary,
+                                      fontWeight: isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 16),
+                        AppTextField(
+                          contextMenuBuilder: styledEditableContextMenu,
+                          controller: noteController,
+                          maxLines: 1,
+                          decoration: InputDecoration(
+                            labelText: '备注（可选）',
+                            prefixIcon: Icon(Icons.note_outlined,
+                                color: courseColor.withValues(alpha: 0.7)),
+                            filled: true,
+                            fillColor: AppColors.of(context).panel(0.4),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide:
+                                  BorderSide(color: courseColor, width: 2),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        if (nameController.text.trim().isEmpty) return;
+                        final isMergedCourse = StorageService.getCourses()
+                                .where((c) => c.name == course.name)
+                                .length >
+                            1;
+                        final taskCourseId = isMergedCourse
+                            ? 'course_name:${course.name}'
+                            : course.id;
+                        final task = Task(
+                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          courseId: taskCourseId,
+                          name: nameController.text.trim(),
+                          dueDate: dueDate,
+                          type: type,
+                          priority: priority,
+                          note: noteController.text.trim(),
+                        );
+                        await StorageService.addTask(task);
+                        dialogTasks.add(task);
+                        _loadData();
+                        setDialogState(() {});
+                        if (context.mounted) Navigator.pop(context);
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          toastNotification.show(context, '添加任务成功',
+                              type: ToastType.success);
+                        });
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: courseColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('添加任务',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -4831,17 +5335,21 @@ class TimetableScreenState extends State<TimetableScreen>
     Color courseColor = const Color(0xFF4A90E2);
     if (task.courseId.startsWith('course_name:')) {
       final courseName = task.courseId.substring('course_name:'.length);
-      final matchedCourse = StorageService.getCourses().where((c) => c.name == courseName).firstOrNull;
+      final matchedCourse = StorageService.getCourses()
+          .where((c) => c.name == courseName)
+          .firstOrNull;
       if (matchedCourse != null) {
         courseColor = _parseColor(matchedCourse.color);
       }
     } else if (task.courseId != 'ai_created') {
-      final matchedCourse = StorageService.getCourses().where((c) => c.id == task.courseId).firstOrNull;
+      final matchedCourse = StorageService.getCourses()
+          .where((c) => c.id == task.courseId)
+          .firstOrNull;
       if (matchedCourse != null) {
         courseColor = _parseColor(matchedCourse.color);
       }
     }
-    
+
     showBouncyDialog(
       context: context,
       barrierLabel: '编辑任务',
@@ -4858,330 +5366,409 @@ class TimetableScreenState extends State<TimetableScreen>
       ],
       avoidKeyboard: true,
       builder: (context) => StatefulBuilder(
-          builder: (context, setState) {
-            final screenHeight = MediaQuery.of(context).size.height;
-            final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-            final topInset = MediaQuery.of(context).padding.top;
-            final isSmallScreen = screenHeight < 700;
-            final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
-            double dialogMaxHeight = baseMaxHeight;
-            final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-            if (availableHeight < dialogMaxHeight) {
-              dialogMaxHeight = availableHeight;
-            }
-            dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
+        builder: (context, setState) {
+          final screenHeight = MediaQuery.of(context).size.height;
+          final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+          final topInset = MediaQuery.of(context).padding.top;
+          final isSmallScreen = screenHeight < 700;
+          final baseMaxHeight = isSmallScreen ? screenHeight * 0.85 : 580.0;
+          double dialogMaxHeight = baseMaxHeight;
+          final availableHeight = screenHeight - topInset - keyboardHeight - 24;
+          if (availableHeight < dialogMaxHeight) {
+            dialogMaxHeight = availableHeight;
+          }
+          dialogMaxHeight =
+              dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
 
-            return AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            curve: Curves.easeOut,
-                            constraints: BoxConstraints(
-                              maxWidth: 400,
-                              maxHeight: dialogMaxHeight,
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            constraints: BoxConstraints(
+              maxWidth: 400,
+              maxHeight: dialogMaxHeight,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Opacity(
+                  opacity: 0.82,
+                  child: Container(
+                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          courseColor,
+                          courseColor.withValues(alpha: 0.8)
+                        ],
+                      ),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(Icons.edit_note,
+                              color: Colors.white,
+                              size: isSmallScreen ? 20 : 22),
+                        ),
+                        SizedBox(width: isSmallScreen ? 10 : 14),
+                        Expanded(
+                          child: Text(
+                            '编辑任务',
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 16 : 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
                             ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Opacity(
-                                  opacity: 0.82,
-                                  child: Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [courseColor, courseColor.withValues(alpha: 0.8)],
-                                      ),
-                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                                    ),
-                                    child: Row(
-                                children: [
-                                  Container(
-                                    padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(Icons.edit_note, color: Colors.white, size: isSmallScreen ? 20 : 22),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 14),
-                                  Expanded(
-                                    child: Text(
-                                      '编辑任务',
-                                      style: TextStyle(
-                                        fontSize: isSmallScreen ? 16 : 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Icon(Icons.close, color: Colors.white, size: isSmallScreen ? 16 : 18),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                                    ),
-                                  ),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    AppTextField(
-                                      contextMenuBuilder: styledEditableContextMenu,
-                                      controller: nameController,
-                                      decoration: InputDecoration(
-                                        labelText: '任务名称',
-                                        prefixIcon: Icon(Icons.task, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: AppColors.of(context).panel(0.4),
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.category_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '任务类型',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: AppColors.of(context).textSecondary,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Container(
-                                      padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 10 : 12),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.of(context).panel(0.4),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: AppColors.of(context).borderWeak),
-                                      ),
-                                      child: BlurredDropdown<String>(
-                                        value: type,
-                                        isExpanded: true,
-                                        icon: Icon(Icons.expand_more, color: courseColor, size: isSmallScreen ? 18 : 20),
-                                        items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                          value: e, 
-                                          child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
-                                        )).toList(),
-                                        onChanged: (v) => setState(() => type = v!),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    InkWell(
-                                      onTap: () async {
-                                        final date = await showAnimatedDatePicker(
-                                          context: context,
-                                          initialDate: dueDate,
-                                          firstDate: DateTime(2020),
-                                          lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
-                                        );
-                                        if (date != null) {
-                                          if (!context.mounted) return;
-                                          final time = await show3DTimePicker(
-                                            context: context,
-                                            initialHour: dueDate.hour,
-                                            initialMinute: dueDate.minute,
-                                            title: '选择截止时间',
-                                          );
-                                          if (time != null) {
-                                            setState(() {
-                                              dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                                            });
-                                          }
-                                        }
-                                      },
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Container(
-                                        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.of(context).panel(0.4),
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.calendar_today, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                            SizedBox(width: isSmallScreen ? 10 : 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: AppColors.of(context).textSecondary)),
-                                                  Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 14 : 16)),
-                                                ],
-                                              ),
-                                            ),
-                                            Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary, size: isSmallScreen ? 18 : 20),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    Row(
-                                      children: [
-                                        Icon(Icons.flag_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        SizedBox(width: isSmallScreen ? 6 : 8),
-                                        Text(
-                                          '优先级',
-                                          style: TextStyle(
-                                            fontSize: isSmallScreen ? 11 : 12,
-                                            color: AppColors.of(context).textSecondary,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 6 : 8),
-                                    Row(
-                                      children: ['高', '中', '低'].map((p) {
-                                        final isSelected = priority == p;
-                                        Color priorityColor;
-                                        if (p == '高') {
-                                          priorityColor = Colors.red;
-                                        } else if (p == '中') priorityColor = Colors.orange;
-                                        else priorityColor = Colors.green;
-                                        
-                                        return Expanded(
-                                          child: GestureDetector(
-                                            onTap: () => setState(() => priority = p),
-                                            child: Container(
-                                              margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
-                                              padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
-                                              decoration: BoxDecoration(
-                                                color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).panel(0.4),
-                                                borderRadius: BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
-                                                  width: isSelected ? 2 : 1,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                p,
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: isSmallScreen ? 13 : 14,
-                                                  color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
-                                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    SizedBox(height: isSmallScreen ? 12 : 16),
-                                    AppTextField(
-                                      contextMenuBuilder: styledEditableContextMenu,
-                                      controller: noteController,
-                                      maxLines: 1,
-                                      decoration: InputDecoration(
-                                        labelText: '备注（可选）',
-                                        prefixIcon: Icon(Icons.note_outlined, color: courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 18 : 20),
-                                        filled: true,
-                                        fillColor: AppColors.of(context).panel(0.4),
-                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 12 : 14),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: BorderSide(color: courseColor, width: 2),
-                                        ),
-                                      ),
-                                      style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            Container(
-                              padding: EdgeInsets.fromLTRB(isSmallScreen ? 16 : 20, 0, isSmallScreen ? 16 : 20, isSmallScreen ? 16 : 20),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        side: BorderSide(color: AppColors.of(context).borderWeak),
-                                      ),
-                                      child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
-                                    ),
-                                  ),
-                                  SizedBox(width: isSmallScreen ? 10 : 12),
-                                  Expanded(
-                                    flex: 2,
-                                    child: ElevatedButton(
-                                      onPressed: () async {
-                                        if (nameController.text.isEmpty) return;
-                                        final updatedTask = Task(
-                                          id: task.id,
-                                          courseId: task.courseId,
-                                          name: nameController.text,
-                                          type: type,
-                                          dueDate: dueDate,
-                                          priority: priority,
-                                          note: noteController.text.isEmpty ? null : noteController.text,
-                                          completed: task.completed,
-                                        );
-                                        await StorageService.updateTask(updatedTask);
-                                        if (context.mounted) {
-                                          Navigator.pop(context);
-                                        }
-                                        setDialogState(() {});
-                                        _loadData();
-                                        setState(() {});
-                                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                                          toastNotification.show(context, '任务已更新', type: ToastType.success);
-                                        });
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: courseColor,
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      ),
-                                      child: Text('保存', style: TextStyle(fontSize: isSmallScreen ? 13 : 15)),
-                                    ),
-                                  ),
-                                ],
+                            child: Icon(Icons.close,
+                                color: Colors.white,
+                                size: isSmallScreen ? 16 : 18),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics()),
+                    padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AppTextField(
+                          contextMenuBuilder: styledEditableContextMenu,
+                          controller: nameController,
+                          decoration: InputDecoration(
+                            labelText: '任务名称',
+                            prefixIcon: Icon(Icons.task,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: isSmallScreen ? 18 : 20),
+                            filled: true,
+                            fillColor: AppColors.of(context).panel(0.4),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: isSmallScreen ? 12 : 14),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide:
+                                  BorderSide(color: courseColor, width: 2),
+                            ),
+                          ),
+                          style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                        ),
+                        SizedBox(height: isSmallScreen ? 12 : 16),
+                        Row(
+                          children: [
+                            Icon(Icons.category_outlined,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: isSmallScreen ? 18 : 20),
+                            SizedBox(width: isSmallScreen ? 6 : 8),
+                            Text(
+                              '任务类型',
+                              style: TextStyle(
+                                fontSize: isSmallScreen ? 11 : 12,
+                                color: AppColors.of(context).textSecondary,
                               ),
                             ),
                           ],
                         ),
-            );
-          },
-        ),
+                        SizedBox(height: isSmallScreen ? 6 : 8),
+                        Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: isSmallScreen ? 10 : 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.of(context).panel(0.4),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: AppColors.of(context).borderWeak),
+                          ),
+                          child: BlurredDropdown<String>(
+                            value: type,
+                            isExpanded: true,
+                            icon: Icon(Icons.expand_more,
+                                color: courseColor,
+                                size: isSmallScreen ? 18 : 20),
+                            items: ['作业', '考试', '报告', '其他']
+                                .map((e) => DropdownMenuItem(
+                                    value: e,
+                                    child: Text(e,
+                                        style: TextStyle(
+                                            fontSize:
+                                                isSmallScreen ? 14 : 16))))
+                                .toList(),
+                            onChanged: (v) => setState(() => type = v!),
+                          ),
+                        ),
+                        SizedBox(height: isSmallScreen ? 12 : 16),
+                        InkWell(
+                          onTap: () async {
+                            final date = await showAnimatedDatePicker(
+                              context: context,
+                              initialDate: dueDate,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime.now()
+                                  .add(const Duration(days: 365 * 2)),
+                            );
+                            if (date != null) {
+                              if (!context.mounted) return;
+                              final time = await show3DTimePicker(
+                                context: context,
+                                initialHour: dueDate.hour,
+                                initialMinute: dueDate.minute,
+                                title: '选择截止时间',
+                              );
+                              if (time != null) {
+                                setState(() {
+                                  dueDate = DateTime(date.year, date.month,
+                                      date.day, time.hour, time.minute);
+                                });
+                              }
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                            decoration: BoxDecoration(
+                              color: AppColors.of(context).panel(0.4),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.calendar_today,
+                                    color: courseColor.withValues(alpha: 0.7),
+                                    size: isSmallScreen ? 18 : 20),
+                                SizedBox(width: isSmallScreen ? 10 : 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text('截止日期',
+                                          style: TextStyle(
+                                              fontSize: isSmallScreen ? 11 : 12,
+                                              color: AppColors.of(context)
+                                                  .textSecondary)),
+                                      Text(
+                                          intl.DateFormat('yyyy/MM/dd HH:mm')
+                                              .format(dueDate),
+                                          style: TextStyle(
+                                              fontWeight: FontWeight.w500,
+                                              fontSize:
+                                                  isSmallScreen ? 14 : 16)),
+                                    ],
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right,
+                                    color: AppColors.of(context).textTertiary,
+                                    size: isSmallScreen ? 18 : 20),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: isSmallScreen ? 12 : 16),
+                        Row(
+                          children: [
+                            Icon(Icons.flag_outlined,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: isSmallScreen ? 18 : 20),
+                            SizedBox(width: isSmallScreen ? 6 : 8),
+                            Text(
+                              '优先级',
+                              style: TextStyle(
+                                fontSize: isSmallScreen ? 11 : 12,
+                                color: AppColors.of(context).textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: isSmallScreen ? 6 : 8),
+                        Row(
+                          children: ['高', '中', '低'].map((p) {
+                            final isSelected = priority == p;
+                            Color priorityColor;
+                            if (p == '高') {
+                              priorityColor = Colors.red;
+                            } else if (p == '中')
+                              priorityColor = Colors.orange;
+                            else
+                              priorityColor = Colors.green;
+
+                            return Expanded(
+                              child: GestureDetector(
+                                onTap: () => setState(() => priority = p),
+                                child: Container(
+                                  margin: EdgeInsets.symmetric(
+                                      horizontal: isSmallScreen ? 3 : 4),
+                                  padding: EdgeInsets.symmetric(
+                                      vertical: isSmallScreen ? 8 : 10),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? priorityColor.withValues(alpha: 0.15)
+                                        : AppColors.of(context).panel(0.4),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? priorityColor
+                                          : AppColors.of(context).borderWeak,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    p,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: isSmallScreen ? 13 : 14,
+                                      color: isSelected
+                                          ? priorityColor
+                                          : AppColors.of(context).textSecondary,
+                                      fontWeight: isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                        SizedBox(height: isSmallScreen ? 12 : 16),
+                        AppTextField(
+                          contextMenuBuilder: styledEditableContextMenu,
+                          controller: noteController,
+                          maxLines: 1,
+                          decoration: InputDecoration(
+                            labelText: '备注（可选）',
+                            prefixIcon: Icon(Icons.note_outlined,
+                                color: courseColor.withValues(alpha: 0.7),
+                                size: isSmallScreen ? 18 : 20),
+                            filled: true,
+                            fillColor: AppColors.of(context).panel(0.4),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: isSmallScreen ? 12 : 14),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                  color: AppColors.of(context).borderWeak),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide:
+                                  BorderSide(color: courseColor, width: 2),
+                            ),
+                          ),
+                          style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.fromLTRB(isSmallScreen ? 16 : 20, 0,
+                      isSmallScreen ? 16 : 20, isSmallScreen ? 16 : 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(
+                                vertical: isSmallScreen ? 12 : 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            side: BorderSide(
+                                color: AppColors.of(context).borderWeak),
+                          ),
+                          child: Text('取消',
+                              style:
+                                  TextStyle(fontSize: isSmallScreen ? 13 : 14)),
+                        ),
+                      ),
+                      SizedBox(width: isSmallScreen ? 10 : 12),
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            if (nameController.text.isEmpty) return;
+                            final updatedTask = Task(
+                              id: task.id,
+                              courseId: task.courseId,
+                              name: nameController.text,
+                              type: type,
+                              dueDate: dueDate,
+                              priority: priority,
+                              note: noteController.text.isEmpty
+                                  ? null
+                                  : noteController.text,
+                              completed: task.completed,
+                            );
+                            await StorageService.updateTask(updatedTask);
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                            }
+                            setDialogState(() {});
+                            _loadData();
+                            setState(() {});
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              toastNotification.show(context, '任务已更新',
+                                  type: ToastType.success);
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: courseColor,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(
+                                vertical: isSmallScreen ? 12 : 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: Text('保存',
+                              style:
+                                  TextStyle(fontSize: isSmallScreen ? 13 : 15)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -5194,7 +5781,8 @@ class TimetableScreenState extends State<TimetableScreen>
             color: AppColors.of(context).surfaceAlt,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(icon, size: 18, color: AppColors.of(context).textSecondary),
+          child:
+              Icon(icon, size: 18, color: AppColors.of(context).textSecondary),
         ),
         const SizedBox(width: 12),
         Column(
@@ -5305,7 +5893,8 @@ class TimetableScreenState extends State<TimetableScreen>
 
   /// 视频壁纸设置底部弹窗
   void _showVideoWallpaperSettings() {
-    if (_videoController == null || !_videoController!.value.isInitialized) return;
+    if (_videoController == null || !_videoController!.value.isInitialized)
+      return;
     bool isDragging = false;
     // 拖拽中的临时进度，避免视频 position 反馈干扰跟手
     double? dragProgress;
@@ -5321,8 +5910,8 @@ class TimetableScreenState extends State<TimetableScreen>
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
               child: Container(
                 decoration: BoxDecoration(
-                  color: AppColors.of(context).glassShell
-                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
+                  color: AppColors.of(context).glassShell.withValues(
+                      alpha: AppColors.isDark(context) ? 0.82 : 0.35),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: AppColors.of(context).glassBorder,
@@ -5368,7 +5957,9 @@ class TimetableScreenState extends State<TimetableScreen>
                                   color: AppColors.of(context).surfaceAlt,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: Icon(Icons.close, size: 18, color: AppColors.of(context).textSecondary),
+                                child: Icon(Icons.close,
+                                    size: 18,
+                                    color: AppColors.of(context).textSecondary),
                               ),
                             ),
                           ],
@@ -5386,7 +5977,8 @@ class TimetableScreenState extends State<TimetableScreen>
                             AnimatedBuilder(
                               animation: _videoController!,
                               builder: (context, _) {
-                                final isPlaying = _videoController!.value.isPlaying;
+                                final isPlaying =
+                                    _videoController!.value.isPlaying;
                                 return GestureDetector(
                                   onTap: () {
                                     if (isPlaying) {
@@ -5399,11 +5991,14 @@ class TimetableScreenState extends State<TimetableScreen>
                                     width: 40,
                                     height: 40,
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF4A90E2).withValues(alpha: 0.15),
+                                      color: const Color(0xFF4A90E2)
+                                          .withValues(alpha: 0.15),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Icon(
-                                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                      isPlaying
+                                          ? Icons.pause_rounded
+                                          : Icons.play_arrow_rounded,
                                       color: const Color(0xFF4A90E2),
                                       size: 22,
                                     ),
@@ -5418,12 +6013,20 @@ class TimetableScreenState extends State<TimetableScreen>
                               child: AnimatedBuilder(
                                 animation: _videoController!,
                                 builder: (context, _) {
-                                  final position = _videoController!.value.position;
+                                  final position =
+                                      _videoController!.value.position;
                                   String fmt(Duration d) {
-                                    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-                                    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+                                    final m = d.inMinutes
+                                        .remainder(60)
+                                        .toString()
+                                        .padLeft(2, '0');
+                                    final s = d.inSeconds
+                                        .remainder(60)
+                                        .toString()
+                                        .padLeft(2, '0');
                                     return '$m:$s';
                                   }
+
                                   return Text(
                                     fmt(position),
                                     style: const TextStyle(
@@ -5446,16 +6049,26 @@ class TimetableScreenState extends State<TimetableScreen>
                                     builder: (ctx, constraints) {
                                       final trackWidth = constraints.maxWidth;
                                       // 获取当前进度（拖拽中用临时值，否则用视频实际进度）
-                                      final durMs = _videoController!.value.duration.inMilliseconds.toDouble().clamp(1, double.infinity);
-                                      final posMs = _videoController!.value.position.inMilliseconds.toDouble();
-                                      final videoProgress = (posMs / durMs).clamp(0.0, 1.0);
-                                      final displayProgress = isDragging ? (dragProgress ?? videoProgress) : videoProgress;
+                                      final durMs = _videoController!
+                                          .value.duration.inMilliseconds
+                                          .toDouble()
+                                          .clamp(1, double.infinity);
+                                      final posMs = _videoController!
+                                          .value.position.inMilliseconds
+                                          .toDouble();
+                                      final videoProgress =
+                                          (posMs / durMs).clamp(0.0, 1.0);
+                                      final displayProgress = isDragging
+                                          ? (dragProgress ?? videoProgress)
+                                          : videoProgress;
                                       return GestureDetector(
                                         behavior: HitTestBehavior.opaque,
                                         onHorizontalDragStart: (details) {
                                           // 按住任意位置即放大并可拖动
-                                          final localX = details.localPosition.dx;
-                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
+                                          final localX =
+                                              details.localPosition.dx;
+                                          final ratio = (localX / trackWidth)
+                                              .clamp(0.0, 1.0);
                                           setSheetState(() {
                                             isDragging = true;
                                             dragProgress = ratio;
@@ -5463,8 +6076,10 @@ class TimetableScreenState extends State<TimetableScreen>
                                         },
                                         onHorizontalDragUpdate: (details) {
                                           // 手指拖动距离与进度条移动距离一致
-                                          final localX = details.localPosition.dx;
-                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
+                                          final localX =
+                                              details.localPosition.dx;
+                                          final ratio = (localX / trackWidth)
+                                              .clamp(0.0, 1.0);
                                           setSheetState(() {
                                             dragProgress = ratio;
                                           });
@@ -5472,7 +6087,10 @@ class TimetableScreenState extends State<TimetableScreen>
                                         onHorizontalDragEnd: (_) {
                                           // 拖拽结束后才 seek
                                           if (dragProgress != null) {
-                                            _videoController!.seekTo(Duration(milliseconds: (dragProgress! * durMs).toInt()));
+                                            _videoController!.seekTo(Duration(
+                                                milliseconds:
+                                                    (dragProgress! * durMs)
+                                                        .toInt()));
                                           }
                                           setSheetState(() {
                                             isDragging = false;
@@ -5480,26 +6098,34 @@ class TimetableScreenState extends State<TimetableScreen>
                                           });
                                         },
                                         onTapDown: (details) {
-                                          final localX = details.localPosition.dx;
-                                          final ratio = (localX / trackWidth).clamp(0.0, 1.0);
-                                          _videoController!.seekTo(Duration(milliseconds: (ratio * durMs).toInt()));
+                                          final localX =
+                                              details.localPosition.dx;
+                                          final ratio = (localX / trackWidth)
+                                              .clamp(0.0, 1.0);
+                                          _videoController!.seekTo(Duration(
+                                              milliseconds:
+                                                  (ratio * durMs).toInt()));
                                         },
                                         child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(isDragging ? 6 : 3),
+                                          borderRadius: BorderRadius.circular(
+                                              isDragging ? 6 : 3),
                                           child: Stack(
                                             children: [
                                               // 背景轨道
                                               Container(
                                                 height: isDragging ? 12 : 6,
-                                                color: Colors.grey.withValues(alpha: 0.3),
+                                                color: Colors.grey
+                                                    .withValues(alpha: 0.3),
                                               ),
                                               // 已播放部分（从左向右增长）
                                               Align(
                                                 alignment: Alignment.centerLeft,
                                                 child: Container(
                                                   height: isDragging ? 12 : 6,
-                                                  width: trackWidth * displayProgress,
-                                                  color: const Color(0xFF4A90E2),
+                                                  width: trackWidth *
+                                                      displayProgress,
+                                                  color:
+                                                      const Color(0xFF4A90E2),
                                                 ),
                                               ),
                                             ],
@@ -5517,9 +6143,16 @@ class TimetableScreenState extends State<TimetableScreen>
                               width: 42,
                               child: Text(
                                 () {
-                                  final duration = _videoController!.value.duration;
-                                  final m = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-                                  final s = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+                                  final duration =
+                                      _videoController!.value.duration;
+                                  final m = duration.inMinutes
+                                      .remainder(60)
+                                      .toString()
+                                      .padLeft(2, '0');
+                                  final s = duration.inSeconds
+                                      .remainder(60)
+                                      .toString()
+                                      .padLeft(2, '0');
                                   return '$m:$s';
                                 }(),
                                 style: TextStyle(
@@ -5540,15 +6173,21 @@ class TimetableScreenState extends State<TimetableScreen>
                             // 左侧：启用动态壁纸声音
                             Expanded(
                               child: _buildAddOptionCard(
-                                icon: _videoSoundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                                icon: _videoSoundEnabled
+                                    ? Icons.volume_up_rounded
+                                    : Icons.volume_off_rounded,
                                 label: _videoSoundEnabled ? '声音已开启' : '启用声音',
-                                color: _videoSoundEnabled ? Colors.green : Colors.grey,
+                                color: _videoSoundEnabled
+                                    ? Colors.green
+                                    : Colors.grey,
                                 onTap: () async {
                                   final newValue = !_videoSoundEnabled;
                                   _videoSoundEnabled = newValue;
                                   _videoController?.setVolume(newValue ? 1 : 0);
-                                  final prefs = await SharedPreferences.getInstance();
-                                  await prefs.setBool('wallpaper_video_sound', newValue);
+                                  final prefs =
+                                      await SharedPreferences.getInstance();
+                                  await prefs.setBool(
+                                      'wallpaper_video_sound', newValue);
                                   setSheetState(() {});
                                   setState(() {});
                                 },
@@ -5600,7 +6239,8 @@ class TimetableScreenState extends State<TimetableScreen>
 
       // 保存为文件
       final dir = await getApplicationDocumentsDirectory();
-      final filePath = '${dir.path}/wallpaper_frame_${DateTime.now().millisecondsSinceEpoch}.png';
+      final filePath =
+          '${dir.path}/wallpaper_frame_${DateTime.now().millisecondsSinceEpoch}.png';
       final file = File(filePath);
       await file.writeAsBytes(bytes);
 
@@ -5634,108 +6274,15 @@ class TimetableScreenState extends State<TimetableScreen>
     }
   }
 
-  void showAddOptions() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        margin: const EdgeInsets.all(16),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.of(context).glassShell
-                  .withValues(alpha: AppColors.isDark(context) ? 0.82 : 0.35),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: AppColors.of(context).glassBorder,
-                  width: 1.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.15),
-                    blurRadius: 25,
-                    spreadRadius: 2,
-                    offset: const Offset(0, -4),
-                  ),
-                  BoxShadow(
-                    color: Colors.white.withValues(alpha: 0.6),
-                    blurRadius: 0,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
-              ),
-              child: SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            '添加',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: () => Navigator.pop(context),
-                            child: Container(
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                color: AppColors.of(context).surfaceAlt,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(Icons.close, size: 18, color: AppColors.of(context).textSecondary),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _buildAddOptionCard(
-                              icon: Icons.book,
-                              label: '课程',
-                              color: const Color(0xFF4A90E2),
-                              onTap: () {
-                                Navigator.pop(context);
-                                _showCourseDialog();
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildAddOptionCard(
-                              icon: Icons.task_alt,
-                              label: '任务',
-                              color: Colors.orange,
-                              onTap: () {
-                                Navigator.pop(context);
-                                _showAddTaskWithOptions();
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+  /// 加号 FAB「添加」底部弹出框：壳与内容统一走共享组件
+  /// （add_options_sheet.dart，待办页同款），本页只传各自的按钮回调；
+  /// [onGoToChat] 由 home_screen 传入，用于「前往对话页」按钮跳转 Tab
+  void showAddOptions({VoidCallback? onGoToChat}) {
+    showAddOptionsSheet(
+      context,
+      onCourse: _showCourseDialog,
+      onTask: _showAddTaskWithOptions,
+      onGoToChat: onGoToChat ?? () {},
     );
   }
 
@@ -5790,7 +6337,7 @@ class TimetableScreenState extends State<TimetableScreen>
       grouped.putIfAbsent(c.name, () => []).add(c);
     }
     final courseGroups = grouped.entries.toList();
-    
+
     showBouncyDialog(
       context: context,
       barrierLabel: '选择课程',
@@ -5803,132 +6350,140 @@ class TimetableScreenState extends State<TimetableScreen>
         ),
       ],
       builder: (context) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 360,
-          maxHeight: screenHeight * 0.6
-        ),
+        constraints:
+            BoxConstraints(maxWidth: 360, maxHeight: screenHeight * 0.6),
         child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Opacity(
-                              opacity: 0.82,
-                              child: Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                  ),
-                                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                                ),
-                                child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(Icons.book, color: Colors.white, size: 22),
-                              ),
-                              const SizedBox(width: 14),
-                              const Expanded(
-                                child: Text(
-                                  '选择课程',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                              GestureDetector(
-                                onTap: () => Navigator.pop(context),
-                                child: Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Icon(Icons.close, color: Colors.white, size: 18),
-                                ),
-                              ),
-                            ],
-                          ),
-                            ),
-                              ),
-                        if (allCourses.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.all(40),
-                            child: Column(
-                              children: [
-                                Icon(Icons.book_outlined, size: 48, color: AppColors.of(context).textTertiary),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '暂无课程',
-                                  style: TextStyle(color: AppColors.of(context).textTertiary),
-                                ),
-                                const SizedBox(height: 8),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _showCourseDialog();
-                                  },
-                                  child: const Text('先添加课程'),
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          Flexible(
-                            child: ListView.builder(
-                              shrinkWrap: true,
-                              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                              padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-                              itemCount: courseGroups.length,
-                              itemBuilder: (context, index) {
-                                final entry = courseGroups[index];
-                                final courseName = entry.key;
-                                final courses = entry.value;
-                                final courseColor = _parseColor(courses.first.color);
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.of(context).panel(0.4),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AppColors.of(context).borderWeak),
-                                  ),
-                                  child: ListTile(
-                                    leading: Container(
-                                      width: 40,
-                                      height: 40,
-                                      decoration: BoxDecoration(
-                                        color: courseColor.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Icon(Icons.book, color: courseColor, size: 20),
-                                    ),
-                                    title: Text(
-                                      courseName,
-                                      style: const TextStyle(fontWeight: FontWeight.w500),
-                                    ),
-                                    subtitle: courses.first.teacher != null && courses.first.teacher!.isNotEmpty
-                                        ? Text(courses.first.teacher!, style: TextStyle(fontSize: 12, color: AppColors.of(context).textSecondary))
-                                        : null,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _showTaskDialog(courses.first);
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                      ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Opacity(
+              opacity: 0.82,
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child:
+                          const Icon(Icons.book, color: Colors.white, size: 22),
                     ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Text(
+                        '选择课程',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.close,
+                            color: Colors.white, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (allCourses.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(40),
+                child: Column(
+                  children: [
+                    Icon(Icons.book_outlined,
+                        size: 48, color: AppColors.of(context).textTertiary),
+                    const SizedBox(height: 12),
+                    Text(
+                      '暂无课程',
+                      style:
+                          TextStyle(color: AppColors.of(context).textTertiary),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showCourseDialog();
+                      },
+                      child: const Text('先添加课程'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+                  itemCount: courseGroups.length,
+                  itemBuilder: (context, index) {
+                    final entry = courseGroups[index];
+                    final courseName = entry.key;
+                    final courses = entry.value;
+                    final courseColor = _parseColor(courses.first.color);
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.of(context).panel(0.4),
+                        borderRadius: BorderRadius.circular(12),
+                        border:
+                            Border.all(color: AppColors.of(context).borderWeak),
+                      ),
+                      child: ListTile(
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: courseColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(Icons.book, color: courseColor, size: 20),
+                        ),
+                        title: Text(
+                          courseName,
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                        subtitle: courses.first.teacher != null &&
+                                courses.first.teacher!.isNotEmpty
+                            ? Text(courses.first.teacher!,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.of(context).textSecondary))
+                            : null,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showTaskDialog(courses.first);
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
         ),
+      ),
     );
   }
 
@@ -6044,7 +6599,9 @@ class TimetableScreenState extends State<TimetableScreen>
         // 交接后再出现动画会重复。
         // id 注意：saved.id 未加课程表前缀，须解析为存储后的课程
         //（见 _resolveStoredCourse）
-        if (saved != null && course == null && (sourceRect == null || useReducedDialog)) {
+        if (saved != null &&
+            course == null &&
+            (sourceRect == null || useReducedDialog)) {
           final stored = _resolveStoredCourse(saved) ?? saved;
           _beginCourseAppearAnimation(stored);
           Future.delayed(const Duration(milliseconds: 420), () {
@@ -6168,7 +6725,8 @@ class TimetableScreenState extends State<TimetableScreen>
           onDismissed: restoreSourceBlock,
           child: CourseDialog(
             course: course,
-            selectedDay: selectedDay ?? course?.day ?? DateTime.now().weekday - 1,
+            selectedDay:
+                selectedDay ?? course?.day ?? DateTime.now().weekday - 1,
             selectedPeriod: selectedPeriod ?? course?.time,
             initialFocusSection: initialFocusSection,
             shellKey: courseShellKey,
@@ -6190,7 +6748,8 @@ class TimetableScreenState extends State<TimetableScreen>
       // 恒等过渡：禁用 RawDialogRoute 默认的线性
       // FadeTransition——morph 卡片全程不透明，落定帧与真课程块/
       // 加号遮罩像素一致，路由移除与真块出现同帧无缝交接
-      transitionBuilder: (context, animation, secondaryAnimation, child) => child,
+      transitionBuilder: (context, animation, secondaryAnimation, child) =>
+          child,
     );
     Navigator.of(context).push<Course?>(route).then((saved) {
       _resumeInactivePeek();
@@ -6227,7 +6786,8 @@ class TimetableScreenState extends State<TimetableScreen>
             selectedPeriod != null &&
             stored.day == selectedDay) {
           final cellHeight = sourceRect.height + 4;
-          final top = sourceRect.top + (stored.time - selectedPeriod) * cellHeight;
+          final top =
+              sourceRect.top + (stored.time - selectedPeriod) * cellHeight;
           sourceRectNotifier.value = Rect.fromLTRB(
             sourceRect.left,
             top,
@@ -6340,7 +6900,8 @@ class _TaskDialog extends StatefulWidget {
   State<_TaskDialog> createState() => _TaskDialogState();
 }
 
-class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderStateMixin {
+class _TaskDialogState extends State<_TaskDialog>
+    with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
@@ -6436,9 +6997,13 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                       padding: EdgeInsets.all(isSmallScreen ? 12 : 20),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [widget.courseColor, widget.courseColor.withValues(alpha: 0.8)],
+                          colors: [
+                            widget.courseColor,
+                            widget.courseColor.withValues(alpha: 0.8)
+                          ],
                         ),
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(20)),
                       ),
                       child: Row(
                         children: [
@@ -6448,7 +7013,9 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Icon(Icons.add_task, color: Colors.white, size: isSmallScreen ? 18 : 22),
+                            child: Icon(Icons.add_task,
+                                color: Colors.white,
+                                size: isSmallScreen ? 18 : 22),
                           ),
                           SizedBox(width: isSmallScreen ? 8 : 14),
                           Expanded(
@@ -6469,7 +7036,9 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                 color: Colors.white.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(Icons.close, color: Colors.white, size: isSmallScreen ? 16 : 18),
+                              child: Icon(Icons.close,
+                                  color: Colors.white,
+                                  size: isSmallScreen ? 16 : 18),
                             ),
                           ),
                         ],
@@ -6477,7 +7046,8 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                     ),
                     Expanded(
                       child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                        physics: const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics()),
                         padding: EdgeInsets.all(isSmallScreen ? 12 : 20),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -6487,29 +7057,41 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               controller: widget.nameController,
                               decoration: InputDecoration(
                                 labelText: '任务名称',
-                                prefixIcon: Icon(Icons.task, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
+                                prefixIcon: Icon(Icons.task,
+                                    color: widget.courseColor
+                                        .withValues(alpha: 0.7),
+                                    size: isSmallScreen ? 16 : 20),
                                 filled: true,
                                 fillColor: AppColors.of(context).surfaceAlt,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
+                                contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: isSmallScreen ? 10 : 14),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
+                                  borderSide: BorderSide(
+                                      color: AppColors.of(context).borderWeak),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
+                                  borderSide: BorderSide(
+                                      color: AppColors.of(context).borderWeak),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: widget.courseColor, width: 2),
+                                  borderSide: BorderSide(
+                                      color: widget.courseColor, width: 2),
                                 ),
                               ),
-                              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                              style:
+                                  TextStyle(fontSize: isSmallScreen ? 14 : 16),
                             ),
                             SizedBox(height: isSmallScreen ? 10 : 16),
                             Row(
                               children: [
-                                Icon(Icons.category_outlined, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
+                                Icon(Icons.category_outlined,
+                                    color: widget.courseColor
+                                        .withValues(alpha: 0.7),
+                                    size: isSmallScreen ? 16 : 20),
                                 SizedBox(width: isSmallScreen ? 4 : 8),
                                 Text(
                                   '任务类型',
@@ -6522,11 +7104,13 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                             ),
                             SizedBox(height: isSmallScreen ? 4 : 8),
                             Container(
-                              padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 8 : 12),
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: isSmallScreen ? 8 : 12),
                               decoration: BoxDecoration(
                                 color: AppColors.of(context).surfaceAlt,
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: AppColors.of(context).borderWeak),
+                                border: Border.all(
+                                    color: AppColors.of(context).borderWeak),
                               ),
                               // BlurredDropdown（而非原生 DropdownButton）：原生下拉经子路由
                               // 显示，收起时路由焦点恢复会钻回同对话框内的任务名称输入框，
@@ -6534,11 +7118,17 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               child: BlurredDropdown<String>(
                                 value: type,
                                 isExpanded: true,
-                                icon: Icon(Icons.expand_more, color: widget.courseColor, size: isSmallScreen ? 16 : 20),
-                                items: ['作业', '考试', '报告', '其他'].map((e) => DropdownMenuItem(
-                                  value: e,
-                                  child: Text(e, style: TextStyle(fontSize: isSmallScreen ? 14 : 16))
-                                )).toList(),
+                                icon: Icon(Icons.expand_more,
+                                    color: widget.courseColor,
+                                    size: isSmallScreen ? 16 : 20),
+                                items: ['作业', '考试', '报告', '其他']
+                                    .map((e) => DropdownMenuItem(
+                                        value: e,
+                                        child: Text(e,
+                                            style: TextStyle(
+                                                fontSize:
+                                                    isSmallScreen ? 14 : 16))))
+                                    .toList(),
                                 onChanged: (v) => setState(() => type = v!),
                               ),
                             ),
@@ -6549,7 +7139,8 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                   context: context,
                                   initialDate: dueDate,
                                   firstDate: DateTime.now(),
-                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  lastDate: DateTime.now()
+                                      .add(const Duration(days: 365)),
                                 );
                                 if (date != null) {
                                   if (!context.mounted) return;
@@ -6561,33 +7152,55 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                   );
                                   if (time != null) {
                                     setState(() {
-                                      dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                                      dueDate = DateTime(date.year, date.month,
+                                          date.day, time.hour, time.minute);
                                     });
                                   }
                                 }
                               },
                               borderRadius: BorderRadius.circular(12),
                               child: Container(
-                                padding: EdgeInsets.all(isSmallScreen ? 10 : 16),
+                                padding:
+                                    EdgeInsets.all(isSmallScreen ? 10 : 16),
                                 decoration: BoxDecoration(
                                   color: AppColors.of(context).surfaceAlt,
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: AppColors.of(context).borderWeak),
+                                  border: Border.all(
+                                      color: AppColors.of(context).borderWeak),
                                 ),
                                 child: Row(
                                   children: [
-                                    Icon(Icons.calendar_today, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
+                                    Icon(Icons.calendar_today,
+                                        color: widget.courseColor
+                                            .withValues(alpha: 0.7),
+                                        size: isSmallScreen ? 16 : 20),
                                     SizedBox(width: isSmallScreen ? 8 : 12),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          Text('截止日期', style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: AppColors.of(context).textSecondary)),
-                                          Text(intl.DateFormat('yyyy/MM/dd HH:mm').format(dueDate), style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 13 : 16)),
+                                          Text('截止日期',
+                                              style: TextStyle(
+                                                  fontSize:
+                                                      isSmallScreen ? 11 : 12,
+                                                  color: AppColors.of(context)
+                                                      .textSecondary)),
+                                          Text(
+                                              intl.DateFormat(
+                                                      'yyyy/MM/dd HH:mm')
+                                                  .format(dueDate),
+                                              style: TextStyle(
+                                                  fontWeight: FontWeight.w500,
+                                                  fontSize:
+                                                      isSmallScreen ? 13 : 16)),
                                         ],
                                       ),
                                     ),
-                                    Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary, size: isSmallScreen ? 16 : 20),
+                                    Icon(Icons.chevron_right,
+                                        color:
+                                            AppColors.of(context).textTertiary,
+                                        size: isSmallScreen ? 16 : 20),
                                   ],
                                 ),
                               ),
@@ -6595,7 +7208,10 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                             SizedBox(height: isSmallScreen ? 10 : 16),
                             Row(
                               children: [
-                                Icon(Icons.flag_outlined, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
+                                Icon(Icons.flag_outlined,
+                                    color: widget.courseColor
+                                        .withValues(alpha: 0.7),
+                                    size: isSmallScreen ? 16 : 20),
                                 SizedBox(width: isSmallScreen ? 4 : 8),
                                 Text(
                                   '优先级',
@@ -6613,20 +7229,30 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                 Color priorityColor;
                                 if (p == '高') {
                                   priorityColor = Colors.red;
-                                } else if (p == '中') priorityColor = Colors.orange;
-                                else priorityColor = Colors.green;
-                                
+                                } else if (p == '中')
+                                  priorityColor = Colors.orange;
+                                else
+                                  priorityColor = Colors.green;
+
                                 return Expanded(
                                   child: GestureDetector(
                                     onTap: () => setState(() => priority = p),
                                     child: Container(
-                                      margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3 : 4),
-                                      padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 10),
+                                      margin: EdgeInsets.symmetric(
+                                          horizontal: isSmallScreen ? 3 : 4),
+                                      padding: EdgeInsets.symmetric(
+                                          vertical: isSmallScreen ? 8 : 10),
                                       decoration: BoxDecoration(
-                                        color: isSelected ? priorityColor.withValues(alpha: 0.15) : AppColors.of(context).surfaceAlt,
+                                        color: isSelected
+                                            ? priorityColor.withValues(
+                                                alpha: 0.15)
+                                            : AppColors.of(context).surfaceAlt,
                                         borderRadius: BorderRadius.circular(10),
                                         border: Border.all(
-                                          color: isSelected ? priorityColor : AppColors.of(context).borderWeak,
+                                          color: isSelected
+                                              ? priorityColor
+                                              : AppColors.of(context)
+                                                  .borderWeak,
                                           width: isSelected ? 2 : 1,
                                         ),
                                       ),
@@ -6635,8 +7261,13 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
                                           fontSize: isSmallScreen ? 13 : 14,
-                                          color: isSelected ? priorityColor : AppColors.of(context).textSecondary,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                          color: isSelected
+                                              ? priorityColor
+                                              : AppColors.of(context)
+                                                  .textSecondary,
+                                          fontWeight: isSelected
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
                                         ),
                                       ),
                                     ),
@@ -6651,42 +7282,57 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               maxLines: 1,
                               decoration: InputDecoration(
                                 labelText: '备注（可选）',
-                                prefixIcon: Icon(Icons.note_outlined, color: widget.courseColor.withValues(alpha: 0.7), size: isSmallScreen ? 16 : 20),
+                                prefixIcon: Icon(Icons.note_outlined,
+                                    color: widget.courseColor
+                                        .withValues(alpha: 0.7),
+                                    size: isSmallScreen ? 16 : 20),
                                 filled: true,
                                 fillColor: AppColors.of(context).surfaceAlt,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: isSmallScreen ? 10 : 14),
+                                contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: isSmallScreen ? 10 : 14),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
+                                  borderSide: BorderSide(
+                                      color: AppColors.of(context).borderWeak),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: AppColors.of(context).borderWeak),
+                                  borderSide: BorderSide(
+                                      color: AppColors.of(context).borderWeak),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: widget.courseColor, width: 2),
+                                  borderSide: BorderSide(
+                                      color: widget.courseColor, width: 2),
                                 ),
                               ),
-                              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                              style:
+                                  TextStyle(fontSize: isSmallScreen ? 14 : 16),
                             ),
                           ],
                         ),
                       ),
                     ),
                     Container(
-                      padding: EdgeInsets.fromLTRB(isSmallScreen ? 12 : 20, 0, isSmallScreen ? 12 : 20, isSmallScreen ? 12 : 20),
+                      padding: EdgeInsets.fromLTRB(isSmallScreen ? 12 : 20, 0,
+                          isSmallScreen ? 12 : 20, isSmallScreen ? 12 : 20),
                       child: Row(
                         children: [
                           Expanded(
                             child: OutlinedButton(
                               onPressed: _closeDialog,
                               style: OutlinedButton.styleFrom(
-                                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 10 : 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                side: BorderSide(color: AppColors.of(context).borderWeak),
+                                padding: EdgeInsets.symmetric(
+                                    vertical: isSmallScreen ? 10 : 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                side: BorderSide(
+                                    color: AppColors.of(context).borderWeak),
                               ),
-                              child: Text('取消', style: TextStyle(fontSize: isSmallScreen ? 13 : 14)),
+                              child: Text('取消',
+                                  style: TextStyle(
+                                      fontSize: isSmallScreen ? 13 : 14)),
                             ),
                           ),
                           SizedBox(width: isSmallScreen ? 8 : 12),
@@ -6696,13 +7342,17 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               onPressed: () async {
                                 if (widget.nameController.text.isEmpty) return;
                                 final task = Task(
-                                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                  id: DateTime.now()
+                                      .millisecondsSinceEpoch
+                                      .toString(),
                                   courseId: widget.course.id,
                                   name: widget.nameController.text,
                                   type: type,
                                   dueDate: dueDate,
                                   priority: priority,
-                                  note: widget.noteController.text.isEmpty ? null : widget.noteController.text,
+                                  note: widget.noteController.text.isEmpty
+                                      ? null
+                                      : widget.noteController.text,
                                 );
                                 await widget.onSave(task);
                                 _closeDialog();
@@ -6710,10 +7360,14 @@ class _TaskDialogState extends State<_TaskDialog> with SingleTickerProviderState
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: widget.courseColor,
                                 foregroundColor: Colors.white,
-                                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 10 : 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                padding: EdgeInsets.symmetric(
+                                    vertical: isSmallScreen ? 10 : 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
                               ),
-                              child: Text('添加', style: TextStyle(fontSize: isSmallScreen ? 13 : 15)),
+                              child: Text('添加',
+                                  style: TextStyle(
+                                      fontSize: isSmallScreen ? 13 : 15)),
                             ),
                           ),
                         ],
@@ -6783,6 +7437,7 @@ List<Offset> _morphFlipQuadCorners({
   required Rect whole,
   required double morphT,
   required double flip,
+
   /// 复刻正面阶段（shell 传 whole）：透视项用卡片局部（未缩放）坐标
   /// 投影——见 project 内注释
   bool cardSpace = false,
@@ -6945,10 +7600,8 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
     final whole = _measureKeyRect(_contentKey);
     if (whole == null) return;
     // 孔洞锚点：壳矩形（不含 margin）；无 targetKey 时退回整个 child
-    final shell =
-        _measureKeyRect(widget.targetKey ?? _contentKey) ?? whole;
-    if (!_rectChanged(_targetRect, whole) &&
-        !_rectChanged(_shellRect, shell)) {
+    final shell = _measureKeyRect(widget.targetKey ?? _contentKey) ?? whole;
+    if (!_rectChanged(_targetRect, whole) && !_rectChanged(_shellRect, shell)) {
       return;
     }
     _targetRect = whole;
@@ -6985,7 +7638,8 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
             // 帧末同步给宿主（宿主侧另有当帧实测，二者一致）
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) {
-                widget.onLaidOut?.call((_shellRect ?? _targetRect!, _targetRect!));
+                widget.onLaidOut
+                    ?.call((_shellRect ?? _targetRect!, _targetRect!));
               }
             });
           }
@@ -7039,7 +7693,8 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
         final scaleX = rect.width / targetRect.width;
         final scaleY = rect.height / targetRect.height;
         final containerTransform = Matrix4.identity()
-          ..translateByDouble(rect.left - targetRect.left, rect.top - targetRect.top, 0.0, 1.0)
+          ..translateByDouble(
+              rect.left - targetRect.left, rect.top - targetRect.top, 0.0, 1.0)
           ..scaleByDouble(scaleX, scaleY, 1.0, 1.0);
 
         // —— 翻转模式（提供正面复刻）：对话框是课程块的「背面」——
@@ -7065,15 +7720,21 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
           // 单行显示与真实块无异难以察觉，手机窄列（文字宽约 40px）上
           // 复刻呈单行截断的「超宽版」、加号遮罩复刻的加号图标位于布局
           // 中心而不可见（本次修复的 bug）；模糊施加在拉伸之后（卡片
-          // 空间），sigma 不被拉伸倍数放大
-          final stretchedReplica = FittedBox(
-            fit: BoxFit.fill,
-            child: SizedBox(
-              width: sourceRect.width,
-              height: sourceRect.height,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(5),
-                child: sourceWidget,
+          // 空间），sigma 不被拉伸倍数放大。
+          // RepaintBoundary：复刻内容飞行期逐帧不变——翻转卡片父级
+          // Transform 每帧重绘时，复刻绘制指令只录一次逐帧复用，
+          // raster 线程每帧仅重执行 ImageFiltered 模糊与透明度（纯合成
+          // 结构，不改像素）
+          final stretchedReplica = RepaintBoundary(
+            child: FittedBox(
+              fit: BoxFit.fill,
+              child: SizedBox(
+                width: sourceRect.width,
+                height: sourceRect.height,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: sourceWidget,
+                ),
               ),
             ),
           );
@@ -7126,32 +7787,20 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
                       // 纸背：随 dissolve 淡入——flip=0（起飞/落定帧）
                       // 完全透明，课程块保持设置中的透明度（不垫白）；
                       // 内容褪去时白色「纸背」才浮现，与背面分支起点
-                      // （全白）连续
-                      Opacity(
-                        opacity: dissolve,
-                        child: ColoredBox(color: AppColors.of(context).surface),
+                      // （全白）连续。surface 恒不透明，alpha 直接进
+                      // 色值与 Opacity 包裹逐像素等价，省去逐帧 saveLayer
+                      ColoredBox(
+                        color: AppColors.of(context)
+                            .surface
+                            .withValues(alpha: dissolve),
                       ),
-                      if (dissolve < 0.995)
-                        Opacity(
-                          opacity: 1.0 - dissolve,
-                          // dissolve=0（翻转尚未开始/已经结束）时跳过
-                          // ImageFiltered：sigma=0 的 ImageFilter.blur 在
-                          // Impeller 上会把内容渲染成空白——复刻「凭空
-                          // 消失」、卡片呈现 100% 透明约半秒（直到翻转期
-                          // 白纸背浮现）的根源。此前该 bug 被恒不透明的
-                          // 白纸背掩盖，纸背改为随 dissolve 淡入后暴露
-                          child: dissolve < 0.005
-                              ? stretchedReplica
-                              : ImageFiltered(
-                                  imageFilter: ImageFilter.blur(
-                                    sigmaX: 10 * dissolve,
-                                    sigmaY: 10 * dissolve,
-                                  ),
-                                  child: stretchedReplica,
-                                ),
-                        )
-                      else
-                        stretchedReplica,
+                      // 本轮测试：复刻溶解模糊已删除——内容随 dissolve 纯
+                      // 透明度淡出（原 ImageFiltered blur 10·dissolve 逐帧
+                      // 离屏模糊，飞行前半程最大 GPU 项之一）
+                      Opacity(
+                        opacity: 1.0 - dissolve,
+                        child: stretchedReplica,
+                      ),
                     ],
                   ),
                 ),
@@ -7202,30 +7851,26 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
                   fit: StackFit.expand,
                   children: [
                     // 纸背：壳矩形尺寸（= 孔洞，贴壳）+ cardRadius，随浮现退场。
-                    // paperInsets 内缩掉对话框自身 margin，白色不再溢出玻璃壳之外
+                    // paperInsets 内缩掉对话框自身 margin，白色不再溢出玻璃壳
+                    // 之外。surface 恒不透明，alpha 直接进色值与 Opacity 包裹
+                    // 逐像素等价，省去逐帧 saveLayer
                     if (appear < 0.995)
-                      Opacity(
-                        opacity: 1.0 - appear,
-                        child: Padding(
-                          padding: paperInsets,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(cardRadius),
-                            child: ColoredBox(color: AppColors.of(context).surface),
+                      Padding(
+                        padding: paperInsets,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(cardRadius),
+                          child: ColoredBox(
+                            color: AppColors.of(context)
+                                .surface
+                                .withValues(alpha: 1.0 - appear),
                           ),
                         ),
                       ),
-                    // 对话框：不裁剪（阴影完整）；浮现时模糊、落定时清晰
+                    // 对话框：不裁剪（阴影完整）。本轮测试：浮现模糊已删除
+                    // ——内容随 appear 纯透明度淡入（原 ImageFiltered
+                    // blur 10·(1-appear) 逐帧全对话框离屏模糊，最大 GPU 项）
                     if (appear < 0.995)
-                      Opacity(
-                        opacity: appear,
-                        child: ImageFiltered(
-                          imageFilter: ImageFilter.blur(
-                            sigmaX: 10 * (1 - appear),
-                            sigmaY: 10 * (1 - appear),
-                          ),
-                          child: child,
-                        ),
-                      )
+                      Opacity(opacity: appear, child: child!)
                     else
                       child!,
                   ],
@@ -7258,7 +7903,16 @@ class _CourseDetailMorphState extends State<_CourseDetailMorph> {
           ),
         );
       },
-      child: KeyedSubtree(key: _contentKey, child: widget.child),
+      child: KeyedSubtree(
+        key: _contentKey,
+        // RepaintBoundary：翻转期父级 Transform/模糊层逐帧重绘时，对话框
+        // 内容绘制指令只录一次、逐帧复用（raster 每帧仅重执行模糊与
+        // 变换）；落定后键盘输入等对话框内部重绘也被隔离在本边界内，
+        // 不再逐帧重录外层遮罩与变换。纯合成结构，不改任何像素；壳
+        // BackdropFilter 是合成期效果（逐帧对当帧背景采样），不随指令
+        // 复用而冻结，毛玻璃仍实时
+        child: RepaintBoundary(child: widget.child),
+      ),
     );
   }
 }
@@ -7564,8 +8218,8 @@ class _MorphDialogHostState extends State<_MorphDialogHost> {
                         ? null
                         : _InvertedRRectClipper(hole, holeRadius),
                     child: ColoredBox(
-                      color: Colors.black
-                          .withValues(alpha: 0.5 * (1.0 - closeU)),
+                      color:
+                          Colors.black.withValues(alpha: 0.5 * (1.0 - closeU)),
                     ),
                   ),
                 ),
@@ -7660,8 +8314,7 @@ class _MorphDialogHostState extends State<_MorphDialogHost> {
         _quadCorners = null; // 仅翻转分支重算；其余路径维持矩形孔洞
         // 动态源矩形：保存成功后按新课程块实际矩形落位（见参数注释），
         // 未更新时回退原矩形
-        final source =
-            widget.sourceRectListenable?.value ?? widget.sourceRect;
+        final source = widget.sourceRectListenable?.value ?? widget.sourceRect;
         if (!useSyncHole && target != null) {
           if (source == null || source.isEmpty) {
             hole = target;
@@ -7773,25 +8426,25 @@ class _MorphDialogHostState extends State<_MorphDialogHost> {
                         )
                       : (_quadCorners != null
                           ? (widget.shellKey != null
-                                  // 翻转期绘制阶段实测壳当帧变换的投影四边形，
-                                  // 与卡片像素级同步——此前 build 期公式角点在关闭
-                                  // 方向概率性滞后卡片 ~50ms 的根治。
-                                  // 复刻正面阶段壳不在树中（打开未挂载/关闭翻
-                                  // 背面后卸载），实测返回 null 自动落到
-                                  // fallbackCorners（整盒卡片公式四角）
-                                  ? _InvertedRRectClipper.quadSync(
-                                      shellKey: widget.shellKey!,
-                                      radius: holeRadiusForQuad,
-                                      hScale: holeHScale,
-                                      vScale: holeVScale,
-                                      fallbackCorners: _quadCorners,
-                                    )
-                                  : _InvertedRRectClipper.quad(
-                                      corners: _quadCorners!,
-                                      radius: holeRadiusForQuad,
-                                      hScale: holeHScale,
-                                      vScale: holeVScale,
-                                    ))
+                              // 翻转期绘制阶段实测壳当帧变换的投影四边形，
+                              // 与卡片像素级同步——此前 build 期公式角点在关闭
+                              // 方向概率性滞后卡片 ~50ms 的根治。
+                              // 复刻正面阶段壳不在树中（打开未挂载/关闭翻
+                              // 背面后卸载），实测返回 null 自动落到
+                              // fallbackCorners（整盒卡片公式四角）
+                              ? _InvertedRRectClipper.quadSync(
+                                  shellKey: widget.shellKey!,
+                                  radius: holeRadiusForQuad,
+                                  hScale: holeHScale,
+                                  vScale: holeVScale,
+                                  fallbackCorners: _quadCorners,
+                                )
+                              : _InvertedRRectClipper.quad(
+                                  corners: _quadCorners!,
+                                  radius: holeRadiusForQuad,
+                                  hScale: holeHScale,
+                                  vScale: holeVScale,
+                                ))
                           : (hole == null
                               ? null
                               : _InvertedRRectClipper(hole, holeRadius))),
@@ -8029,8 +8682,7 @@ class _InvertedRRectClipper extends CustomClipper<Path> {
     return Path.combine(
       PathOperation.difference,
       full,
-      Path()
-        ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(radius))),
+      Path()..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(radius))),
     );
   }
 
@@ -8056,6 +8708,7 @@ class _InvertedRRectClipper extends CustomClipper<Path> {
       if (len <= 0) return from;
       return from + v * math.min(d, len / 2) / len;
     }
+
     // 圆角切距随邻边取向缩放：水平边（卡片上下边）被绕竖直轴的翻转
     // 压缩 |cosθ| 倍（hScale），竖直边不受旋转影响——与卡片圆角经同一
     // 旋转后的屏幕投影一致。此前两边统一用未缩放 radius，翻转帧孔洞
@@ -8064,11 +8717,11 @@ class _InvertedRRectClipper extends CustomClipper<Path> {
     // 复刻正面阶段另经容器逐轴缩放：水平 hScale、垂直 vScale
     double cornerDist(Offset from, Offset to) {
       final v = to - from;
-      final want = v.dx.abs() >= v.dy.abs()
-          ? radius * hScale
-          : radius * (vScale ?? 1.0);
+      final want =
+          v.dx.abs() >= v.dy.abs() ? radius * hScale : radius * (vScale ?? 1.0);
       return math.min(want, v.distance / 2);
     }
+
     for (var i = 0; i < 4; i++) {
       final corner = pts[i];
       final prev = pts[(i + 3) % 4];
@@ -8105,6 +8758,7 @@ class _CourseBlockActionMenu extends StatefulWidget {
 
   final Rect anchorRect;
   final VoidCallback onDismiss;
+
   /// 收起动画播放完毕后回调（由父级移除浮层）
   final VoidCallback onClosed;
   final VoidCallback onEditCurrent;
@@ -8190,7 +8844,8 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
 
     // 主菜单优先显示在课程块上方，空间不足时落到课程块下方
     final double mainLeft = (widget.anchorRect.center.dx - _menuWidth / 2)
-        .clamp(_edgeMargin, math.max(_edgeMargin, screenSize.width - _menuWidth - _edgeMargin));
+        .clamp(_edgeMargin,
+            math.max(_edgeMargin, screenSize.width - _menuWidth - _edgeMargin));
     double mainTop = widget.anchorRect.top - _mainMenuHeight - _gap;
     final bool showAbove = mainTop >= _edgeMargin;
     if (!showAbove) {
@@ -8200,7 +8855,8 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
     // 子菜单位于主菜单下方（向下弹出），越界时收回到屏幕内
     double subTop = mainTop + _mainMenuHeight + _gap;
     if (subTop + _subMenuHeight > screenSize.height - _edgeMargin) {
-      subTop = math.max(_edgeMargin, screenSize.height - _subMenuHeight - _edgeMargin);
+      subTop = math.max(
+          _edgeMargin, screenSize.height - _subMenuHeight - _edgeMargin);
     }
 
     final bool subMenuVisible =
@@ -8279,7 +8935,9 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
                     offset: Offset(0, showAbove ? slide : -slide),
                     child: Transform.scale(
                       scale: 0.72 + 0.28 * t,
-                      alignment: showAbove ? Alignment.bottomCenter : Alignment.topCenter,
+                      alignment: showAbove
+                          ? Alignment.bottomCenter
+                          : Alignment.topCenter,
                       child: child,
                     ),
                   ),
@@ -8346,7 +9004,8 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
                 onTap: _toggleSubMenu,
               ),
             ),
-            Container(width: 1, height: 24, color: AppColors.of(context).borderWeak),
+            Container(
+                width: 1, height: 24, color: AppColors.of(context).borderWeak),
             Expanded(
               child: _menuButton(
                 icon: Icons.delete_outline,
@@ -8368,17 +9027,17 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-          _subMenuItem(
-            icon: Icons.edit_outlined,
-            label: '编辑当前课程',
-            onTap: widget.onEditCurrent,
-          ),
-          _subMenuItem(
-            icon: Icons.add_circle_outline,
-            label: '添加同时段课程',
-            onTap: widget.onAddSameSlot,
-          ),
-        ],
+            _subMenuItem(
+              icon: Icons.edit_outlined,
+              label: '编辑当前课程',
+              onTap: widget.onEditCurrent,
+            ),
+            _subMenuItem(
+              icon: Icons.add_circle_outline,
+              label: '添加同时段课程',
+              onTap: widget.onAddSameSlot,
+            ),
+          ],
         ),
       ),
     );
@@ -8405,7 +9064,10 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
             filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.78 : 0.72),
+                color: AppColors.of(context).glassShell.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.78
+                        : 0.72),
                 border: Border.all(color: AppColors.of(context).glassBorder),
               ),
               child: child,
@@ -8478,7 +9140,8 @@ class _CourseBlockActionMenuState extends State<_CourseBlockActionMenu>
                     maxLines: 1,
                     softWrap: false,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 14, color: AppColors.of(context).textPrimary),
+                    style: TextStyle(
+                        fontSize: 14, color: AppColors.of(context).textPrimary),
                   ),
                 ),
               ],

@@ -60,6 +60,9 @@ Future<void> showUpdateDialog(
   void Function(VoidCallback)? setDs;
   BuildContext? dsContext;
   void safeSetState(VoidCallback fn) {
+    // 已卸载（对话框关闭后异步回调仍可能触发）时跳过：失活元素上
+    // setState 会在下一帧对失活 context 做继承查找而抛异常
+    if (dsContext == null || !dsContext!.mounted) return;
     try {
       setDs?.call(fn);
     } catch (_) {}
@@ -96,15 +99,26 @@ Future<void> showUpdateDialog(
         },
         // Stack 尺寸只由新内容决定（旧内容仅水平约束、垂直居中悬浮，
         // 不参与定尺寸）：新内容一进来整块布局就落到最终位置，图标/
-        // 标题不会因旧的高内容淡出期间还撑着布局而先高后低地跳动
-        layoutBuilder: (currentChild, previousChildren) => Stack(
-          alignment: Alignment.center,
-          clipBehavior: Clip.none,
-          children: [
-            for (final Widget child in previousChildren)
-              Positioned(left: 0, right: 0, child: child),
-            if (currentChild != null) currentChild,
-          ],
+        // 标题不会因旧的高内容淡出期间还撑着布局而先高后低地跳动。
+        // Stack 自身强制满宽：否则 Stack 收缩到新内容的自然宽度时，
+        // Positioned 悬浮的退场内容（如「检查更新失败」→「检查更新」）
+        // 会被挤压换行一帧；退场子项再套 Center 保持自然宽度居中——
+        // 满宽 Positioned 会把它们拉成宽体/左对齐，闪现一帧
+        layoutBuilder: (currentChild, previousChildren) => SizedBox(
+          width: double.infinity,
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              for (final Widget child in previousChildren)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  child: Center(child: child),
+                ),
+              if (currentChild != null) currentChild,
+            ],
+          ),
         ),
         child: child,
       );
@@ -203,41 +217,6 @@ Future<void> showUpdateDialog(
     }
   }
 
-  // 统一次按钮：灰描边 TextButton（与关于对话框「检查更新」及全应用对话框一致）
-  Widget buildSecondaryButton(String text, VoidCallback? onPressed) {
-    return Expanded(
-      child: TextButton(
-        onPressed: onPressed,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: AppColors.of(context).borderWeak),
-          ),
-        ),
-        child: Text(text),
-      ),
-    );
-  }
-
-  // 统一主按钮：蓝色 ElevatedButton
-  Widget buildPrimaryButton(String text, VoidCallback? onPressed) {
-    return Expanded(
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF4A90E2),
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        child: Text(text),
-      ),
-    );
-  }
-
   await showBouncyDialog(
     context: context,
     barrierLabel: '检查更新',
@@ -253,6 +232,46 @@ Future<void> showUpdateDialog(
         // 进出子项）内不做任何继承查找——重试瞬间旧子项可能已处于
         // 停用态，子树内的 Theme 查找会抛 "deactivated ancestor"
         final palette = AppColors.of(context);
+
+        // 统一次按钮：灰描边 TextButton（与关于对话框「检查更新」及
+        // 全应用对话框一致）。配色取自上面的 palette——不能用外层
+        // showUpdateDialog 的 context：调用方元素可能在对话框生命周期
+        // 内失活（如启动欢迎页卸载），失活后重建会在 Theme.of 处抛
+        // "deactivated ancestor"
+        Widget buildSecondaryButton(String text, VoidCallback? onPressed) {
+          return Expanded(
+            child: TextButton(
+              onPressed: onPressed,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: palette.borderWeak),
+                ),
+              ),
+              child: Text(text),
+            ),
+          );
+        }
+
+        // 统一主按钮：蓝色 ElevatedButton
+        Widget buildPrimaryButton(String text, VoidCallback? onPressed) {
+          return Expanded(
+            child: ElevatedButton(
+              onPressed: onPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4A90E2),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(text),
+            ),
+          );
+        }
+
         // 打开即开始检查（仅首次；重试由按钮显式触发）
         if (!autoCheckStarted) {
           autoCheckStarted = true;

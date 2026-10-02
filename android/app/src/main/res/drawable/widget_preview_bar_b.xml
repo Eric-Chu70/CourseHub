@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 组件面板预览图内部元素：圆角色块（RemoteViews 白名单里没有裸 View，
+     故用 TextView 承载背景） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="2dp" />
+    <solid android:color="@color/widget_preview_bar_b" />
+</shape>

@@ -31,6 +31,9 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<!-- 打赏码长按保存到相册（gal） -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于将 CourseHub 的打赏码保存到你的相册，方便微信扫码打赏。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -3,6 +3,8 @@ package com.coursehub.app.widget
 import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.updateAll
 import androidx.glance.color.ColorProvider
@@ -10,6 +12,10 @@ import es.antonborri.home_widget.HomeWidgetGlanceWidgetReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+
+/** 小部件卡片四周内缩量：部分系统启动器会对宿主视图边缘裁切，
+ *  卡片不再全出血，四边各留此余量（比例不变，只往里缩） */
+val WidgetEdgeInset: Dp = 4.dp
 
 /**
  * 小组件主题颜色工具

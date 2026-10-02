@@ -57,6 +57,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 帮助悬浮卡片（Overlay）是否可见。
   bool _helpVisible = false;
   OverlayEntry? _helpEntry;
+
   /// 帮助卡展开时按返回：先播放收回动画，动画完成后真正退出。
   bool _pendingPop = false;
 
@@ -64,14 +65,18 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
 
   /// 形态：true = 完全形态（后退/前进 + 输入框），false = 精简形态（锁 + 域名）。
   bool _barExpanded = true;
+
   /// 滚动方向检测（onScrollChanged 不带 oldY，自行记录上次位置）。
   double _lastScrollY = 0;
   bool _canGoBack = false;
   bool _canGoForward = false;
+
   /// 减弱动态效果：导航条无模糊高不透明、帮助卡片无缩放动画。
   bool _reduceMotion = false;
+
   /// 加载中图标的持续旋转动画（🔄）。
   late final AnimationController _spinController;
+
   /// 安全锁显隐动画（屏幕级持久控制器）：图标原地 scale + 淡入淡出
   /// [+ 模糊]，宽度位移与图标共用同一动画值（[_lockCurved]），逐帧同步
   /// ——不存在 AnimatedContainer 隐式补间被子树重建打断的闪现问题。
@@ -81,18 +86,23 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 两种形态共用同一动画值，切换无缝衔接。
   late final AnimationController _lockCtrl;
   late final CurvedAnimation _lockCurved;
+
   /// 当前是否显示锁（驱动精简条总宽目标计算，见 [_compactBarWidth]）。
   bool _lockVisible = false;
+
   /// 用户在预览对话框手动取消导入：脚本 catch 随后的失败弹窗
   /// （showAlert「导入失败」）降级为顶部提示，不再弹对话框。
   bool _importCancelled = false;
+
   /// 缓存的 WebView 实例：父级 setState（导航条形态切换等）不再重建平台视图，
   /// 避免 WebView 子树反复重建导致的交互卡顿。
   Widget? _cachedWebView;
+
   /// UA 模式：默认手机版（系统默认 UA，与拾光原 App 一致，适配脚本的选择器
   /// 对应手机 UA 渲染的 DOM）；个别学校教务只有 PC 页面时手动切换。
   bool _useDesktopUa = false;
   bool _uaPrefLoaded = false;
+
   /// UA 切换后待恢复的网址：平台视图重建后加载，保证不丢当前页面。
   String? _pendingUrlAfterRebuild;
 
@@ -115,6 +125,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 现取现清洗（保证 Chromium 版本号与真实内核一致），未取到前为 null
   /// （首跳以系统默认 UA 的空白页创建）。
   String? _mobileUaClean;
+
   /// WebView 重建代号：UA 清洗后需在同模式下强制重建平台视图，
   /// 变更 ValueKey 保证旧实例销毁、新实例带新 UA 创建。
   int _webviewGen = 0;
@@ -129,8 +140,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// shouldInterceptRequest 层不可见，代理需自行补齐）。
   static String _deviceAcceptLanguage() {
     try {
-      final locales =
-          WidgetsBinding.instance.platformDispatcher.locales;
+      final locales = WidgetsBinding.instance.platformDispatcher.locales;
       if (locales.isEmpty) return 'zh-CN,zh;q=0.9,en;q=0.8';
       final first = locales.first;
       final primary = (first.countryCode?.isNotEmpty ?? false)
@@ -334,115 +344,115 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       ],
       builder: (context) {
         return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                          colors: [Color(0xFF9B59B6), Color(0xFFAF7AC5)]),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.memory,
-                        size: 22, color: Colors.white),
-                  ),
-                  const SizedBox(width: 12),
-                  const Text(
-                    'WebView 内核诊断',
-                    style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Chromium 内核版本：${chromeVersion ?? '未知'}',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.of(context).textPrimary),
-              ),
-              const SizedBox(height: 6),
-              Text('评估：$assessment',
-                  style: TextStyle(
-                      fontSize: 13, color: AppColors.of(context).textSecondary)),
-              const SizedBox(height: 12),
-              // 清除 WebView 缓存 + Cookie 并刷新：瑞数把环境判定编码在
-              // 客户端生成的 T cookie 里（Bk8UVSeWhgi3T 等 13 位随机名），
-              // 补环境修复后必须清掉旧 cookie 重新过挑战，否则服务端
-              // 沿用旧判定继续返回降级页面。缓存里也可能有被污染的
-              // 挑战响应。
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    try {
-                      await InAppWebViewController.clearAllCache();
-                      await CookieManager.instance().deleteAllCookies();
-                      await _webController?.reload();
-                    } catch (_) {}
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                      toastNotification.show(context, '已清除缓存和 Cookie 并刷新',
-                          type: ToastType.success);
-                    }
-                  },
-                  icon: const Icon(Icons.cleaning_services,
-                      size: 16, color: Color(0xFF9B59B6)),
-                  label: const Text('清除缓存和 Cookie 并刷新',
-                      style: TextStyle(color: Color(0xFF9B59B6))),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(
-                        color: Colors.deepPurple.shade200, width: 1.2),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
-              ),
-              if (ua.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text('User-Agent：',
-                    style: TextStyle(
-                        fontSize: 11, color: AppColors.of(context).textTertiary)),
-                const SizedBox(height: 4),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
                 Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 90),
-                  padding: const EdgeInsets.all(10),
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: AppColors.of(context).surfaceAlt,
-                    borderRadius: BorderRadius.circular(8),
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)]),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  child: SingleChildScrollView(
-                    child: Text(
-                      ua,
-                      style: TextStyle(
-                          fontSize: 10, color: AppColors.of(context).textSecondary),
-                    ),
-                  ),
+                  child:
+                      const Icon(Icons.memory, size: 22, color: Colors.white),
+                ),
+                const SizedBox(width: 12),
+                const Text(
+                  'WebView 内核诊断',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                 ),
               ],
-              const SizedBox(height: 16),
-              SizedBox(
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Chromium 内核版本：${chromeVersion ?? '未知'}',
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.of(context).textPrimary),
+            ),
+            const SizedBox(height: 6),
+            Text('评估：$assessment',
+                style: TextStyle(
+                    fontSize: 13, color: AppColors.of(context).textSecondary)),
+            const SizedBox(height: 12),
+            // 清除 WebView 缓存 + Cookie 并刷新：瑞数把环境判定编码在
+            // 客户端生成的 T cookie 里（Bk8UVSeWhgi3T 等 13 位随机名），
+            // 补环境修复后必须清掉旧 cookie 重新过挑战，否则服务端
+            // 沿用旧判定继续返回降级页面。缓存里也可能有被污染的
+            // 挑战响应。
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  try {
+                    await InAppWebViewController.clearAllCache();
+                    await CookieManager.instance().deleteAllCookies();
+                    await _webController?.reload();
+                  } catch (_) {}
+                  if (context.mounted) {
+                    Navigator.pop(context);
+                    toastNotification.show(context, '已清除缓存和 Cookie 并刷新',
+                        type: ToastType.success);
+                  }
+                },
+                icon: const Icon(Icons.cleaning_services,
+                    size: 16, color: Color(0xFF4A90E2)),
+                label: const Text('清除缓存和 Cookie 并刷新',
+                    style: TextStyle(color: Color(0xFF4A90E2))),
+                style: OutlinedButton.styleFrom(
+                  side:
+                      BorderSide(color: kAppSeedColor.withValues(alpha: 0.45), width: 1.2),
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            if (ua.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('User-Agent：',
+                  style: TextStyle(
+                      fontSize: 11, color: AppColors.of(context).textTertiary)),
+              const SizedBox(height: 4),
+              Container(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF9B59B6),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                constraints: const BoxConstraints(maxHeight: 90),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.of(context).surfaceAlt,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    ua,
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: AppColors.of(context).textSecondary),
                   ),
-                  child: const Text('知道了'),
                 ),
               ),
             ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF4A90E2),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('知道了'),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -451,8 +461,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   Future<void> _initUrl() async {
     var url = widget.adapter.importUrl;
     if (url.isEmpty) {
-      url = await ShiguangIndexService.getLastUrl(widget.adapter.adapterId) ??
-          '';
+      url =
+          await ShiguangIndexService.getLastUrl(widget.adapter.adapterId) ?? '';
     }
     if (mounted) {
       setState(() => _urlController.text = url);
@@ -490,13 +500,13 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
     // 空白页 + 系统默认 UA 创建，此处捕获真实 UA → 清洗 WebView 指纹
     // （「; wv」/「Version/4.0」标记，瑞数按此识别 WebView 循环下发
     // 挑战页）→ 重建 WebView 用干净 UA 加载目标页（不与目标站交互，
-    // 不产生脏 Cookie/缓存）。重建后 _pendingUrlAfterRebuild / 
+    // 不产生脏 Cookie/缓存）。重建后 _pendingUrlAfterRebuild /
     // initialUrlRequest / lastUrl 逻辑自动恢复页面。
     if (!_useDesktopUa && _mobileUaClean == null) {
       String? raw;
       try {
-        raw = await controller.evaluateJavascript(
-            source: 'navigator.userAgent') as String?;
+        raw = await controller.evaluateJavascript(source: 'navigator.userAgent')
+            as String?;
       } catch (_) {}
       if (raw != null && raw.isNotEmpty) {
         final clean = _sanitizeUa(raw);
@@ -535,8 +545,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       _pendingUrlAfterRebuild = null;
       if (url.isNotEmpty && mounted && _webController == controller) {
         _setLoading(true);
-        await controller
-            .loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+        await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
       }
       return;
     }
@@ -551,8 +560,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
           _webController == controller) {
         _urlController.text = lastUrl;
         _setLoading(true);
-        await controller
-            .loadUrl(urlRequest: URLRequest(url: WebUri(lastUrl)));
+        await controller.loadUrl(urlRequest: URLRequest(url: WebUri(lastUrl)));
       }
     }
   }
@@ -565,8 +573,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       // 无源页面（about:blank），瑞数若在空白页上下文里做二次检测，
       // 这里保证 chrome 对象同样存在（幂等，已存在则直接返回）。
       try {
-        await controller.evaluateJavascript(
-            source: ShiguangBridge.chromeEnvJs);
+        await controller.evaluateJavascript(source: ShiguangBridge.chromeEnvJs);
       } catch (_) {}
       return;
     }
@@ -576,8 +583,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       // URL 变化后同步锁显隐（http↔https 切换）；随后 _setLoading(false)
       // 也会兜底更新，此处先按新地址计算。
       _updateLockVisibility();
-      await ShiguangIndexService.saveLastUrl(
-          widget.adapter.adapterId, urlStr);
+      await ShiguangIndexService.saveLastUrl(widget.adapter.adapterId, urlStr);
     }
     if (mounted) {
       setState(() => _pageLoaded = true);
@@ -610,20 +616,17 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [
-                      Color(0xFF9B59B6),
-                      Color(0xFFAF7AC5)
-                    ]),
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)]),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: const Icon(Icons.school,
-                      size: 28, color: Colors.white),
+                  child:
+                      const Icon(Icons.school, size: 28, color: Colors.white),
                 ),
                 const SizedBox(height: 14),
                 Text(
                   title.isEmpty ? '提示' : title,
-                  style: TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
                 Flexible(
@@ -643,7 +646,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   child: ElevatedButton(
                     onPressed: () => Navigator.pop(context, true),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF9B59B6),
+                      backgroundColor: const Color(0xFF4A90E2),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 13),
                       shape: RoundedRectangleBorder(
@@ -705,8 +708,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               })
           .toList(),
     };
-    final importResult =
-        await StorageService.importData(data, mode: mode);
+    final importResult = await StorageService.importData(data, mode: mode);
     if (!importResult.success) {
       throw Exception(importResult.errorMessage ?? '导入失败');
     }
@@ -748,8 +750,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         if (_importCancelled) {
           _importCancelled = false;
           if (mounted) {
-            toastNotification.show(context, '已取消导入',
-                type: ToastType.info);
+            toastNotification.show(context, '已取消导入', type: ToastType.info);
           }
           _sgResolveValue(controller, id, true);
           break;
@@ -766,7 +767,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         // window.__sgSavePayload，这里拉取后走统一导入链路。
         try {
           final payload = (await controller.evaluateJavascript(
-                  source: 'window.__sgSavePayload')) as String?;
+              source: 'window.__sgSavePayload')) as String?;
           if (payload == null || payload.isEmpty) {
             throw Exception('未收到课程数据');
           }
@@ -839,7 +840,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// value 为 null / bool / num；通过 ok=true + value 复用胶水的
   /// `value !== undefined ? value : true` 语义（null 恰好 !== undefined，
   /// 会被原样 resolve，满足单选「取消返回 null」的协议）。
-  void _sgResolveValue(InAppWebViewController controller, dynamic id, dynamic value) {
+  void _sgResolveValue(
+      InAppWebViewController controller, dynamic id, dynamic value) {
     String js;
     if (value == null) {
       js = 'null';
@@ -859,7 +861,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 适配脚本普遍不检查 saveImportedCourses 等的返回值，resolve(false)
   /// 会放行脚本继续走「导入成功」流程（取消后仍弹成功提示的根因）；
   /// reject 让 await 抛异常、进脚本自身 catch 统一收尾。
-  void _sgRejectValue(InAppWebViewController controller, dynamic id, String errorMessage) {
+  void _sgRejectValue(
+      InAppWebViewController controller, dynamic id, String errorMessage) {
     unawaited(controller.evaluateJavascript(
         source:
             'window.__sgResolve && window.__sgResolve($id, false, ${jsonEncode(errorMessage)})'));
@@ -894,14 +897,11 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               width: 56,
               height: 56,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [
-                  Color(0xFF9B59B6),
-                  Color(0xFFAF7AC5)
-                ]),
+                gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)]),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Icon(Icons.list_alt,
-                  size: 28, color: Colors.white),
+              child: const Icon(Icons.list_alt, size: 28, color: Colors.white),
             ),
             const SizedBox(height: 14),
             Text(
@@ -919,7 +919,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Material(
                       color: selected
-                          ? const Color(0xFF9B59B6).withValues(alpha: 0.12)
+                          ? const Color(0xFF4A90E2).withValues(alpha: 0.12)
                           : AppColors.of(context).surfaceAlt,
                       borderRadius: BorderRadius.circular(12),
                       child: InkWell(
@@ -936,7 +936,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                                   style: TextStyle(
                                     fontSize: 14,
                                     color: selected
-                                        ? const Color(0xFF9B59B6)
+                                        ? const Color(0xFF4A90E2)
                                         : AppColors.of(context).textPrimary,
                                     fontWeight: selected
                                         ? FontWeight.w600
@@ -946,7 +946,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                               ),
                               if (selected)
                                 const Icon(Icons.check_rounded,
-                                    size: 18, color: Color(0xFF9B59B6)),
+                                    size: 18, color: Color(0xFF4A90E2)),
                             ],
                           ),
                         ),
@@ -996,14 +996,11 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               width: 56,
               height: 56,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [
-                  Color(0xFF9B59B6),
-                  Color(0xFFAF7AC5)
-                ]),
+                gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)]),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Icon(Icons.edit_note,
-                  size: 28, color: Colors.white),
+              child: const Icon(Icons.edit_note, size: 28, color: Colors.white),
             ),
             const SizedBox(height: 14),
             Text(
@@ -1035,8 +1032,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 12),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               ),
             ),
             const SizedBox(height: 16),
@@ -1057,10 +1054,9 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () =>
-                        Navigator.pop(context, controller.text),
+                    onPressed: () => Navigator.pop(context, controller.text),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF9B59B6),
+                      backgroundColor: const Color(0xFF4A90E2),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
@@ -1083,8 +1079,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// 预览/设置侧后续消费）。
   Future<void> _onBridgeSaveTimeSlots(String payload) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        'sg_time_slots_${widget.adapter.adapterId}', payload);
+    await prefs.setString('sg_time_slots_${widget.adapter.adapterId}', payload);
   }
 
   /// 课程配置存储（semesterTotalWeeks 等），按适配器隔离。
@@ -1095,8 +1090,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   }
 
   /// JS alert/confirm 对话框：转成 App 风格弹窗（返回 true = 确定）。
-  Future<bool?> _showJsDialog(String message,
-      {required bool showCancel}) {
+  Future<bool?> _showJsDialog(String message, {required bool showCancel}) {
     return showBouncyDialog<bool>(
       context: context,
       barrierLabel: '网页消息',
@@ -1118,17 +1112,15 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
               height: 56,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                    colors: [Color(0xFF9B59B6), Color(0xFFAF7AC5)]),
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)]),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Icon(Icons.language,
-                  size: 28, color: Colors.white),
+              child: const Icon(Icons.language, size: 28, color: Colors.white),
             ),
             const SizedBox(height: 14),
             const Text(
               '网页消息',
-              style:
-                  TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             Flexible(
@@ -1150,11 +1142,11 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     child: TextButton(
                       onPressed: () => Navigator.pop(context, false),
                       style: TextButton.styleFrom(
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 13),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: AppColors.of(context).borderWeak),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
                         ),
                       ),
                       child: const Text('取消'),
@@ -1166,7 +1158,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   child: ElevatedButton(
                     onPressed: () => Navigator.pop(context, true),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF9B59B6),
+                      backgroundColor: const Color(0xFF4A90E2),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 13),
                       shape: RoundedRectangleBorder(
@@ -1195,11 +1187,9 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
     setState(() => _importRunning = true);
     try {
       // 1. 拉取适配脚本。
-      toastNotification.show(context, '正在获取适配脚本...',
-          type: ToastType.info);
-      final script =
-          await ShiguangIndexService.fetchAdapterScript(
-              widget.school, widget.adapter);
+      toastNotification.show(context, '正在获取适配脚本...', type: ToastType.info);
+      final script = await ShiguangIndexService.fetchAdapterScript(
+          widget.school, widget.adapter);
 
       // 2. 注入拾光桥胶水（控制台通道版）：仅在用户点击导入时创建
       //    window.shiguangBridge，页面加载期零环境痕迹（对抗瑞数等
@@ -1207,8 +1197,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       await controller.evaluateJavascript(source: ShiguangBridge.glueJs);
 
       // 3. 页面缺少 jQuery 时注入兜底库（适配脚本依赖 window.jQuery）。
-      final hasJQuery = await controller
-          .evaluateJavascript(source: 'typeof window.jQuery');
+      final hasJQuery =
+          await controller.evaluateJavascript(source: 'typeof window.jQuery');
       if (hasJQuery == null || hasJQuery.toString() == 'undefined') {
         await _injectJquery(controller);
       }
@@ -1217,8 +1207,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
       await controller.evaluateJavascript(source: script);
     } catch (e) {
       if (mounted) {
-        toastNotification.show(context, '导入脚本执行失败：$e',
-            type: ToastType.error);
+        toastNotification.show(context, '导入脚本执行失败：$e', type: ToastType.error);
       }
     } finally {
       if (mounted) {
@@ -1229,8 +1218,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
 
   Future<void> _injectJquery(InAppWebViewController controller) async {
     try {
-      final jquery = await rootBundle
-          .loadString('assets/shiguang/jquery-3.7.1.min.js');
+      final jquery =
+          await rootBundle.loadString('assets/shiguang/jquery-3.7.1.min.js');
       // 页面自身可能用 $（prototype.js 等老库），注入后恢复原 $，
       // 适配脚本只依赖 window.jQuery，不受影响。
       await controller.evaluateJavascript(source: '''
@@ -1255,8 +1244,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
     _urlFocus.unfocus();
     var url = _urlController.text.trim();
     if (url.isEmpty) {
-      toastNotification.show(context, '请输入教务系统网址',
-          type: ToastType.info);
+      toastNotification.show(context, '请输入教务系统网址', type: ToastType.info);
       return;
     }
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -1316,11 +1304,17 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   }
 
   Widget _buildPinnedHeader(double topPadding) {
+    // 纯色标题栏（WebView 是平台视图，像素不参与 Flutter 合成，模糊/
+    // 采样会拿到黑块，故本页不做雾面渐变）。总高 = 状态栏 + 56 标题行，
+    // 不叠四页那 6px 坡面空间（纯色条多出一截只是空白）。
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.9 : 0.95),
+        color: AppColors.of(context).glassShell.withValues(
+            alpha:
+                Theme.of(context).brightness == Brightness.dark ? 0.9 : 0.95),
         border: Border(
-          bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
+          bottom:
+              BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
         ),
       ),
       child: Column(
@@ -1328,14 +1322,14 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         children: [
           SizedBox(height: topPadding),
           SizedBox(
-            height: 52,
+            height: 56,
             child: Row(
               children: [
                 GestureDetector(
                   onTap: () => Navigator.pop(context),
                   child: Container(
                     width: 48,
-                    height: 52,
+                    height: 56,
                     margin: const EdgeInsets.only(left: 4),
                     child: Icon(
                       Icons.arrow_back_ios_new,
@@ -1378,7 +1372,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                   onLongPress: _showWebviewDiagnostics,
                   child: SizedBox(
                     width: 44,
-                    height: 52,
+                    height: 56,
                     child: Center(
                       child: _buildUaComboIcon(),
                     ),
@@ -1394,14 +1388,14 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.help_outline,
-                            size: 18, color: Colors.deepPurple.shade400),
+                            size: 18, color: kAppSeedColor),
                         const SizedBox(width: 3),
                         Text(
                           '帮助',
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
-                            color: Colors.deepPurple.shade400,
+                            color: kAppSeedColor,
                           ),
                         ),
                       ],
@@ -1419,7 +1413,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   /// UA 切换纯图标：灰色 = 当前手机 UA；紫色 = 当前电脑 UA。
   Widget _buildUaComboIcon() {
     final color = _useDesktopUa
-        ? const Color(0xFF9B59B6)
+        ? const Color(0xFF4A90E2)
         : AppColors.of(context).textTertiary;
     return Icon(Icons.desktop_windows, size: 24, color: color);
   }
@@ -1430,8 +1424,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
   String _currentDomain() {
     final text = _urlController.text;
     if (text.isEmpty) return '输入教务系统网址';
-    final uri = Uri.tryParse(
-        text.startsWith('http') ? text : 'https://$text');
+    final uri = Uri.tryParse(text.startsWith('http') ? text : 'https://$text');
     final host = uri?.host ?? '';
     return host.isEmpty ? text : host;
   }
@@ -1501,68 +1494,75 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                     if (expanded) _clearInputFocus();
                   },
                   child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOutCubic,
-                  width: expanded
-                      ? constraints.maxWidth
-                      : _compactBarWidth(bc),
-              // 完全形态高 50；精简形态进一步收窄到 38（更短更窄）。
-              height: expanded ? 50.0 : 38.0,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(expanded ? 25 : 19),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(expanded ? 25 : 19),
-                child: BackdropFilter(
-                  // 纹理合成模式下开销可控（此前卡顿主因是混合合成，已切换）。
-                  // 减弱动态效果：不模糊，白底提高到 0.94（与玻璃弹窗约定一致）。
-                  filter: ImageFilter.blur(
-                    sigmaX: _reduceMotion ? 0 : 20,
-                    sigmaY: _reduceMotion ? 0 : 20,
-                  ),
-                  child: Container(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeInOutCubic,
+                    width:
+                        expanded ? constraints.maxWidth : _compactBarWidth(bc),
+                    // 完全形态高 50；精简形态进一步收窄到 38（更短更窄）。
+                    height: expanded ? 50.0 : 38.0,
                     decoration: BoxDecoration(
-                      color: _reduceMotion
-                          ? AppColors.of(context).glassShell
-                                .withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.94)
-                              : AppColors.of(context).glassShell.withValues(alpha: 0.55),
                       borderRadius: BorderRadius.circular(expanded ? 25 : 19),
-                      border: Border.all(
-                        color: AppColors.of(context).glassBorder,
-                        width: 1.5,
-                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, anim) =>
-                          FadeTransition(opacity: anim, child: child),
-                      child: expanded
-                          ? KeyedSubtree(
-                              key: const ValueKey('url_bar_full'),
-                              child: _buildFullBarContent(),
-                            )
-                          : KeyedSubtree(
-                              key: const ValueKey('url_bar_compact'),
-                              child: _buildCompactBarContent(),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(expanded ? 25 : 19),
+                      child: BackdropFilter(
+                        // 纹理合成模式下开销可控（此前卡顿主因是混合合成，已切换）。
+                        // 减弱动态效果：不模糊，白底提高到 0.94（与玻璃弹窗约定一致）。
+                        // sigma 15：与选择学校页顶部搜索条同档（导入页卡片、
+                        // 热力图也都是 15），两处必须一起调。
+                        filter: ImageFilter.blur(
+                          sigmaX: _reduceMotion ? 0 : 15,
+                          sigmaY: _reduceMotion ? 0 : 15,
+                        ),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _reduceMotion
+                                ? AppColors.of(context).glassShell.withValues(
+                                    alpha: Theme.of(context).brightness ==
+                                            Brightness.dark
+                                        ? 0.85
+                                        : 0.94)
+                                : AppColors.of(context)
+                                    .glassShell
+                                    .withValues(alpha: 0.55),
+                            borderRadius:
+                                BorderRadius.circular(expanded ? 25 : 19),
+                            border: Border.all(
+                              color: AppColors.of(context).glassBorder,
+                              width: 1.5,
                             ),
+                          ),
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeIn,
+                            transitionBuilder: (child, anim) =>
+                                FadeTransition(opacity: anim, child: child),
+                            child: expanded
+                                ? KeyedSubtree(
+                                    key: const ValueKey('url_bar_full'),
+                                    child: _buildFullBarContent(),
+                                  )
+                                : KeyedSubtree(
+                                    key: const ValueKey('url_bar_compact'),
+                                    child: _buildCompactBarContent(),
+                                  ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        );
-        }),
-      );
+              );
+            }),
+          );
         },
       ),
     );
@@ -1606,15 +1606,18 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                           child: Icon(
                             Icons.chevron_left,
                             size: 26,
-                            color: _canGoBack ? black : AppColors.of(context).borderWeak,
+                            color: _canGoBack
+                                ? black
+                                : AppColors.of(context).borderWeak,
                           ),
                         ),
                       ),
                     ),
                     // 前进 >
                     GestureDetector(
-                      onTap:
-                          _canGoForward ? () => _webController?.goForward() : null,
+                      onTap: _canGoForward
+                          ? () => _webController?.goForward()
+                          : null,
                       child: SizedBox(
                         width: 38,
                         height: 50,
@@ -1622,8 +1625,9 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
                           child: Icon(
                             Icons.chevron_right,
                             size: 26,
-                            color:
-                                _canGoForward ? black : AppColors.of(context).borderWeak,
+                            color: _canGoForward
+                                ? black
+                                : AppColors.of(context).borderWeak,
                           ),
                         ),
                       ),
@@ -1894,7 +1898,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
           height: 24,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation(Color(0xFF9B59B6)),
+            valueColor: AlwaysStoppedAnimation(Color(0xFF4A90E2)),
           ),
         ),
       );
@@ -1917,165 +1921,161 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             if (_urlFocus.hasFocus) _clearInputFocus();
           },
           child: InAppWebView(
-          // gen 参与-key：UA 清洗后的同模式重建（gen++）必须销毁旧平台
-          // 视图、以新 initialSettings 创建，否则复用旧实例 UA 不生效。
-          key: ValueKey(
-              'shiguang_webview_${_useDesktopUa ? 'd' : 'm'}_$_webviewGen'),
-          initialUrlRequest: !blankFirst && initialUrl.isNotEmpty
-              ? URLRequest(url: WebUri(initialUrl))
-              : null,
-          // Chrome 环境补全（document-start、主世界、所有 frame）：经
-          // WebViewCompat.addDocumentStartJavaScript 原生层注入，先于
-          // 页面（含瑞数 VMP）脚本执行，无注入痕迹。WebView 没有
-          // window.chrome（Chrome 独有），瑞数据此识别 WebView。
-          initialUserScripts: UnmodifiableListView([
-            UserScript(
-              source: ShiguangBridge.chromeEnvJs,
-              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+            // gen 参与-key：UA 清洗后的同模式重建（gen++）必须销毁旧平台
+            // 视图、以新 initialSettings 创建，否则复用旧实例 UA 不生效。
+            key: ValueKey(
+                'shiguang_webview_${_useDesktopUa ? 'd' : 'm'}_$_webviewGen'),
+            initialUrlRequest: !blankFirst && initialUrl.isNotEmpty
+                ? URLRequest(url: WebUri(initialUrl))
+                : null,
+            // Chrome 环境补全（document-start、主世界、所有 frame）：经
+            // WebViewCompat.addDocumentStartJavaScript 原生层注入，先于
+            // 页面（含瑞数 VMP）脚本执行，无注入痕迹。WebView 没有
+            // window.chrome（Chrome 独有），瑞数据此识别 WebView。
+            initialUserScripts: UnmodifiableListView([
+              UserScript(
+                source: ShiguangBridge.chromeEnvJs,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
+            ]),
+            initialSettings: InAppWebViewSettings(
+              javaScriptEnabled: true,
+              // 手机版：清洗后 UA（无 wv/Version 指纹，首跳 null=系统默认
+              // 供捕获）；电脑版：反转派生 UA 同样过一遍清洗。
+              userAgent:
+                  _useDesktopUa ? _sanitizeUa(_desktopUa) : _mobileUaClean,
+              supportZoom: true,
+              // 教务系统多为老式站点，允许混合内容加载。
+              mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+              // 纹理合成模式（SurfaceAndroidView）：WebView 渲染为纹理参与
+              // Flutter 合成，键盘/导航条动画不再与平台线程逐帧同步排队。
+              // 混合合成（ExpensiveAndroidView）曾导致整页交互慢动作。
+              useHybridComposition: false,
+              // 禁用系统字体缩放：防止大字体模式破坏教务页面布局。
+              textZoom: 100,
+              // 桌面版页面需要宽视口 + 概览缩放，否则按 980px 错误渲染。
+              useWideViewPort: true,
+              loadWithOverviewMode: true,
+              // 老式教务站点依赖 localStorage / sessionDatabase。
+              domStorageEnabled: true,
+              databaseEnabled: true,
+              // 关键：不开 supportMultipleWindows（与 WakeUp/原生默认一致）。
+              // 瑞数等反爬 WAF 的挑战 JS 会探测 window.open 环境，开启后
+              // 探测被引向 onCreateWindow（拿到 null Window）→ 被判定为
+              // 异常环境 → 子资源请求被持续返回 HTML 挑战页 → 脚本拒绝执行。
+              // 关闭后 window.open 直接在当前 WebView 内导航（经典行为）。
+              supportMultipleWindows: false,
+              allowFileAccess: true,
+              allowContentAccess: true,
+              // 允许跨源资源访问：老教务页面协议/域混杂时保证元素可加载。
+              allowFileAccessFromFileURLs: true,
+              allowUniversalAccessFromFileURLs: true,
+              thirdPartyCookiesEnabled: true,
+              // 移除 X-Requested-With 请求头：Android WebView 默认携带
+              // app 包名（浏览器从不发送该头），是 WebView 的显著指纹，
+              // 瑞数等 WAF 可据此识别并持续下发挑战页。空集合 = 所有
+              // 来源均不携带；内核不支持时自动跳过。
+              requestedWithHeaderOriginAllowList: const <String>{},
+              // 请求头观测（诊断）：shouldInterceptRequest 回调需要此开关。
+              // 回调仅记录主文档请求头（验证 X-Requested-With 是否真的
+              // 移除、客户端提示头形态），始终返回 null = 请求原样放行
+              //（POST 体不受影响）。代价：所有资源请求经一次阻塞式 Dart
+              // 往返，教务页请求量小，可接受。
+              useShouldInterceptRequest: true,
             ),
-          ]),
-          initialSettings: InAppWebViewSettings(
-            javaScriptEnabled: true,
-            // 手机版：清洗后 UA（无 wv/Version 指纹，首跳 null=系统默认
-            // 供捕获）；电脑版：反转派生 UA 同样过一遍清洗。
-            userAgent:
-                _useDesktopUa ? _sanitizeUa(_desktopUa) : _mobileUaClean,
-            supportZoom: true,
-            // 教务系统多为老式站点，允许混合内容加载。
-            mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-            // 纹理合成模式（SurfaceAndroidView）：WebView 渲染为纹理参与
-            // Flutter 合成，键盘/导航条动画不再与平台线程逐帧同步排队。
-            // 混合合成（ExpensiveAndroidView）曾导致整页交互慢动作。
-            useHybridComposition: false,
-            // 禁用系统字体缩放：防止大字体模式破坏教务页面布局。
-            textZoom: 100,
-            // 桌面版页面需要宽视口 + 概览缩放，否则按 980px 错误渲染。
-            useWideViewPort: true,
-            loadWithOverviewMode: true,
-            // 老式教务站点依赖 localStorage / sessionDatabase。
-            domStorageEnabled: true,
-            databaseEnabled: true,
-            // 关键：不开 supportMultipleWindows（与 WakeUp/原生默认一致）。
-            // 瑞数等反爬 WAF 的挑战 JS 会探测 window.open 环境，开启后
-            // 探测被引向 onCreateWindow（拿到 null Window）→ 被判定为
-            // 异常环境 → 子资源请求被持续返回 HTML 挑战页 → 脚本拒绝执行。
-            // 关闭后 window.open 直接在当前 WebView 内导航（经典行为）。
-            supportMultipleWindows: false,
-            allowFileAccess: true,
-            allowContentAccess: true,
-            // 允许跨源资源访问：老教务页面协议/域混杂时保证元素可加载。
-            allowFileAccessFromFileURLs: true,
-            allowUniversalAccessFromFileURLs: true,
-            thirdPartyCookiesEnabled: true,
-            // 移除 X-Requested-With 请求头：Android WebView 默认携带
-            // app 包名（浏览器从不发送该头），是 WebView 的显著指纹，
-            // 瑞数等 WAF 可据此识别并持续下发挑战页。空集合 = 所有
-            // 来源均不携带；内核不支持时自动跳过。
-            requestedWithHeaderOriginAllowList: const <String>{},
-            // 请求头观测（诊断）：shouldInterceptRequest 回调需要此开关。
-            // 回调仅记录主文档请求头（验证 X-Requested-With 是否真的
-            // 移除、客户端提示头形态），始终返回 null = 请求原样放行
-            //（POST 体不受影响）。代价：所有资源请求经一次阻塞式 Dart
-            // 往返，教务页请求量小，可接受。
-            useShouldInterceptRequest: true,
-          ),
-          onWebViewCreated: _onWebViewCreated,
-          onLoadStop: _onLoadStop,
-          // 主文档请求头代理：主文档 GET 在 Dart 侧重发并重写 WebView
-          // 指纹头（sec-ch-ua 品牌 → Google Chrome，补 Accept-Language /
-          // Sec-Fetch-*，Cookie 从 CookieManager 拼装），返回
-          // WebResourceResponse；POST（无请求体可取）与子资源透传。
-          shouldInterceptRequest: (controller, request) async {
-            if (request.isForMainFrame == true) {
-              if (ShiguangRequestProxy.shouldProxy(request)) {
-                final proxied = await _reqProxy.fetch(request);
-                if (proxied != null) return proxied;
+            onWebViewCreated: _onWebViewCreated,
+            onLoadStop: _onLoadStop,
+            // 主文档请求头代理：主文档 GET 在 Dart 侧重发并重写 WebView
+            // 指纹头（sec-ch-ua 品牌 → Google Chrome，补 Accept-Language /
+            // Sec-Fetch-*，Cookie 从 CookieManager 拼装），返回
+            // WebResourceResponse；POST（无请求体可取）与子资源透传。
+            shouldInterceptRequest: (controller, request) async {
+              if (request.isForMainFrame == true) {
+                if (ShiguangRequestProxy.shouldProxy(request)) {
+                  final proxied = await _reqProxy.fetch(request);
+                  if (proxied != null) return proxied;
+                }
               }
-            }
-            return null;
-          },
-          onLoadStart: (controller, url) {
-            // 兜底注入 Chrome 补环境：document-start 的 origin 规则不覆盖
-            // about:blank，而瑞数 VMP 会把页面弹到 about:blank 做二次校验
-            // （onLoadStop 探针曾在 about:blank 上下文里测到 chrome:
-            // undefined）。此注入幂等（http 页面上 window.chrome 已存在
-            // 直接返回），专门补 about:blank 的空窗。
-            unawaited(controller
-                .evaluateJavascript(source: ShiguangBridge.chromeEnvJs)
-                .catchError((_) => null));
-            setState(() {
-              _pageLoaded = false;
-              // 加载时导航条保持完全形态（前往按钮转为 🔄）。
-              _barExpanded = true;
-              _lastScrollY = 0;
-            });
-            _setLoading(true);
-          },
-          // 滚动方向驱动导航条完全/精简形态切换。
-          onScrollChanged: (controller, x, y) => _onWebScrollChanged(y),
-          // 导航历史变化 → 刷新后退/前进可用态。
-          onUpdateVisitedHistory: (controller, url, isReload) async {
-            final canBack = await controller.canGoBack();
-            final canForward = await controller.canGoForward();
-            if (mounted &&
-                (canBack != _canGoBack || canForward != _canGoForward)) {
+              return null;
+            },
+            onLoadStart: (controller, url) {
+              // 兜底注入 Chrome 补环境：document-start 的 origin 规则不覆盖
+              // about:blank，而瑞数 VMP 会把页面弹到 about:blank 做二次校验
+              // （onLoadStop 探针曾在 about:blank 上下文里测到 chrome:
+              // undefined）。此注入幂等（http 页面上 window.chrome 已存在
+              // 直接返回），专门补 about:blank 的空窗。
+              unawaited(controller
+                  .evaluateJavascript(source: ShiguangBridge.chromeEnvJs)
+                  .catchError((_) => null));
               setState(() {
-                _canGoBack = canBack;
-                _canGoForward = canForward;
+                _pageLoaded = false;
+                // 加载时导航条保持完全形态（前往按钮转为 🔄）。
+                _barExpanded = true;
+                _lastScrollY = 0;
               });
-            }
-          },
-          // window.open 弹窗统一在当前 WebView 内打开。
-          onCreateWindow: (controller, createWindowRequest) async {
-            final uri = createWindowRequest.request.url;
-            if (uri != null) {
-              await controller
-                  .loadUrl(urlRequest: URLRequest(url: uri));
-            }
-            return true;
-          },
-          onReceivedServerTrustAuthRequest: (controller, challenge) async {
-            // 大量教务系统使用自签/过期证书，直接放行。
-            return ServerTrustAuthResponse(
-              action: ServerTrustAuthResponseAction.PROCEED,
-            );
-          },
-          onConsoleMessage: (controller, message) {
-            // 控制台桥通道：优先识别 [[SG]] 前缀的桥消息（JS→Dart）。
-            final text = message.message;
-            if (text.startsWith(ShiguangBridge.magicPrefix)) {
-              _handleBridgeConsoleMessage(controller, text);
-              return;
-            }
-            if (kDebugMode) {
-              debugPrint('[WebView] $text');
-            }
-          },
-          // 教务页面大量使用 alert/confirm（登录校验、菜单跳转、错误提示），
-          // 不接管会被 WebView 静默吞掉（confirm 返回 false），流程中断后
-          // 表现为页面元素加载不出来。
-          onJsAlert: (controller, request) async {
-            await _showJsDialog(request.message ?? '',
-                showCancel: false);
-            return JsAlertResponse(
-                action: JsAlertResponseAction.CONFIRM);
-          },
-          onJsConfirm: (controller, request) async {
-            final confirmed = await _showJsDialog(
-                request.message ?? '',
-                showCancel: true);
-            return JsConfirmResponse(
-              action: confirmed == true
-                  ? JsConfirmResponseAction.CONFIRM
-                  : JsConfirmResponseAction.CANCEL,
-            );
-          },
-          onReceivedError: (controller, request, error) {
-            // 主文档加载失败时复位进度条（onLoadStop 不会触发）。
-            if (request.isForMainFrame == true && mounted) {
-              _setLoading(false);
-            }
-          },
+              _setLoading(true);
+            },
+            // 滚动方向驱动导航条完全/精简形态切换。
+            onScrollChanged: (controller, x, y) => _onWebScrollChanged(y),
+            // 导航历史变化 → 刷新后退/前进可用态。
+            onUpdateVisitedHistory: (controller, url, isReload) async {
+              final canBack = await controller.canGoBack();
+              final canForward = await controller.canGoForward();
+              if (mounted &&
+                  (canBack != _canGoBack || canForward != _canGoForward)) {
+                setState(() {
+                  _canGoBack = canBack;
+                  _canGoForward = canForward;
+                });
+              }
+            },
+            // window.open 弹窗统一在当前 WebView 内打开。
+            onCreateWindow: (controller, createWindowRequest) async {
+              final uri = createWindowRequest.request.url;
+              if (uri != null) {
+                await controller.loadUrl(urlRequest: URLRequest(url: uri));
+              }
+              return true;
+            },
+            onReceivedServerTrustAuthRequest: (controller, challenge) async {
+              // 大量教务系统使用自签/过期证书，直接放行。
+              return ServerTrustAuthResponse(
+                action: ServerTrustAuthResponseAction.PROCEED,
+              );
+            },
+            onConsoleMessage: (controller, message) {
+              // 控制台桥通道：优先识别 [[SG]] 前缀的桥消息（JS→Dart）。
+              final text = message.message;
+              if (text.startsWith(ShiguangBridge.magicPrefix)) {
+                _handleBridgeConsoleMessage(controller, text);
+                return;
+              }
+              if (kDebugMode) {
+                debugPrint('[WebView] $text');
+              }
+            },
+            // 教务页面大量使用 alert/confirm（登录校验、菜单跳转、错误提示），
+            // 不接管会被 WebView 静默吞掉（confirm 返回 false），流程中断后
+            // 表现为页面元素加载不出来。
+            onJsAlert: (controller, request) async {
+              await _showJsDialog(request.message ?? '', showCancel: false);
+              return JsAlertResponse(action: JsAlertResponseAction.CONFIRM);
+            },
+            onJsConfirm: (controller, request) async {
+              final confirmed =
+                  await _showJsDialog(request.message ?? '', showCancel: true);
+              return JsConfirmResponse(
+                action: confirmed == true
+                    ? JsConfirmResponseAction.CONFIRM
+                    : JsConfirmResponseAction.CANCEL,
+              );
+            },
+            onReceivedError: (controller, request, error) {
+              // 主文档加载失败时复位进度条（onLoadStop 不会触发）。
+              if (request.isForMainFrame == true && mounted) {
+                _setLoading(false);
+              }
+            },
           ),
         ),
         if (_loading)
@@ -2086,11 +2086,10 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             child: LinearProgressIndicator(
               minHeight: 2,
               backgroundColor: Colors.transparent,
-              valueColor: AlwaysStoppedAnimation(Color(0xFF9B59B6)),
+              valueColor: AlwaysStoppedAnimation(Color(0xFF4A90E2)),
             ),
           ),
-        if (!_pageLoaded && !_loading && initialUrl.isEmpty)
-          _buildEmptyHint(),
+        if (!_pageLoaded && !_loading && initialUrl.isEmpty) _buildEmptyHint(),
         // 「开始导入」悬浮按钮：位于底部导航条上方（paddingOf 细粒度：
         // 键盘动画帧不重建）。
         Positioned(
@@ -2115,7 +2114,8 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
           const SizedBox(height: 12),
           Text(
             '在下方输入你的教务系统网址并前往',
-            style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
+            style: TextStyle(
+                fontSize: 13, color: AppColors.of(context).textTertiary),
           ),
         ],
       ),
@@ -2130,13 +2130,17 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
         decoration: BoxDecoration(
           gradient: LinearGradient(colors: [
-            enabled ? const Color(0xFF9B59B6) : AppColors.of(context).textTertiary,
-            enabled ? const Color(0xFFAF7AC5) : AppColors.of(context).borderWeak,
+            enabled
+                ? const Color(0xFF4A90E2)
+                : AppColors.of(context).textTertiary,
+            enabled
+                ? const Color(0xFF5BA0F2)
+                : AppColors.of(context).borderWeak,
           ]),
           borderRadius: BorderRadius.circular(28),
           boxShadow: [
             BoxShadow(
-              color: (enabled ? const Color(0xFF9B59B6) : Colors.grey)
+              color: (enabled ? const Color(0xFF4A90E2) : Colors.grey)
                   .withValues(alpha: 0.35),
               blurRadius: 16,
               offset: const Offset(0, 4),
@@ -2155,8 +2159,7 @@ class _ShiguangWebImportScreenState extends State<ShiguangWebImportScreen>
             : const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.download_rounded,
-                      size: 20, color: Colors.white),
+                  Icon(Icons.download_rounded, size: 20, color: Colors.white),
                   SizedBox(width: 8),
                   Text(
                     '开始导入',
@@ -2267,8 +2270,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
           child: Material(
             color: Colors.transparent,
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 color: AppColors.of(context).surface,
                 borderRadius: BorderRadius.circular(8),
@@ -2288,7 +2290,7 @@ class _ShiguangHelpCardState extends State<_ShiguangHelpCard>
                   Row(
                     children: [
                       Icon(Icons.help_outline,
-                          size: 15, color: Colors.deepPurple.shade400),
+                          size: 15, color: kAppSeedColor),
                       const SizedBox(width: 6),
                       Text(
                         '教务系统导入帮助',

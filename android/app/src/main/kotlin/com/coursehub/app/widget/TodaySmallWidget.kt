@@ -56,12 +56,13 @@ class TodaySmallWidget : GlanceAppWidget() {
         val course = data.nextCourse
 
         // 桌面网格行高普遍大于列宽，直接铺满会导致卡片高>宽。
-        // 取宽高较小值作为边长：卡片强制正方形并底部对齐（底边与图标行对齐），顶部剩余区域透明
+        // 取宽高较小值作为边长：卡片强制正方形并底部对齐（底边与图标行对齐），顶部剩余区域透明。
+        // 四边内缩 WidgetEdgeInset：部分系统启动器会裁切宿主视图边缘，比例不变
         val size = LocalSize.current
-        val side = minOf(size.width, size.height)
+        val side = minOf(size.width, size.height) - WidgetEdgeInset * 2
 
         Box(
-            modifier = GlanceModifier.fillMaxSize(),
+            modifier = GlanceModifier.fillMaxSize().padding(WidgetEdgeInset),
             contentAlignment = Alignment.BottomCenter
         ) {
             Box(

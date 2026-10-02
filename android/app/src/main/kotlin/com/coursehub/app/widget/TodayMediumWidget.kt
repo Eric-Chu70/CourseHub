@@ -56,17 +56,30 @@ class TodayMediumWidget : GlanceAppWidget() {
     private fun Content(context: Context, data: WidgetData.TodayData) {
         val courses = data.courses.take(2)
 
-        // 与 2x2/4x4 同构的 min 约束 + 底部对齐，但 2:1 比例需网格间距修正：
-        // 宿主宽 = 4格 + 3个列间距，直接 宽/2 = 2格 + 1.5间距；
-        // 而 2 行的正确高度（与 2x2 视觉边长一致）= 2格 + 1间距，
-        // 故需扣掉半个网格间距。按实机反馈校准：等效网格间距 26dp（半格=13dp）
+        // 与 2x2/4x4 同构的 min 约束 + 底部对齐。
+        //
+        // 宽度直接铺满宿主可用宽：4x4 的边长 side 即其 availW（宿主宽），
+        // 故两者左右边缘严格对齐。此前宽度由高度反推（cardHeight*2+gridGap），
+        // 在宿主高偏矮的桌面上会被 2:1 比例反向收缩，比 4x4 窄一圈。
+        //
+        // 高度改为「2:1 参考高 + 12dp 余量」再按宿主高夹取：2:1 只作下限参考，
+        // 不再参与宽度计算；行高偏大的启动器下仍不会把卡片拉成近正方形。
+        // 按实机反馈校准：等效网格间距 26dp（半格=13dp）
         val size = LocalSize.current
+        // 四边内缩 WidgetEdgeInset：部分系统启动器会裁切宿主视图边缘，
+        // 可用区域按内缩后计算
+        val availW = size.width - WidgetEdgeInset * 2
+        val availH = size.height - WidgetEdgeInset * 2
         val gridGap = 26.dp
-        val cardHeight = minOf(size.height, (size.width - gridGap) / 2)
-        val cardWidth = minOf(size.width, cardHeight * 2 + gridGap)
+        val cardWidth = availW
+        // 高度不再铺满宿主两行：实测宿主给到 ~172dp，而内容最重的一档
+        // （两张课程卡 + 「此外还有x节课」提示行）约 160dp，铺满时单节课
+        // 会留 80dp+ 空档。改按「宿主高 −12dp」与「严格 2:1 参考高」取小，
+        // 既留出提示行的余量，又不再撑满。
+        val cardHeight = minOf(availH - 12.dp, (availW - gridGap) / 2)
 
         Box(
-            modifier = GlanceModifier.fillMaxSize(),
+            modifier = GlanceModifier.fillMaxSize().padding(WidgetEdgeInset),
             contentAlignment = Alignment.BottomCenter
         ) {
             Box(

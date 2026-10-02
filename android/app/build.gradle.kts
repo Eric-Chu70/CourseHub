@@ -45,7 +45,9 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    implementation("androidx.core:core:1.12.0")
+    // 1.17.0 起 NotificationCompat 才带 ProgressStyle 与
+    // setRequestPromotedOngoing（安卓 16 实时活动），低版本自动降级普通通知
+    implementation("androidx.core:core:1.17.0")
     implementation("androidx.glance:glance:1.1.0")
     implementation("androidx.glance:glance-appwidget:1.1.0")
     implementation("androidx.glance:glance-material3:1.1.0")

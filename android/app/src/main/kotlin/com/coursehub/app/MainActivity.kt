@@ -8,6 +8,8 @@ import android.view.WindowManager
 import android.graphics.Color
 import android.util.Log
 import androidx.core.view.WindowCompat
+import com.coursehub.app.liveupdate.ClassLiveUpdateManager
+import com.coursehub.app.liveupdate.ClassLiveUpdateScheduler
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -120,6 +122,47 @@ class MainActivity : FlutterActivity() {
                     "getWidgetRoute" -> {
                         result.success(pendingWidgetRoute)
                         pendingWidgetRoute = null
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "coursehub/live_update")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // 实时活动开关与提前量由 Dart 落 SharedPreferences，这里同步一份
+                    // 到原生私有偏好，供 Flutter 进程不在时的闹钟链路读取
+                    "configure" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val lead = call.argument<Int>("leadMinutes") ?: 10
+                        ClassLiveUpdateManager.configure(applicationContext, enabled, lead)
+                        result.success(null)
+                    }
+                    "refresh" -> {
+                        ClassLiveUpdateManager.refresh(applicationContext)
+                        ClassLiveUpdateScheduler.scheduleNext(applicationContext)
+                        result.success(null)
+                    }
+                    // 测试示例胶囊：走与真实提醒完全相同的渲染路径，
+                    // 便于在不改课表的情况下确认系统是否真的会「上岛」
+                    "startTest" -> {
+                        ClassLiveUpdateManager.startTest(applicationContext)
+                        result.success(null)
+                    }
+                    "stopTest" -> {
+                        ClassLiveUpdateManager.stopTest(applicationContext)
+                        result.success(null)
+                    }
+                    "diagnose" -> {
+                        result.success(ClassLiveUpdateManager.diagnose(applicationContext))
+                    }
+                    "cancel" -> {
+                        ClassLiveUpdateScheduler.cancelNext(applicationContext)
+                        ClassLiveUpdateManager.cancel(applicationContext)
+                        result.success(null)
+                    }
+                    // 实时活动形态需 Android 16（API 36）；低版本降级为普通常驻通知
+                    "isSupported" -> {
+                        result.success(Build.VERSION.SDK_INT >= 36)
                     }
                     else -> result.notImplemented()
                 }

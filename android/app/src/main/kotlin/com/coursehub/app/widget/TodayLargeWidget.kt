@@ -77,12 +77,13 @@ class TodayLargeWidget : GlanceAppWidget() {
 
         // 桌面网格行高普遍大于列宽，直接铺满会导致 4x4 高>宽。
         // 取宽高较小值作为边长：卡片近正方形并底部对齐（底边与图标行对齐），顶部剩余区域透明。
-        // 实测桌面会从宿主宽度里再吃掉约 2dp，高度补 +2dp 使顶边精确贴齐图标行（2dp 宽高差肉眼不可辨）
+        // 实测桌面会从宿主宽度里再吃掉约 2dp，高度补 +2dp 使顶边精确贴齐图标行（2dp 宽高差肉眼不可辨）。
+        // 四边内缩 WidgetEdgeInset：部分系统启动器会裁切宿主视图边缘，近正方比例不变
         val size = LocalSize.current
-        val side = minOf(size.width, size.height)
+        val side = minOf(size.width, size.height) - WidgetEdgeInset * 2
 
         Box(
-            modifier = GlanceModifier.fillMaxSize(),
+            modifier = GlanceModifier.fillMaxSize().padding(WidgetEdgeInset),
             contentAlignment = Alignment.BottomCenter
         ) {
             Box(

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:hive/hive.dart';
 import 'package:flutter/foundation.dart';
 import '../models/course.dart';
 import '../models/task.dart';
+import '../services/live_update_service.dart';
 import '../services/notification_service.dart';
 import '../services/widget_service.dart';
 
@@ -42,8 +45,10 @@ class StorageService {
 
   static void _notifyDataChanged() {
     _dataChangeNotifier.value++;
-    // 同步更新桌面小组件
-    WidgetService.updateAllWidgets();
+    // 同步更新桌面小组件；原生实时活动读的是小组件那份课程 JSON，
+    // 必须等写入完成后再请原生重算，否则会按变更前的课表排闹钟
+    unawaited(WidgetService.updateAllWidgets()
+        .then((_) => LiveUpdateService.instance.refresh()));
   }
 
   static Future<void> init() async {

@@ -1,7 +1,7 @@
-// 应用内更新服务：从 Supabase Storage 公共桶读取 latest.json 检查新版本，
+// 应用内更新服务：从 CloudBase 静态托管读取 latest.json 检查新版本，
 // 下载 APK 安装包（带进度回调）并拉起系统安装器。
-// 二进制不占用 Supabase 存储额度：latest.json 中 url 指向实际托管地址
-// （GitHub Releases / R2 等），Supabase 只承担「版本公告牌」角色。
+// APK 本体不占托管额度：latest.json 中 url 指向实际托管地址（Gitee），
+// 托管只承担「版本公告牌」角色。与 backend_config.json（后端开关）同源部署。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -12,9 +12,9 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Supabase Storage 公共桶 releases 下的版本元数据地址
+/// 版本公告牌地址（CloudBase 静态托管默认域名）
 const String _latestJsonUrl =
-    'https://jnwhpbkhvumiyjwyjwhu.supabase.co/storage/v1/object/public/releases/latest.json';
+    'https://coursehub-d2gkbrgm7c877557a-1412312719.tcloudbaseapp.com/latest.json';
 
 /// 单次检查更新请求超时
 const Duration _checkTimeout = Duration(seconds: 10);

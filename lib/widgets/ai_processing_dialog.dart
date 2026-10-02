@@ -10,6 +10,8 @@ import '../models/course.dart';
 import '../dialogs/course_dialog.dart';
 import '../utils/course_color_palette.dart';
 import 'glass_dialog.dart';
+import 'fading_edge_list.dart';
+import 'gradient_fog_edge.dart';
 import '../theme/app_theme.dart';
 import 'blur_selection_menu.dart';
 import 'app_text_field.dart';
@@ -76,6 +78,18 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
   final List<ChatMessage> _chatMessages = [];
   final ScrollController _scrollController = ScrollController();
   final ScrollController _thinkingScrollController = ScrollController();
+
+  /// 底部雾化带总高（从弹窗底边向上量）。输入条约 72px 叠在它的下半段，
+  /// 上面露出的约 12px 是衰减尾巴；列表的底部内边距就用这一个值——滚到
+  /// 底时最后一条正好停在雾的上沿，既不被洗掉、也不再留一段空白
+  static const double _kChatFogHeight = 84;
+
+  /// 衰减带占比：雾的下 75% 保持满浓度，上面 25% 从 0.98 衰减到 0。
+  /// 调小 = 衰减段更短更急
+  static const double _kChatFogDecayBand = 0.25;
+
+  /// 输入条底与雾带浓端的共同浓度：两者同值，接缝才隐形
+  static const double _kChatPlateAlpha = 0.98;
   bool _isChatMode = false;
   bool _isSending = false;
   bool _showCourseListInDialog = false;
@@ -602,14 +616,17 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     _scrollToBottom();
   }
 
-  void _scrollToBottom() {
+  /// [force] = 无条件回底。**用户刚发出消息时用它**——他要看的正是自己
+  /// 这一条；流式输出的每个 chunk 不 force，那时用户可能正上滑翻看前面的
+  /// 内容，不该被拽回底部。与对话页 `_scrollToBottom(force: true)` 同语义。
+  void _scrollToBottom({bool force = false}) {
+    final ctrl = _scrollController;
     // 在新内容布局【前】同步捕获"是否贴近底部"：若在 post-frame 里才测量，
     // 某个 chunk 使内容一帧内增高超过 80px 时会被误判为用户上滑，
     // 自动回底从此永久停止（表现为跟随一会儿后突然失灵）
-    final ctrl = _scrollController;
     final wasNearBottom = !ctrl.hasClients ||
         (ctrl.position.maxScrollExtent - ctrl.position.pixels) <= 80;
-    if (!wasNearBottom) return;
+    if (!force && !wasNearBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!ctrl.hasClients) return;
       ctrl.animateTo(
@@ -675,6 +692,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     _chatController.clear();
     _addUserMessage(text);
     _addAIMessage('正在思考');
+    // 刚发出去的一定要看见：即使此刻用户正停在列表中间翻看上文，也回底
+    _scrollToBottom(force: true);
 
     setState(() {
       _isSending = true;
@@ -1154,8 +1173,10 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     return Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          // 与下方编辑课程列表同款：上下边缘淡出提示列表外还有内容。
+          // 顶部同时补齐 16px——原来 top=0，第一张卡直接顶在紫色头部下沿
+          child: FadingEdgeList(
+            padding: const EdgeInsets.all(16),
             itemCount: _parsedCourses!.length,
             itemBuilder: (context, index) {
               final course = _parsedCourses![index];
@@ -1249,7 +1270,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
           ),
         ),
         Expanded(
-          child: ListView.builder(
+          // 课程多时上下边缘淡出，提示列表外还有内容
+          child: FadingEdgeList(
             padding: const EdgeInsets.all(16),
             itemCount: _parsedCourses!.length,
             itemBuilder: (context, index) {
@@ -1315,63 +1337,111 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
     );
   }
 
+  /// 对话视图：列表铺满整个区域、内容从输入条背后穿过。底部两块叠在一起
+  /// ——上面是雾带（贴输入条顶边向上衰减到零），下面是 0.98 实底的输入条。
+  /// 雾的浓端与输入条同浓度，所以两者之间没有接缝；列表内容在雾带里渐渐
+  /// 消失，走到输入条顶边时已被完全盖住。
   Widget _buildChatView() {
-    return Column(
+    return Stack(
       children: [
-        Expanded(
-          child: ListView.builder(
+        Positioned.fill(
+          child: FadingEdgeList(
             controller: _scrollController,
-            padding: const EdgeInsets.all(16),
+            // 底部内边距 = 输入条 + 雾带：滚到底时最后一条正好停在雾的
+            // 上沿（那一点浓度已归零，不会被洗掉）
+            // 底部内边距 = 雾带总高：滚到底时最后一条正好停在雾的上沿
+            //（那一点浓度已归零，不会被洗掉）
+            padding: const EdgeInsets.fromLTRB(
+                16, 16, 16, _kChatFogHeight),
             itemCount: _chatMessages.length,
             itemBuilder: (context, index) {
               final message = _chatMessages[index];
-              return _buildChatBubble(message, isLast: index == _chatMessages.length - 1);
+              return _buildChatBubble(
+                  message, isLast: index == _chatMessages.length - 1);
             },
           ),
         ),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: const BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: AppTextField(
-                  contextMenuBuilder: styledEditableContextMenu,
-                  controller: _chatController,
-                  decoration: InputDecoration(
-                    hintText: '问我任何关于课程表的问题...',
-                    filled: true,
-                    fillColor: AppColors.of(context).panel(0.4),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppColors.of(context).borderWeak),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: const BorderSide(color: Color(0xFF9C27B0)),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SizedBox(
+            height: _kChatFogHeight,
+            child: Stack(
+              children: [
+                // 雾带：浓端贴在输入条**底边**、保持满浓度盖住整个输入条，
+                // 只在输入条顶边往上的 24px 里衰减归零——所以衰减段不需要
+                // 单独留高度，整块就是雾带自身的高度
+                Positioned.fill(
+                  child: GradientFogEdge(
+                    color: AppColors.of(context).glassShell,
+                    height: _kChatFogHeight,
+                    maxScrim: _kChatPlateAlpha,
+                    decayBand: _kChatFogDecayBand,
                   ),
-                  onSubmitted: (_) => _sendMessage(),
                 ),
-              ),
-              const SizedBox(width: 8),
-              // 流式/发送期间变为停止按钮（点击中断生成，已输出内容保留），
-              // 其余时间为发送按钮
-              IconButton(
-                onPressed: _isSending || _isStreaming ? _stopGeneration : _sendMessage,
-                icon: (_isSending || _isStreaming)
-                    ? Icon(Icons.stop_rounded, color: Colors.red.shade400, size: 26)
-                    : const Icon(Icons.send, color: Color(0xFF9C27B0)),
-              ),
-            ],
+                // 输入条：0.98 实底，叠在雾带下半段（那段本来就是满浓度），
+                // 穿过它背后的列表内容被完全盖住
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.of(context).glassShell
+                          .withValues(alpha: _kChatPlateAlpha),
+                      borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(24)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: AppTextField(
+                            contextMenuBuilder: styledEditableContextMenu,
+                            controller: _chatController,
+                            decoration: InputDecoration(
+                              hintText: '问我任何关于课程表的问题...',
+                              filled: true,
+                              fillColor: AppColors.of(context).panel(0.4),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide(
+                                    color: AppColors.of(context).borderWeak),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide(
+                                    color: AppColors.of(context).borderWeak),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: const BorderSide(
+                                    color: Color(0xFF9C27B0)),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 10),
+                            ),
+                            onSubmitted: (_) => _sendMessage(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // 流式/发送期间变为停止按钮（点击中断生成，已输出内容
+                        // 保留），其余时间为发送按钮
+                        IconButton(
+                          onPressed: _isSending || _isStreaming
+                              ? _stopGeneration
+                              : _sendMessage,
+                          icon: (_isSending || _isStreaming)
+                              ? Icon(Icons.stop_rounded,
+                                  color: Colors.red.shade400, size: 26)
+                              : const Icon(Icons.send,
+                                  color: Color(0xFF9C27B0)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],

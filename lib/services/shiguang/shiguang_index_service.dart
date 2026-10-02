@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yaml/yaml.dart';
@@ -21,6 +22,10 @@ class ShiguangIndexService {
   static const Duration _timeout = Duration(seconds: 10);
   static const Duration _cacheTtl = Duration(days: 3);
 
+  /// 进入学校选择页时那一次自动刷新的冷却窗口：一次成功拉取之后
+  /// 一小时内不再自动刷新（手动刷新不受此限制）。
+  static const Duration _autoRefreshCooldown = Duration(hours: 1);
+
   static const String _indexCacheKey = 'shiguang_index_cache_v1';
   static const String _adaptersCachePrefix = 'shiguang_adapters_';
   static const String _recentSchoolsKey = 'shiguang_recent_schools_v1';
@@ -28,6 +33,27 @@ class ShiguangIndexService {
 
   /// 适配脚本源码的会话级内存缓存（folder → script path → source）。
   static final Map<String, String> _scriptCache = {};
+
+  /// 最近一次成功读到的学校索引（内存态；null = 这个会话还没读到过）。
+  ///
+  /// 缓存命中、网络刷新、失败回退旧缓存三条路径都会发布到这里，页面 listen
+  /// 它而不是各自在 initState 算一次：导入页的「适配 N 所高校」要在学校选择
+  /// 页刷新完立刻跟着变，而导入页压在导航栈底、返回时并不会被重建。
+  static final ValueNotifier<List<ShiguangSchool>?> _schools =
+      ValueNotifier(null);
+
+  static ValueListenable<List<ShiguangSchool>?> get schoolsOrNull => _schools;
+
+  /// 空列表不发布：解析失败/索引为空时维持上一次的真值，
+  /// 别让页面从「232 所」退回「150+」。
+  static void _publishSchools(List<ShiguangSchool> schools) {
+    if (schools.isNotEmpty) _schools.value = schools;
+  }
+
+  /// 测试用：清掉内存里已发布的索引。静态发布源会跨用例存活，
+  /// 不清会让「无缓存」的用例读到上一个用例的学校列表。
+  @visibleForTesting
+  static void resetPublishedSchoolsForTest() => _schools.value = null;
 
   /// 获取学校索引；[forceRefresh] 为 true 时跳过缓存。
   /// 返回 (学校列表, 是否来自过期缓存)。
@@ -37,10 +63,8 @@ class ShiguangIndexService {
     if (!forceRefresh && cached != null) {
       final schools = _parseSchools(cached['schools']);
       if (schools.isNotEmpty) {
-        final fetchedAt = DateTime.tryParse(cached['fetchedAt']?.toString() ?? '');
-        final isStale = fetchedAt == null ||
-            DateTime.now().difference(fetchedAt) > _cacheTtl;
-        return (schools, isStale);
+        _publishSchools(schools);
+        return (schools, _isBeyondTtl(cached));
       }
     }
 
@@ -48,13 +72,17 @@ class ShiguangIndexService {
     if (yamlText == null) {
       if (cached != null) {
         final schools = _parseSchools(cached['schools']);
-        if (schools.isNotEmpty) return (schools, true);
+        if (schools.isNotEmpty) {
+          _publishSchools(schools);
+          return (schools, true);
+        }
       }
       throw Exception('无法获取学校索引，请检查网络后重试');
     }
 
     final schools = _parseYamlSchools(yamlText);
     if (schools.isEmpty) throw Exception('学校索引解析结果为空');
+    _publishSchools(schools);
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_indexCacheKey, jsonEncode({
@@ -63,6 +91,36 @@ class ShiguangIndexService {
     }));
 
     return (schools, false);
+  }
+
+  /// 只看缓存里的学校列表（不受 [_cacheTtl] 限制、不发网络请求），
+  /// 供进入选择页时先把懒加载列表铺出来，刷新在后台另说。
+  ///
+  /// 一并带回门禁结果：`withinAutoRefreshCooldown` 为 true 表示距上一次
+  /// 成功拉取不足一小时，进页面那次自动刷新应跳过（手动刷新不受限）。
+  /// 学校有上千条、缓存 JSON 不小，一次读一次解，别拆成两个方法让页面
+  /// 一进来就重复解码。
+  static Future<({List<ShiguangSchool> schools, bool stale,
+      bool withinAutoRefreshCooldown})?> peekCachedIndex() async {
+    final cached = await _readCache(_indexCacheKey);
+    if (cached == null) return null;
+    final schools = _parseSchools(cached['schools']);
+    if (schools.isEmpty) return null;
+    _publishSchools(schools);
+    final fetchedAt = DateTime.tryParse(cached['fetchedAt']?.toString() ?? '');
+    return (
+      schools: schools,
+      stale: _isBeyondTtl(cached),
+      // 时间戳缺失/损坏时按「冷却期外」处理，宁可多刷一次也不停在旧数据
+      withinAutoRefreshCooldown: fetchedAt != null &&
+          DateTime.now().difference(fetchedAt) < _autoRefreshCooldown,
+    );
+  }
+
+  static bool _isBeyondTtl(Map<String, dynamic> cached) {
+    final fetchedAt = DateTime.tryParse(cached['fetchedAt']?.toString() ?? '');
+    return fetchedAt == null ||
+        DateTime.now().difference(fetchedAt) > _cacheTtl;
   }
 
   /// 获取某学校的适配器列表。

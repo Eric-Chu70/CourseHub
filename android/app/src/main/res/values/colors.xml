@@ -3,4 +3,13 @@
     <color name="ic_launcher_background">#4A90E2</color>
     <color name="widget_loading_card_bg">#FFFFFF</color>
     <color name="widget_loading_text">#888888</color>
+    <!-- 组件面板预览图（widget_preview_*.xml）专用配色：与真实卡片的
+         WidgetTheme 日/夜间色取值对齐，避免预览与装到桌面后色差 -->
+    <color name="widget_preview_title">#1A1A1A</color>
+    <color name="widget_preview_secondary">#888888</color>
+    <color name="widget_preview_hint">#BBBBBB</color>
+    <color name="widget_preview_inner_bg">#F5F5F7</color>
+    <color name="widget_preview_bar_a">#4CAF50</color>
+    <color name="widget_preview_bar_b">#F5A623</color>
+    <color name="widget_preview_bar_c">#4A90E2</color>
 </resources>

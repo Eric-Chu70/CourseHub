@@ -1,30 +1,40 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../main.dart' show appVersion;
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:gal/gal.dart';
 import 'package:video_player/video_player.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../dialogs/ai_consent_dialog.dart';
 import '../dialogs/update_dialog.dart';
+import '../dialogs/email_login_dialog.dart';
+import '../dialogs/ai_config_dialog.dart';
+import '../config/ai_feature_flags.dart';
 import '../utils/storage.dart';
 import 'timetable_screen.dart';
 import '../widgets/animated_calendar.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/segmented_selector.dart';
+import '../widgets/fading_edge_list.dart';
 import 'ai_assistant_screen.dart';
 import '../widgets/toast_notification.dart';
 import '../widgets/time_picker_dialog.dart';
 import '../services/auth_service.dart';
+import '../services/donor_service.dart';
 import '../services/wallpaper_storage_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/glm_service.dart';
+import '../services/live_update_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/blur_selection_menu.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../widgets/app_text_field.dart';
+import '../widgets/gradient_blur_header.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 
@@ -32,12 +42,6 @@ enum _CloudSyncAction {
   syncFromCloud,
   uploadLocalToCloud,
   skip,
-}
-
-enum _CustomVisionMode {
-  auto,
-  enabled,
-  disabled,
 }
 
 class SettingsScreen extends StatefulWidget {
@@ -56,6 +60,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _aiEnabled = false;
   // AI配置项小字：按当前提供商显示具体模型（节点/模型名）
   String _aiConfigDetail = '开启AI后可用';
+  // AI 功能下的两个子开关（从属总开关，总开关关闭时不展示）：
+  // 未写入偏好时视为开启，即首次配置正常默认为开
+  bool _aiAutoTaskAnalysis = true;
+  bool _aiAutoScheduleAnalysis = true;
   bool _aiConsentAccepted = false;
   bool _fastModeEnabled = false;
   bool _isCustomProvider = false;
@@ -67,6 +75,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _notifyLeadHours = 2;
   int _notifyLeadMinutes = 0;
   NotificationCopyStyle _notificationCopyStyle = NotificationCopyStyle.casual;
+  // 课程实时提醒（安卓 16 实时活动）：仅安卓有这条通道，其他平台整行不出现
+  bool _liveUpdateAvailable = false;
+  bool _liveUpdateEnabled = false;
+  int _liveLeadMinutes = LiveUpdateService.defaultLeadMinutes;
   bool _customVisionManualOverride = false;
   bool _customVisionEnabled = false;
   String? _wallpaperPath;
@@ -88,78 +100,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   OverlayEntry? _autoUpdateTipEntry;
   bool _autoUpdateTipVisible = false;
 
+  // 主列表滚动控制器：RawScrollbar 需与 CustomScrollView 共用专属控制器，
+  // 否则指示条落到多 position 的 PrimaryScrollController 上会永不显示
+  final ScrollController _scrollController = ScrollController();
+
   /// 显示非本周课程（默认开启）：关闭后课表不以灰色卡片显示非本周课程
   bool _showInactiveCourses = true;
-
-  _CustomVisionMode get _customVisionMode {
-    if (!_customVisionManualOverride) {
-      return _CustomVisionMode.auto;
-    }
-    return _customVisionEnabled ? _CustomVisionMode.enabled : _CustomVisionMode.disabled;
-  }
-
-  static String _customVisionModeLabel(_CustomVisionMode mode) {
-    switch (mode) {
-      case _CustomVisionMode.auto:
-        return '自动';
-      case _CustomVisionMode.enabled:
-        return '开启';
-      case _CustomVisionMode.disabled:
-        return '关闭';
-    }
-  }
-
-  Future<void> _applyCustomVisionMode(_CustomVisionMode mode) async {
-    final manualOverride = mode != _CustomVisionMode.auto;
-    final supportsVision = mode == _CustomVisionMode.enabled;
-    await AIService.instance.setCustomVisionManualOverride(
-      enabled: manualOverride,
-      supportsVision: supportsVision,
-    );
-    if (!mounted) return;
-    setState(() {
-      _customVisionManualOverride = manualOverride;
-      _customVisionEnabled = supportsVision;
-    });
-  }
-
-  Widget _buildCustomVisionModeDropdown({
-    required _CustomVisionMode value,
-    required ValueChanged<_CustomVisionMode> onChanged,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: AppColors.of(context).surface,
-        borderRadius: BorderRadius.circular(8),
-        // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
-        border: Border.all(
-          color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
-        ),
-      ),
-      // BlurredDropdown（而非原生 DropdownButton）：原生下拉经子路由显示，
-      // 收起时路由焦点恢复会钻回同对话框内的输入框导致键盘反复弹出；
-      // BlurredDropdown 打开前已做焦点锚点转移，且与全局毛玻璃风格一致
-      child: BlurredDropdown<_CustomVisionMode>(
-        value: value,
-        icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
-        items: _CustomVisionMode.values
-            .map((mode) => DropdownMenuItem<_CustomVisionMode>(
-                  value: mode,
-                  child: Text(
-                    _customVisionModeLabel(mode),
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ))
-            .toList(),
-        onChanged: (next) {
-          if (next != null) {
-            onChanged(next);
-          }
-        },
-      ),
-    );
-  }
 
   @override
   void initState() {
@@ -182,6 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _reduceMotionTipEntry = null;
     _autoUpdateTipEntry?.remove();
     _autoUpdateTipEntry = null;
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -237,331 +184,395 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (builderCtx, setDialogState) {
           return SizedBox(
             child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  '课表壁纸',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.of(context).textPrimary,
-                                  ),
-                                ),
-                                SizedBox(width: 6),
-                                // 带圈问号：点击向下弹出编辑操作说明气泡
-                                _TitleHelpIcon(text: '长按壁纸可编辑，再次点按退出编辑。'),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: AppColors.of(context).panel(0.4),
-                                borderRadius: BorderRadius.circular(10),
-                                // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
-                                border: _reduceMotionEnabled
-                                    ? Border.all(color: AppColors.of(context).borderWeak)
-                                    : null,
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      '自定义壁纸',
-                                      style: TextStyle(fontSize: 15, color: AppColors.of(context).textPrimary),
-                                    ),
-                                  ),
-                                  Switch(
-                                    value: localEnabled,
-                                    activeThumbColor: const Color(0xFF4A90E2),
-                                    onChanged: (v) async {
-                                      HapticFeedback.selectionClick();
-                                      await prefs.setBool('wallpaper_enabled', v);
-                                      if (v && _wallpaperOpacity == 100) {
-                                        _wallpaperOpacity = 90;
-                                        await prefs.setInt('wallpaper_opacity', 90);
-                                      }
-                                      setDialogState(() {
-                                        localEnabled = v;
-                                      });
-                                      setState(() {
-                                        _wallpaperEnabled = v;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            SizedBox(
-                              height: 100,
-                              child: ListView.builder(
-                                scrollDirection: Axis.horizontal,
-                                physics: const BouncingScrollPhysics(),
-                                itemCount: dialogPaths.length + 1,
-                                itemBuilder: (_, index) {
-                                  if (index < dialogPaths.length) {
-                                    final path = dialogPaths[index];
-                                    final file = File(path);
-                                    final isActive = path == _wallpaperPath;
-                                    final isBeingDeleted = deletingIndex == index;
-                                    return AnimatedContainer(
-                                      key: ValueKey(path),
-                                      duration: const Duration(milliseconds: 350),
-                                      curve: Curves.easeInOut,
-                                      width: isBeingDeleted ? 0 : 100,
-                                      margin: EdgeInsets.only(right: isBeingDeleted ? 0 : 12),
-                                      child: AnimatedOpacity(
-                                        duration: const Duration(milliseconds: 350),
-                                        opacity: isBeingDeleted ? 0 : 1,
-                                        onEnd: () {
-                                          if (!isBeingDeleted) return;
-                                          // 同步删除持久目录中的物理文件
-                                          WallpaperStorageService.deleteWallpaperFile(path);
-                                          dialogPaths.removeAt(index);
-                                          if (dialogPaths.isEmpty) {
-                                            dialogDeleteMode = false;
-                                            deletingIndex = null;
-                                          }
-                                          deletingIndex = null;
-                                          prefs.setStringList('wallpaper_recent_paths', dialogPaths);
-                                          if (_wallpaperPath != null && !dialogPaths.contains(_wallpaperPath)) {
-                                            _wallpaperPath = null;
-                                            prefs.remove('wallpaper_path');
-                                            // 当前壁纸被删除：同步刷新预载单例
-                                            unawaited(WallpaperPreload.instance.reload());
-                                          }
-                                          setDialogState(() {});
-                                        },
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            if (dialogDeleteMode) {
-                                              setDialogState(() { dialogDeleteMode = false; });
-                                              return;
-                                            }
-                                            if (!localEnabled) return;
-                                            () async {
-                                              newWallpaperSelected = true;
-                                              await prefs.setString('wallpaper_path', path);
-                                              final ext = path.toLowerCase().split('.').last;
-                                              final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
-                                              await prefs.setString('wallpaper_type', isVideo ? 'video' : 'image');
-                                              if (!_wallpaperEnabled) {
-                                                await prefs.setBool('wallpaper_enabled', true);
-                                                localEnabled = true;
-                                                setState(() {
-                                                  _wallpaperEnabled = true;
-                                                });
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '课表壁纸',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.of(context).textPrimary,
+                      ),
+                    ),
+                    SizedBox(width: 6),
+                    // 带圈问号：点击向下弹出编辑操作说明气泡
+                    _TitleHelpIcon(text: '长按壁纸可编辑，再次点按退出编辑。'),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.of(context).panel(0.4),
+                    borderRadius: BorderRadius.circular(10),
+                    // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
+                    border: _reduceMotionEnabled
+                        ? Border.all(color: AppColors.of(context).borderWeak)
+                        : null,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '自定义壁纸',
+                          style: TextStyle(
+                              fontSize: 15,
+                              color: AppColors.of(context).textPrimary),
+                        ),
+                      ),
+                      Switch(
+                        value: localEnabled,
+                        activeThumbColor: const Color(0xFF4A90E2),
+                        onChanged: (v) async {
+                          HapticFeedback.selectionClick();
+                          await prefs.setBool('wallpaper_enabled', v);
+                          if (v && _wallpaperOpacity == 100) {
+                            _wallpaperOpacity = 90;
+                            await prefs.setInt('wallpaper_opacity', 90);
+                          }
+                          setDialogState(() {
+                            localEnabled = v;
+                          });
+                          setState(() {
+                            _wallpaperEnabled = v;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 100,
+                  // 壁纸多了横向溢出：右缘淡出提示还能滑（同最近使用横滑行）
+                  child: FadingEdgeList(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    // 缩略图宽 100，淡出带取 20 避免整图被糊掉
+                    fadeExtent: 20,
+                    itemCount: dialogPaths.length + 1,
+                    itemBuilder: (_, index) {
+                      if (index < dialogPaths.length) {
+                        final path = dialogPaths[index];
+                        final file = File(path);
+                        final isActive = path == _wallpaperPath;
+                        final isBeingDeleted = deletingIndex == index;
+                        return AnimatedContainer(
+                          key: ValueKey(path),
+                          duration: const Duration(milliseconds: 350),
+                          curve: Curves.easeInOut,
+                          width: isBeingDeleted ? 0 : 100,
+                          margin:
+                              EdgeInsets.only(right: isBeingDeleted ? 0 : 12),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 350),
+                            opacity: isBeingDeleted ? 0 : 1,
+                            onEnd: () {
+                              if (!isBeingDeleted) return;
+                              // 同步删除持久目录中的物理文件
+                              WallpaperStorageService.deleteWallpaperFile(path);
+                              dialogPaths.removeAt(index);
+                              if (dialogPaths.isEmpty) {
+                                dialogDeleteMode = false;
+                                deletingIndex = null;
+                              }
+                              deletingIndex = null;
+                              prefs.setStringList(
+                                  'wallpaper_recent_paths', dialogPaths);
+                              if (_wallpaperPath != null &&
+                                  !dialogPaths.contains(_wallpaperPath)) {
+                                _wallpaperPath = null;
+                                prefs.remove('wallpaper_path');
+                                // 当前壁纸被删除：同步刷新预载单例
+                                unawaited(WallpaperPreload.instance.reload());
+                              }
+                              setDialogState(() {});
+                            },
+                            child: GestureDetector(
+                              onTap: () {
+                                if (dialogDeleteMode) {
+                                  setDialogState(() {
+                                    dialogDeleteMode = false;
+                                  });
+                                  return;
+                                }
+                                if (!localEnabled) return;
+                                () async {
+                                  newWallpaperSelected = true;
+                                  await prefs.setString('wallpaper_path', path);
+                                  final ext =
+                                      path.toLowerCase().split('.').last;
+                                  final isVideo = [
+                                    'mp4',
+                                    'mov',
+                                    'avi',
+                                    'mkv',
+                                    'webm',
+                                    '3gp'
+                                  ].contains(ext);
+                                  await prefs.setString('wallpaper_type',
+                                      isVideo ? 'video' : 'image');
+                                  if (!_wallpaperEnabled) {
+                                    await prefs.setBool(
+                                        'wallpaper_enabled', true);
+                                    localEnabled = true;
+                                    setState(() {
+                                      _wallpaperEnabled = true;
+                                    });
+                                  }
+                                  setState(() {
+                                    _wallpaperPath = path;
+                                  });
+                                  // 刷新首帧预载单例（原因同导入新壁纸处）
+                                  unawaited(WallpaperPreload.instance.reload());
+                                  setDialogState(() {});
+                                  // 切换到动态壁纸时提示功耗
+                                  if (isVideo && mounted) {
+                                    toastNotification.show(
+                                      context,
+                                      '视频壁纸会带来更高的功耗',
+                                      type: ToastType.info,
+                                    );
+                                  }
+                                }();
+                              },
+                              onLongPress: () {
+                                setDialogState(() {
+                                  dialogDeleteMode = !dialogDeleteMode;
+                                  deletingIndex = null;
+                                });
+                              },
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: SizedBox(
+                                  width: 100,
+                                  height: 100,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      file.existsSync()
+                                          ? Builder(builder: (context) {
+                                              final ext = file.path
+                                                  .toLowerCase()
+                                                  .split('.')
+                                                  .last;
+                                              final isVid = [
+                                                'mp4',
+                                                'mov',
+                                                'avi',
+                                                'mkv',
+                                                'webm',
+                                                '3gp'
+                                              ].contains(ext);
+                                              if (isVid) {
+                                                return _VideoThumbnail(
+                                                    path: file.path);
                                               }
-                                              setState(() {
-                                                _wallpaperPath = path;
+                                              return Image.file(file,
+                                                  fit: BoxFit.cover);
+                                            })
+                                          : Container(
+                                              color: AppColors.of(context)
+                                                  .panel(0.4),
+                                              child: Icon(Icons.broken_image,
+                                                  color: AppColors.of(context)
+                                                      .textTertiary),
+                                            ),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: isActive && localEnabled
+                                                ? const Color(0xFF4A90E2)
+                                                : AppColors.of(context)
+                                                    .panel(0.4),
+                                            width: isActive && localEnabled
+                                                ? 2.5
+                                                : 1,
+                                          ),
+                                        ),
+                                      ),
+                                      if (!localEnabled)
+                                        Container(
+                                          color:
+                                              AppColors.of(context).panel(0.4),
+                                        ),
+                                      if (dialogDeleteMode)
+                                        Positioned(
+                                          top: 4,
+                                          right: 4,
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              setDialogState(() {
+                                                deletingIndex = index;
                                               });
-                                              // 刷新首帧预载单例（原因同导入新壁纸处）
-                                              unawaited(WallpaperPreload.instance.reload());
-                                              setDialogState(() {});
-                                              // 切换到动态壁纸时提示功耗
-                                              if (isVideo && mounted) {
-                                                toastNotification.show(
-                                                  context,
-                                                  '视频壁纸会带来更高的功耗',
-                                                  type: ToastType.info,
-                                                );
-                                              }
-                                            }();
-                                          },
-                                          onLongPress: () {
-                                            setDialogState(() {
-                                              dialogDeleteMode = !dialogDeleteMode;
-                                              deletingIndex = null;
-                                            });
-                                          },
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(12),
-                                            child: SizedBox(
-                                              width: 100,
-                                              height: 100,
-                                              child: Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  file.existsSync()
-                                                      ? Builder(builder: (context) {
-  final ext = file.path.toLowerCase().split('.').last;
-  final isVid = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(ext);
-  if (isVid) {
-    return _VideoThumbnail(path: file.path);
-  }
-  return Image.file(file, fit: BoxFit.cover);
-})
-                                                      : Container(
-                                                          color: AppColors.of(context).panel(0.4),
-                                                          child: Icon(Icons.broken_image, color: AppColors.of(context).textTertiary),
-                                                        ),
-                                                  Container(
-                                                    decoration: BoxDecoration(
-                                                      borderRadius: BorderRadius.circular(12),
-                                                      border: Border.all(
-                                                        color: isActive && localEnabled
-                                                            ? const Color(0xFF4A90E2)
-                                                            : AppColors.of(context).panel(0.4),
-                                                        width: isActive && localEnabled ? 2.5 : 1,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  if (!localEnabled)
-                                                    Container(
-                                                      color: AppColors.of(context).panel(0.4),
-                                                    ),
-                                                  if (dialogDeleteMode)
-                                                    Positioned(
-                                                      top: 4,
-                                                      right: 4,
-                                                      child: GestureDetector(
-                                                        onTap: () {
-                                                setDialogState(() {
-                                                  deletingIndex = index;
-                                                });
-                                              },
-                                                        child: Container(
-                                                          width: 22,
-                                                          height: 22,
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.black.withValues(alpha: 0.5),
-                                                            shape: BoxShape.circle,
-                                                          ),
-                                                          child: const Icon(
-                                                            Icons.close,
-                                                            color: Colors.white,
-                                                            size: 14,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
+                                            },
+                                            child: Container(
+                                              width: 22,
+                                              height: 22,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withValues(alpha: 0.5),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.close,
+                                                color: Colors.white,
+                                                size: 14,
                                               ),
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    );
-                                  }
-                                  return GestureDetector(
-                                      onTap: () {
-                                          if (dialogDeleteMode) {
-                                            setDialogState(() { dialogDeleteMode = false; });
-                                            return;
-                                          }
-                                          if (!localEnabled) return;
-                                          () async {
-                                            final result = await FilePicker.platform.pickFiles(
-                                              type: FileType.media,
-                                            );
-                                            if (result != null && result.files.single.path != null) {
-                                              // 持久化到应用内部目录，防止清理缓存后壁纸失效
-                                              final filePath = await WallpaperStorageService.persistWallpaper(result.files.single.path!);
-                                              final extension = filePath.toLowerCase().split('.').last;
-                                              final isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(extension);
-                                              await prefs.setString('wallpaper_type', isVideo ? 'video' : 'image');
-                                              newWallpaperSelected = true;
-                                              dialogPaths.insert(0, filePath);
-                                              if (dialogPaths.length > 5) {
-                                                dialogPaths.removeLast();
-                                              }
-                                              await prefs.setStringList('wallpaper_recent_paths', dialogPaths);
-                                              await prefs.setString('wallpaper_path', filePath);
-                                              if (!_wallpaperEnabled) {
-                                                await prefs.setBool('wallpaper_enabled', true);
-                                                localEnabled = true;
-                                                setState(() {
-                                                  _wallpaperEnabled = true;
-                                                });
-                                              }
-                                              setState(() {
-                                                _wallpaperPath = filePath;
-                                              });
-                                              // 刷新首帧预载单例：保证不杀进程的
-                                              // 再次进入首帧也是新壁纸
-                                              unawaited(WallpaperPreload.instance.reload());
-                                              setDialogState(() {});
-                                              // 切换到动态壁纸时提示功耗
-                                              if (isVideo && mounted) {
-                                                toastNotification.show(
-                                                  context,
-                                                  '视频壁纸会带来更高的功耗',
-                                                  type: ToastType.info,
-                                                );
-                                              }
-                                            }
-                                          }();
-                                        },
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: SizedBox(
-                                          width: 100,
-                                          height: 100,
-                                          child: Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              Container(
-                                                color: AppColors.of(context).panel(0.4),
-                                                child: Column(
-                                                  mainAxisAlignment: MainAxisAlignment.center,
-                                                  children: [
-                                                    Icon(Icons.add, color: AppColors.of(context).textTertiary, size: 32),
-                                                    const SizedBox(height: 4),
-                                                    Text('添加图片/视频', style: TextStyle(fontSize: 12, color: AppColors.of(context).textTertiary)),
-                                                  ],
-                                                ),
-                                              ),
-                                              Container(
-                                                decoration: BoxDecoration(
-                                                  borderRadius: BorderRadius.circular(12),
-                                                  // 减弱动态效果壳为不透明白底，白色描边不可见，
-                                                  // 改用浅灰细边（与其他磁贴同款）
-                                                  border: Border.all(
-                                                    color: _reduceMotionEnabled
-                                                        ? AppColors.of(context).borderWeak
-                                                        : AppColors.of(context).panel(0.4),
-                                                  ),
-                                                ),
-                                              ),
-                                              if (!localEnabled)
-                                                Container(
-                                                  color: AppColors.of(context).panel(0.4),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => Navigator.pop(builderCtx),
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                    child: const Text('取消'),
+                                    ],
                                   ),
                                 ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      return GestureDetector(
+                        onTap: () {
+                          if (dialogDeleteMode) {
+                            setDialogState(() {
+                              dialogDeleteMode = false;
+                            });
+                            return;
+                          }
+                          if (!localEnabled) return;
+                          () async {
+                            final result = await FilePicker.platform.pickFiles(
+                              type: FileType.media,
+                            );
+                            if (result != null &&
+                                result.files.single.path != null) {
+                              // 持久化到应用内部目录，防止清理缓存后壁纸失效
+                              final filePath = await WallpaperStorageService
+                                  .persistWallpaper(result.files.single.path!);
+                              final extension =
+                                  filePath.toLowerCase().split('.').last;
+                              final isVideo = [
+                                'mp4',
+                                'mov',
+                                'avi',
+                                'mkv',
+                                'webm',
+                                '3gp'
+                              ].contains(extension);
+                              await prefs.setString('wallpaper_type',
+                                  isVideo ? 'video' : 'image');
+                              newWallpaperSelected = true;
+                              dialogPaths.insert(0, filePath);
+                              if (dialogPaths.length > 5) {
+                                dialogPaths.removeLast();
+                              }
+                              await prefs.setStringList(
+                                  'wallpaper_recent_paths', dialogPaths);
+                              await prefs.setString('wallpaper_path', filePath);
+                              if (!_wallpaperEnabled) {
+                                await prefs.setBool('wallpaper_enabled', true);
+                                localEnabled = true;
+                                setState(() {
+                                  _wallpaperEnabled = true;
+                                });
+                              }
+                              setState(() {
+                                _wallpaperPath = filePath;
+                              });
+                              // 刷新首帧预载单例：保证不杀进程的
+                              // 再次进入首帧也是新壁纸
+                              unawaited(WallpaperPreload.instance.reload());
+                              setDialogState(() {});
+                              // 切换到动态壁纸时提示功耗
+                              if (isVideo && mounted) {
+                                toastNotification.show(
+                                  context,
+                                  '视频壁纸会带来更高的功耗',
+                                  type: ToastType.info,
+                                );
+                              }
+                            }
+                          }();
+                        },
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: SizedBox(
+                            width: 100,
+                            height: 100,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Container(
+                                  color: AppColors.of(context).panel(0.4),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.add,
+                                          color: AppColors.of(context)
+                                              .textTertiary,
+                                          size: 32),
+                                      const SizedBox(height: 4),
+                                      Text('添加图片/视频',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.of(context)
+                                                  .textTertiary)),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(12),
+                                    // 减弱动态效果壳为不透明白底，白色描边不可见，
+                                    // 改用浅灰细边（与其他磁贴同款）
+                                    border: Border.all(
+                                      color: _reduceMotionEnabled
+                                          ? AppColors.of(context).borderWeak
+                                          : AppColors.of(context).panel(0.4),
+                                    ),
+                                  ),
+                                ),
+                                if (!localEnabled)
+                                  Container(
+                                    color: AppColors.of(context).panel(0.4),
+                                  ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       );
                     },
                   ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(builderCtx),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
     if (!newWallpaperSelected && _wallpaperPath == null) {
       _wallpaperEnabled = false;
@@ -590,135 +601,146 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context, setDialogState) {
           return SizedBox(
             child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('背景透明度',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.of(context).textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 150,
-                              child: ListWheelScrollView.useDelegate(
-                                controller: scrollController,
-                                itemExtent: 40,
-                                perspective: 0.005,
-                                diameterRatio: 1.5,
-                                physics: const FixedExtentScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                onSelectedItemChanged: (index) {
-                                  setDialogState(() {
-                                    selectedOpacity = 50 + index * 5;
-                                  });
-                                },
-                                childDelegate: ListWheelChildBuilderDelegate(
-                                  childCount: 11,
-                                  builder: (context, index) {
-                                    final opacity = 50 + index * 5;
-                                    final isSelected = opacity == selectedOpacity;
-                                    return Container(
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        '$opacity%',
-                                        style: TextStyle(
-                                          fontSize: isSelected ? 18 : 16,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            // 减弱动态效果开启时：卡片模糊强制关闭，选项隐藏
-                            if (!_reduceMotionEnabled) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: AppColors.of(context).panel(0.4),
-                                  borderRadius: BorderRadius.circular(10),
-                                  // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
-                                  border: _reduceMotionEnabled
-                                      ? Border.all(color: AppColors.of(context).borderWeak)
-                                      : null,
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '卡片模糊',
-                                        style: TextStyle(fontSize: 15, color: AppColors.of(context).textPrimary),
-                                      ),
-                                    ),
-                                    Switch(
-                                      value: localBlur,
-                                      activeThumbColor: const Color(0xFF4A90E2),
-                                      onChanged: (v) {
-                                        HapticFeedback.selectionClick();
-                                        setDialogState(() {
-                                          localBlur = v;
-                                        });
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      final prefs = await SharedPreferences.getInstance();
-                                      await prefs.setInt('wallpaper_opacity', selectedOpacity);
-                                      await prefs.setBool('wallpaper_blur_enabled', localBlur);
-                                      setState(() {
-                                        _wallpaperOpacity = selectedOpacity;
-                                        _wallpaperBlurEnabled = localBlur;
-                                      });
-                                      // 透明度/模糊变更，标记课表页刷新
-                                      TimetableScreenState.markNeedsRefresh();
-                                      if (mounted) Navigator.pop(context);
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                    child: const Text('保存'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '背景透明度',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.of(context).textPrimary,
                   ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 150,
+                  child: ListWheelScrollView.useDelegate(
+                    controller: scrollController,
+                    itemExtent: 40,
+                    perspective: 0.005,
+                    diameterRatio: 1.5,
+                    physics: const FixedExtentScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    onSelectedItemChanged: (index) {
+                      setDialogState(() {
+                        selectedOpacity = 50 + index * 5;
+                      });
+                    },
+                    childDelegate: ListWheelChildBuilderDelegate(
+                      childCount: 11,
+                      builder: (context, index) {
+                        final opacity = 50 + index * 5;
+                        final isSelected = opacity == selectedOpacity;
+                        return Container(
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$opacity%',
+                            style: TextStyle(
+                              fontSize: isSelected ? 18 : 16,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                // 减弱动态效果开启时：卡片模糊强制关闭，选项隐藏
+                if (!_reduceMotionEnabled) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.of(context).panel(0.4),
+                      borderRadius: BorderRadius.circular(10),
+                      // 灰描边仅减弱动态时显示（半透明白底与壳背景融合）
+                      border: _reduceMotionEnabled
+                          ? Border.all(color: AppColors.of(context).borderWeak)
+                          : null,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '卡片模糊',
+                            style: TextStyle(
+                                fontSize: 15,
+                                color: AppColors.of(context).textPrimary),
+                          ),
+                        ),
+                        Switch(
+                          value: localBlur,
+                          activeThumbColor: const Color(0xFF4A90E2),
+                          onChanged: (v) {
+                            HapticFeedback.selectionClick();
+                            setDialogState(() {
+                              localBlur = v;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setInt(
+                              'wallpaper_opacity', selectedOpacity);
+                          await prefs.setBool(
+                              'wallpaper_blur_enabled', localBlur);
+                          setState(() {
+                            _wallpaperOpacity = selectedOpacity;
+                            _wallpaperBlurEnabled = localBlur;
+                          });
+                          // 透明度/模糊变更，标记课表页刷新
+                          TimetableScreenState.markNeedsRefresh();
+                          if (mounted) Navigator.pop(context);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text('保存'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -728,8 +750,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     var aiEnabled = prefs.getBool('ai_enabled') ?? false;
     final consentAccepted = prefs.getBool('ai_consent_accepted') ?? false;
     final fastModeEnabled = prefs.getBool('fast_mode_enabled') ?? false;
-    final customVisionManualOverride = prefs.getBool('custom_api_vision_manual_override') ?? false;
-    final customVisionEnabled = prefs.getBool('custom_api_vision_manual_value') ?? false;
+    final customVisionManualOverride =
+        prefs.getBool('custom_api_vision_manual_override') ?? false;
+    final customVisionEnabled =
+        prefs.getBool('custom_api_vision_manual_value') ?? false;
+    // 子开关读同步缓存（启动时已预热，切换时由 setter 就地更新），
+    // 与待办页/对话页用的是同一份值
+    final autoTaskAnalysis = AIAutoAnalysisFlags.taskEnabled;
+    final autoScheduleAnalysis = AIAutoAnalysisFlags.scheduleEnabled;
 
     // AI配置项小字：按当前提供商显示具体模型信息
     String aiConfigDetail = '开启AI后可用';
@@ -738,7 +766,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       aiConfigDetail = '内置模型节点$node';
     } else if (providerStr == 'agnes') {
       final model = prefs.getString('agnes_model') ?? 'agnes-2.0-flash';
-      aiConfigDetail = model == 'agnes-2.5-flash' ? 'Agnes 2.5 Flash' : 'Agnes 2.0 Flash';
+      aiConfigDetail =
+          model == 'agnes-2.5-flash' ? 'Agnes 2.5 Flash' : 'Agnes 2.0 Flash';
     } else if (providerStr == 'custom') {
       final model = (prefs.getString('custom_api_model') ?? '').trim();
       aiConfigDetail = model.isNotEmpty ? model : '自定义 API';
@@ -756,6 +785,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _aiEnabled = aiEnabled;
+      _aiAutoTaskAnalysis = autoTaskAnalysis;
+      _aiAutoScheduleAnalysis = autoScheduleAnalysis;
       _aiConsentAccepted = consentAccepted;
       _fastModeEnabled = fastModeEnabled;
       _customVisionManualOverride = customVisionManualOverride;
@@ -769,7 +800,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadNotificationConfig() async {
-    final settings = await NotificationService.instance.getTaskNotificationSettings();
+    final settings =
+        await NotificationService.instance.getTaskNotificationSettings();
+    final liveSettings = await LiveUpdateService.instance.getSettings();
     if (!mounted) return;
     setState(() {
       _taskNotificationEnabled = settings.enabled;
@@ -777,13 +810,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _notifyLeadHours = settings.hours;
       _notifyLeadMinutes = settings.minutes;
       _notificationCopyStyle = settings.style;
+      _liveUpdateAvailable = LiveUpdateService.instance.platformSupported;
+      _liveUpdateEnabled = liveSettings.enabled;
+      _liveLeadMinutes = liveSettings.leadMinutes;
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
-    
+
     return Scaffold(
       backgroundColor: Theme.of(context).brightness == Brightness.dark
           ? AppPalette.dark.scaffold
@@ -804,417 +840,665 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
               return false;
             },
-            child: CustomScrollView(
-            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-            slivers: [
-              SliverPadding(
-                padding: EdgeInsets.only(top: topPadding + 56),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 140),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildSectionTitle('学期设置'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          // 图标语义区分：开学日期=单日标记（event），
-                          // 学期周数=周视图日历，当前周次=当前位置旗标
-                          _buildSettingsItem(
-                            icon: Icons.event_outlined,
-                            title: '开学日期',
-                            subtitle: '${_semesterStartDate.year}年${_semesterStartDate.month}月${_semesterStartDate.day}日',
-                            onTap: _selectSemesterStartDate,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.calendar_view_week_outlined,
-                            title: '学期周数',
-                            subtitle: '$_semesterWeeks 周',
-                            onTap: _selectSemesterWeeks,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.flag_outlined,
-                            title: '当前周次',
-                            trailing: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: StorageService.isHoliday()
-                                    ? AppColors.of(context).chipIdle
-                                    : const Color(0xFF4A90E2).withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(20),
+            child: RawScrollbar(
+              // 必须显式接线专属控制器：若落到 PrimaryScrollController（多
+              // position 共享），SDK 的 _shouldUpdatePainter 会拒收通知，
+              // 指示条滑动时也永远不出现
+              controller: _scrollController,
+              // 与对话页同款：指示条顶点=标题栏模糊起始线，四角圆润
+              padding: EdgeInsets.only(top: topPadding + 62),
+              radius: const Radius.circular(4),
+              thickness: 4,
+              thumbColor:
+                  AppColors.of(context).textTertiary.withValues(alpha: 0.6),
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics()),
+                slivers: [
+                  SliverPadding(
+                    padding: EdgeInsets.only(top: topPadding + 62),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 140),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildSectionTitle('学期设置'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              // 图标语义区分：开学日期=单日标记（event），
+                              // 学期周数=周视图日历，当前周次=当前位置旗标
+                              _buildSettingsItem(
+                                icon: Icons.event_outlined,
+                                title: '开学日期',
+                                subtitle:
+                                    '${_semesterStartDate.year}年${_semesterStartDate.month}月${_semesterStartDate.day}日',
+                                onTap: _selectSemesterStartDate,
                               ),
-                              child: Text(
-                                StorageService.isBeforeSemesterStart()
-                                    ? '未开始'
-                                    : StorageService.getCurrentWeek() > _semesterWeeks
-                                        ? '已结束'
-                                        : '第 ${StorageService.getCurrentWeek()} 周',
-                                style: TextStyle(
-                                  color: StorageService.isHoliday()
-                                      ? AppColors.of(context).textSecondary
-                                      : const Color(0xFF4A90E2),
-                                  fontWeight: FontWeight.w600,
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.calendar_view_week_outlined,
+                                title: '学期周数',
+                                subtitle: '$_semesterWeeks 周',
+                                onTap: _selectSemesterWeeks,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.flag_outlined,
+                                title: '当前周次',
+                                trailing: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: StorageService.isHoliday()
+                                        ? AppColors.of(context).chipIdle
+                                        : const Color(0xFF4A90E2)
+                                            .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    StorageService.isBeforeSemesterStart()
+                                        ? '未开始'
+                                        : StorageService.getCurrentWeek() >
+                                                _semesterWeeks
+                                            ? '已结束'
+                                            : '第 ${StorageService.getCurrentWeek()} 周',
+                                    style: TextStyle(
+                                      color: StorageService.isHoliday()
+                                          ? AppColors.of(context).textSecondary
+                                          : const Color(0xFF4A90E2),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-                        _buildSectionTitle('课程时间'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          // 每日节数是数量概念：编号列表；时钟只留给
-                          // 时间段设置，避免两行同为表盘图标
-                          _buildSettingsItem(
-                            icon: Icons.format_list_numbered_outlined,
-                            title: '每日节数',
-                            subtitle: '$_dailyPeriods 节',
-                            onTap: _selectDailyPeriods,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.schedule_outlined,
-                            title: '时间段设置',
-                            onTap: _showTimeSlotsDialog,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.visibility_outlined,
-                            title: '显示非本周课程',
-                            trailing: Switch(
-                              value: _showInactiveCourses,
-                              activeThumbColor: const Color(0xFF4A90E2),
-                              onChanged: (v) async {
-                                HapticFeedback.selectionClick();
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setBool('show_inactive_courses', v);
-                                setState(() {
-                                  _showInactiveCourses = v;
-                                });
-                                // 切换后标记课表页刷新（灰色卡片显隐）
-                                TimetableScreenState.markNeedsRefresh();
-                              },
-                            ),
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-                        _buildSectionTitle('账户与通知'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          Consumer<AuthService>(
-                            builder: (context, auth, child) {
-                              return _buildSettingsItem(
-                                icon: Icons.mail_outline,
-                                title: '电子邮箱登录',
-                                subtitle: auth.isAuthenticated 
-                                    ? '已登录 (${auth.userName ?? auth.userEmail ?? "用户"})'
-                                  : ((auth.userName ?? auth.userEmail) != null
-                                    ? '已退出（上次登录：${auth.userName ?? auth.userEmail}）'
-                                    : '登录以同步数据'),
-                                trailing: auth.isAuthenticated 
-                                    ? TextButton(
-                                        onPressed: () => _showLogoutDialog(auth),
-                                        child: const Text('退出', style: TextStyle(color: Colors.red)),
-                                      )
-                                    : null,
-                                onTap: auth.isAuthenticated ? null : () => _showEmailLoginDialog(auth),
-                              );
-                            },
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.notifications_active_outlined,
-                            title: '任务临期通知',
-                            trailing: Switch(
-                              value: _taskNotificationEnabled,
-                              onChanged: (value) async {
-                                HapticFeedback.selectionClick();
+                            ]),
+                            const SizedBox(height: 24),
+                            _buildSectionTitle('课程时间'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              // 每日节数是数量概念：编号列表；时钟只留给
+                              // 时间段设置，避免两行同为表盘图标
+                              _buildSettingsItem(
+                                icon: Icons.format_list_numbered_outlined,
+                                title: '每日节数',
+                                subtitle: '$_dailyPeriods 节',
+                                onTap: _selectDailyPeriods,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.schedule_outlined,
+                                title: '时间段设置',
+                                onTap: _showTimeSlotsDialog,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.visibility_outlined,
+                                title: '显示非本周课程',
+                                trailing: Switch(
+                                  value: _showInactiveCourses,
+                                  activeThumbColor: const Color(0xFF4A90E2),
+                                  onChanged: (v) async {
+                                    HapticFeedback.selectionClick();
+                                    final prefs =
+                                        await SharedPreferences.getInstance();
+                                    await prefs.setBool(
+                                        'show_inactive_courses', v);
+                                    setState(() {
+                                      _showInactiveCourses = v;
+                                    });
+                                    // 切换后标记课表页刷新（灰色卡片显隐）
+                                    TimetableScreenState.markNeedsRefresh();
+                                  },
+                                ),
+                              ),
+                            ]),
+                            const SizedBox(height: 24),
+                            _buildSectionTitle('账户与通知'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              Consumer<AuthService>(
+                                builder: (context, auth, child) {
+                                  return _buildSettingsItem(
+                                    icon: Icons.mail_outline,
+                                    title: '电子邮箱登录',
+                                    subtitle: auth.isAuthenticated
+                                        ? '已登录 (${auth.userName ?? auth.userEmail ?? "用户"})'
+                                        : ((auth.userName ?? auth.userEmail) !=
+                                                null
+                                            ? '已退出（上次登录：${auth.userName ?? auth.userEmail}）'
+                                            : '登录以同步数据'),
+                                    trailing: auth.isAuthenticated
+                                        ? TextButton(
+                                            onPressed: () =>
+                                                _showLogoutDialog(auth),
+                                            child: const Text('退出',
+                                                style: TextStyle(
+                                                    color: Colors.red)),
+                                          )
+                                        : null,
+                                    onTap: auth.isAuthenticated
+                                        ? null
+                                        : () => _showEmailLoginDialog(auth),
+                                  );
+                                },
+                              ),
+                              _buildDivider(),
+                              // 课程实时提醒：安卓 16 起系统会把这条 promoted-ongoing
+                              // 通知渲染成状态栏胶囊（超级岛/流体云同源）。其他平台
+                              // 没有这条通道，整块不出现而不是留一个无效开关
+                              if (_liveUpdateAvailable) ...[
+                                _buildSettingsItem(
+                                  // 胶囊形（顶部圆角长条 + 下方短柄）直读"状态栏胶囊"；
+                                  // dynamic_feed 那对叠放的卡片看不出这个意思。
+                                  // 本页已用过的图形（铃铛/日历/时钟/芯片/齿轮…）
+                                  // 均不与之重复
+                                  icon: Icons.pin_invoke_outlined,
+                                  title: '实时课程提醒',
+                                  trailing: Switch(
+                                    value: _liveUpdateEnabled,
+                                    activeThumbColor: const Color(0xFF4A90E2),
+                                    onChanged: (value) async {
+                                      HapticFeedback.selectionClick();
 
-                                if (value) {
-                                  final granted = await NotificationService.instance.requestNotificationPermission();
-                                  if (!granted) {
-                                    if (!mounted) return;
-                                    toastNotification.show(
-                                      context,
-                                      '通知权限未开启，无法启动任务提醒',
-                                      type: ToastType.error,
+                                      if (value) {
+                                        final granted = await NotificationService
+                                            .instance
+                                            .requestNotificationPermission();
+                                        if (!granted) {
+                                          if (!mounted) return;
+                                          toastNotification.show(
+                                            context,
+                                            '通知权限未开启，无法显示实时课程提醒',
+                                            type: ToastType.error,
+                                          );
+                                          return;
+                                        }
+                                      }
+
+                                      await LiveUpdateService.instance
+                                          .saveSettings(
+                                        enabled: value,
+                                        leadMinutes: _liveLeadMinutes,
+                                      );
+
+                                      if (!mounted) return;
+                                      setState(() {
+                                        _liveUpdateEnabled = value;
+                                      });
+                                      toastNotification.show(
+                                        context,
+                                        value
+                                            ? '实时课程提醒已开启'
+                                            : '实时课程提醒已关闭',
+                                        type: value
+                                            ? ToastType.success
+                                            : ToastType.info,
+                                      );
+                                    },
+                                  ),
+                                ),
+                                AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 280),
+                                  switchInCurve: Curves.easeOutCubic,
+                                  switchOutCurve: Curves.easeInCubic,
+                                  transitionBuilder: (child, animation) {
+                                    return FadeTransition(
+                                      opacity: animation,
+                                      child: SizeTransition(
+                                        sizeFactor: animation,
+                                        axisAlignment: -1,
+                                        child: child,
+                                      ),
                                     );
-                                    return;
-                                  }
-                                }
-
-                                await NotificationService.instance.saveTaskNotificationSettings(
-                                  enabled: value,
-                                  days: _notifyLeadDays,
-                                  hours: _notifyLeadHours,
-                                  minutes: _notifyLeadMinutes,
-                                  style: _notificationCopyStyle,
-                                );
-
-                                if (!mounted) return;
-                                setState(() {
-                                  _taskNotificationEnabled = value;
-                                });
-
-                                if (value) {
-                                  await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
-                                  if (mounted) {
-                                    toastNotification.show(context, '任务临期通知已开启', type: ToastType.success);
-                                  }
-                                } else {
-                                  await NotificationService.instance.cancelAllTaskNotifications();
-                                  if (mounted) {
-                                    toastNotification.show(context, '任务临期通知已关闭', type: ToastType.info);
-                                  }
-                                }
-                              },
-                              activeThumbColor: const Color(0xFF4A90E2),
-                            ),
-                          ),
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 280),
-                            switchInCurve: Curves.easeOutCubic,
-                            switchOutCurve: Curves.easeInCubic,
-                            transitionBuilder: (child, animation) {
-                              return FadeTransition(
-                                opacity: animation,
-                                child: SizeTransition(
-                                  sizeFactor: animation,
-                                  axisAlignment: -1,
-                                  child: child,
+                                  },
+                                  child: _liveUpdateEnabled
+                                      ? Column(
+                                          key: const ValueKey(
+                                              'live-update-options-visible'),
+                                          children: [
+                                            // 子项与父项合成一块：组内不插分隔条，
+                                            // 竖干从父项底边直接接下来
+                                            _buildBranchRow(
+                                              title: '课前通知时间',
+                                              trailing: _buildBranchValueTrailing(
+                                                  LiveUpdateService.instance
+                                                      .formatLeadText(
+                                                          _liveLeadMinutes)),
+                                              onTap: _showLiveLeadChoiceDialog,
+                                              // 本组末子：竖干到此收口，不再往下接
+                                              stemEndsAtBranch: true,
+                                            ),
+                                          ],
+                                        )
+                                      : const SizedBox.shrink(
+                                          key: ValueKey(
+                                              'live-update-options-hidden'),
+                                        ),
                                 ),
-                              );
-                            },
-                            child: _taskNotificationEnabled
-                                ? Column(
-                                    key: const ValueKey('notify-options-visible'),
-                                    children: [
-                                      _buildDivider(),
-                                      _buildSettingsItem(
-                                        icon: Icons.timer_outlined,
-                                        title: '提前提醒时间',
-                                        subtitle: NotificationService.instance
-                                            .formatLeadTimeText(_notifyLeadDays, _notifyLeadHours, _notifyLeadMinutes),
-                                        onTap: _showNotificationLeadTimeDialog,
-                                      ),
-                                      _buildDivider(),
-                                      _buildSettingsItem(
-                                        icon: Icons.style_outlined,
-                                        title: '通知文案风格',
-                                        subtitle: NotificationService.instance.copyStyleLabel(_notificationCopyStyle),
-                                        onTap: _showNotificationCopyStyleDialog,
-                                      ),
-                                    ],
-                                  )
-                                : const SizedBox.shrink(
-                                    key: ValueKey('notify-options-hidden'),
-                                  ),
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-                        _buildSectionTitle('AI设置'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          // 星芒是简约风格的通用 AI 表意（原头脑齿轮偏厚重）
-                          _buildSettingsItem(
-                            icon: Icons.auto_awesome_outlined,
-                            title: 'AI 功能',
-                            trailing: Switch(
-                              value: _aiEnabled,
-                              onChanged: (value) async {
-                                HapticFeedback.selectionClick();
-                                if (value) {
-                                  if (!_aiConsentAccepted) {
-                                    final accepted = await _showAIConsentDialog();
-                                    if (!accepted) return;
-                                  }
-                                  final hasConfig = await _hasAnyAIConfig();
-                                  if (!hasConfig) {
-                                    await _showDeveloperOptionsDialog();
-                                  }
-                                  final recheckConfig = await _hasAnyAIConfig();
-                                  final prefs = await SharedPreferences.getInstance();
-                                  if (recheckConfig) {
-                                    await prefs.setBool('ai_enabled', true);
-                                    if (mounted) setState(() { _aiEnabled = true; });
-                                  } else {
-                                    await prefs.setBool('ai_enabled', false);
-                                    if (mounted) {
-                                      setState(() { _aiEnabled = false; });
-                                      toastNotification.show(context, '未配置API，AI功能已关闭', type: ToastType.info);
+                                _buildDivider(),
+                              ],
+                              _buildSettingsItem(
+                                icon: Icons.notifications_active_outlined,
+                                title: '任务临期通知',
+                                trailing: Switch(
+                                  value: _taskNotificationEnabled,
+                                  onChanged: (value) async {
+                                    HapticFeedback.selectionClick();
+
+                                    if (value) {
+                                      final granted = await NotificationService
+                                          .instance
+                                          .requestNotificationPermission();
+                                      if (!granted) {
+                                        if (!mounted) return;
+                                        toastNotification.show(
+                                          context,
+                                          '通知权限未开启，无法启动任务提醒',
+                                          type: ToastType.error,
+                                        );
+                                        return;
+                                      }
                                     }
-                                  }
-                                } else {
-                                  final prefs = await SharedPreferences.getInstance();
-                                  await prefs.setBool('ai_enabled', false);
-                                  if (mounted) setState(() { _aiEnabled = false; });
-                                }
-                              },
-                              activeThumbColor: const Color(0xFF4A90E2),
-                            ),
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.tune_outlined,
-                            title: 'AI配置',
-                            // 小字按当前提供商显示具体模型（节点/模型名），
-                            // 未开启时提示开启后可用
-                            subtitle: _aiEnabled ? _aiConfigDetail : '开启AI后可用',
-                            onTap: _aiEnabled ? () => _showDeveloperOptionsDialog() : null,
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-                        _buildSectionTitle('个性化'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          _buildSettingsItem(
-                            // 左侧图标随当前生效模式切换：深色月亮 / 浅色太阳
-                            icon: AppColors.isDark(context)
-                                ? Icons.dark_mode
-                                : Icons.light_mode,
-                            title: '界面风格',
-                            subtitle: _themeModeLabel(
-                                context.watch<ThemeController>().mode),
-                            trailing: _buildThemeModeSelector(),
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.image_outlined,
-                            title: '课表壁纸',
-                            subtitle: _wallpaperEnabled && _wallpaperPath != null
-                                ? '已启用'
-                                : _wallpaperPath != null
-                                    ? '未启用'
-                                    : '选择图片作为课表背景',
-                            onTap: _selectWallpaperImage,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.opacity_outlined,
-                            title: '背景透明度',
-                            subtitle: _wallpaperEnabled ? '$_wallpaperOpacity%' : '开启壁纸功能后可用',
-                            onTap: _wallpaperEnabled ? _selectWallpaperOpacity : null,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.motion_photos_off_outlined,
-                            titleWidget: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text(
-                                  '减弱动态效果',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                  ),
+
+                                    await NotificationService.instance
+                                        .saveTaskNotificationSettings(
+                                      enabled: value,
+                                      days: _notifyLeadDays,
+                                      hours: _notifyLeadHours,
+                                      minutes: _notifyLeadMinutes,
+                                      style: _notificationCopyStyle,
+                                    );
+
+                                    if (!mounted) return;
+                                    setState(() {
+                                      _taskNotificationEnabled = value;
+                                    });
+
+                                    if (value) {
+                                      await NotificationService.instance
+                                          .rescheduleTaskNotifications(
+                                              StorageService.getTasks());
+                                      if (mounted) {
+                                        toastNotification.show(
+                                            context, '任务临期通知已开启',
+                                            type: ToastType.success);
+                                      }
+                                    } else {
+                                      await NotificationService.instance
+                                          .cancelAllTaskNotifications();
+                                      if (mounted) {
+                                        toastNotification.show(
+                                            context, '任务临期通知已关闭',
+                                            type: ToastType.info);
+                                      }
+                                    }
+                                  },
+                                  activeThumbColor: const Color(0xFF4A90E2),
                                 ),
-                                const SizedBox(width: 6),
-                                // 带圈问号（同节点菜单）：点击向下弹出说明气泡
-                                GestureDetector(
-                                  key: _reduceMotionHelpKey,
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _toggleReduceMotionTip,
-                                  child: Icon(
-                                    Icons.help_outline,
-                                    size: 15,
-                                    color: AppColors.of(context).textTertiary,
-                                  ),
+                              ),
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 280),
+                                switchInCurve: Curves.easeOutCubic,
+                                switchOutCurve: Curves.easeInCubic,
+                                transitionBuilder: (child, animation) {
+                                  return FadeTransition(
+                                    opacity: animation,
+                                    child: SizeTransition(
+                                      sizeFactor: animation,
+                                      axisAlignment: -1,
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                child: _taskNotificationEnabled
+                                    ? Column(
+                                        key: const ValueKey(
+                                            'notify-options-visible'),
+                                        children: [
+                                          // 两个子项合成一块，组内不插分隔条
+                                          _buildBranchRow(
+                                            title: '提前提醒时间',
+                                            trailing: _buildBranchValueTrailing(
+                                                NotificationService.instance
+                                                    .formatLeadTimeText(
+                                                        _notifyLeadDays,
+                                                        _notifyLeadHours,
+                                                        _notifyLeadMinutes)),
+                                            onTap:
+                                                _showNotificationLeadTimeDialog,
+                                            // 竖干往下接「通知文案风格」
+                                            stemEndsAtBranch: false,
+                                          ),
+                                          _buildBranchRow(
+                                            title: '通知文案风格',
+                                            trailing:
+                                                _buildCopyStyleSelector(),
+                                            // 本组末子：竖干到分支口即止
+                                            stemEndsAtBranch: true,
+                                          ),
+                                          // 本组是卡片最后一项，而滑块正好 40 高
+                                          // 把分支行撑满——不加这点底部留白，
+                                          // 滑块下缘就贴着卡片边
+                                          const SizedBox(height: 9),
+                                        ],
+                                      )
+                                    : const SizedBox.shrink(
+                                        key: ValueKey('notify-options-hidden'),
+                                      ),
+                              ),
+                            ]),
+                            const SizedBox(height: 24),
+                            _buildSectionTitle('AI设置'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              // 芯片（AI 算力）表意 AI 功能；星芒已让给导航栏
+                              // 「对话」图标，避免同屏出现两个相同图形
+                              _buildSettingsItem(
+                                icon: Icons.memory_outlined,
+                                title: 'AI 功能',
+                                trailing: Switch(
+                                  value: _aiEnabled,
+                                  onChanged: (value) async {
+                                    HapticFeedback.selectionClick();
+                                    if (value) {
+                                      if (!_aiConsentAccepted) {
+                                        final accepted =
+                                            await _showAIConsentDialog();
+                                        if (!accepted) return;
+                                      }
+                                      final hasConfig = await _hasAnyAIConfig();
+                                      if (!hasConfig) {
+                                        await _showDeveloperOptionsDialog();
+                                      }
+                                      final recheckConfig =
+                                          await _hasAnyAIConfig();
+                                      final prefs =
+                                          await SharedPreferences.getInstance();
+                                      if (recheckConfig) {
+                                        await prefs.setBool('ai_enabled', true);
+                                        if (mounted)
+                                          setState(() {
+                                            _aiEnabled = true;
+                                          });
+                                      } else {
+                                        await prefs.setBool(
+                                            'ai_enabled', false);
+                                        if (mounted) {
+                                          setState(() {
+                                            _aiEnabled = false;
+                                          });
+                                          toastNotification.show(
+                                              context, '未配置API，AI功能已关闭',
+                                              type: ToastType.info);
+                                        }
+                                      }
+                                    } else {
+                                      final prefs =
+                                          await SharedPreferences.getInstance();
+                                      await prefs.setBool('ai_enabled', false);
+                                      if (mounted)
+                                        setState(() {
+                                          _aiEnabled = false;
+                                        });
+                                    }
+                                  },
+                                  activeThumbColor: const Color(0xFF4A90E2),
                                 ),
-                              ],
-                            ),
-                            trailing: Switch(
-                              value: _reduceMotionEnabled,
-                              activeThumbColor: const Color(0xFF4A90E2),
-                              onChanged: (v) async {
-                                HapticFeedback.selectionClick();
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setBool('reduce_motion_enabled', v);
-                                setState(() {
-                                  _reduceMotionEnabled = v;
-                                });
-                                // 减弱动态切换：标记课表页刷新（morph 改统一
-                                // 对话框、卡片模糊强制开关）
-                                TimetableScreenState.markNeedsRefresh();
-                              },
-                            ),
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-                        // 本栏收纳「应用自身信息 + 支持开发者 + 维护类操作」：
-                        // 关于 / 打赏支持 / 自动检查更新 / 清除所有数据
-                        _buildSectionTitle('关于与支持'),
-                        const SizedBox(height: 12),
-                        _buildSettingsGroup([
-                          _buildSettingsItem(
-                            icon: Icons.info_outline,
-                            title: '关于',
-                            subtitle: 'CourseHub v$appVersion',
-                            onTap: _showAboutDialog,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.volunteer_activism_outlined,
-                            title: '打赏支持',
-                            onTap: _showDonationDialog,
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.arrow_circle_up_outlined,
-                            titleWidget: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text(
-                                  '自动检查更新',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                              ),
+                              // 总开关打开后才出现两个子项（与「任务临期通知」
+                              // 的展开方式一致：淡入 + 高度展开）
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 280),
+                                switchInCurve: Curves.easeOutCubic,
+                                switchOutCurve: Curves.easeInCubic,
+                                transitionBuilder: (child, animation) {
+                                  return FadeTransition(
+                                    opacity: animation,
+                                    child: SizeTransition(
+                                      sizeFactor: animation,
+                                      axisAlignment: -1,
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                child: _aiEnabled
+                                    ? Column(
+                                        key: const ValueKey(
+                                            'ai-sub-options-visible'),
+                                        children: [
+                                          _buildAISubItem(
+                                            title: '自动任务分析',
+                                            value: _aiAutoTaskAnalysis,
+                                            // 竖干贯穿本行以衔接下一子项
+                                            stemEndsAtBranch: false,
+                                            onChanged: (value) async {
+                                              HapticFeedback.selectionClick();
+                                              await AIAutoAnalysisFlags
+                                                  .setTaskEnabled(value);
+                                              if (value &&
+                                                  _isBuiltinProvider &&
+                                                  mounted) {
+                                                // 内置模型走公共额度：开自动
+                                                // 分析会无感消耗，提醒一次
+                                                toastNotification.show(
+                                                  context,
+                                                  '开启后用量消耗更快',
+                                                  type: ToastType.info,
+                                                );
+                                              }
+                                              if (mounted)
+                                                setState(() {
+                                                  _aiAutoTaskAnalysis = value;
+                                                });
+                                            },
+                                          ),
+                                          _buildAISubItem(
+                                            title: '自动课表分析',
+                                            value: _aiAutoScheduleAnalysis,
+                                            // 末行竖干只画到分支口，不再向下延伸
+                                            stemEndsAtBranch: true,
+                                            onChanged: (value) async {
+                                              HapticFeedback.selectionClick();
+                                              await AIAutoAnalysisFlags
+                                                  .setScheduleEnabled(value);
+                                              if (value &&
+                                                  _isBuiltinProvider &&
+                                                  mounted) {
+                                                toastNotification.show(
+                                                  context,
+                                                  '开启后用量消耗更快',
+                                                  type: ToastType.info,
+                                                );
+                                              }
+                                              if (mounted)
+                                                setState(() {
+                                                  _aiAutoScheduleAnalysis =
+                                                      value;
+                                                });
+                                            },
+                                          ),
+                                        ],
+                                      )
+                                    : const SizedBox.shrink(
+                                        key: ValueKey('ai-sub-options-hidden'),
+                                      ),
+                              ),
+                              _buildDivider(),
+                              // 齿轮表示「AI 配置」；导航栏「设置」已改用调节滑杆，
+                              // 避免同屏出现两个 tune 图标
+                              _buildSettingsItem(
+                                icon: Icons.settings_outlined,
+                                title: 'AI配置',
+                                // 小字按当前提供商显示具体模型（节点/模型名），
+                                // 未开启时提示开启后可用
+                                subtitle:
+                                    _aiEnabled ? _aiConfigDetail : '开启AI后可用',
+                                onTap: _aiEnabled
+                                    ? () => _showDeveloperOptionsDialog()
+                                    : null,
+                              ),
+                            ]),
+                            const SizedBox(height: 24),
+                            _buildSectionTitle('个性化'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              _buildSettingsItem(
+                                // 左侧图标随当前生效模式切换：深色月亮 / 浅色太阳
+                                icon: AppColors.isDark(context)
+                                    ? Icons.dark_mode
+                                    : Icons.light_mode,
+                                title: '界面风格',
+                                trailing: _buildThemeModeSelector(),
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.image_outlined,
+                                title: '课表壁纸',
+                                subtitle:
+                                    _wallpaperEnabled && _wallpaperPath != null
+                                        ? '已启用'
+                                        : _wallpaperPath != null
+                                            ? '未启用'
+                                            : '选择图片作为课表背景',
+                                onTap: _selectWallpaperImage,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.opacity_outlined,
+                                title: '背景透明度',
+                                subtitle: _wallpaperEnabled
+                                    ? '$_wallpaperOpacity%'
+                                    : '开启壁纸功能后可用',
+                                onTap: _wallpaperEnabled
+                                    ? _selectWallpaperOpacity
+                                    : null,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.motion_photos_off_outlined,
+                                titleWidget: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      '减弱动态效果',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    // 带圈问号（同节点菜单）：点击向下弹出说明气泡
+                                    GestureDetector(
+                                      key: _reduceMotionHelpKey,
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _toggleReduceMotionTip,
+                                      child: Icon(
+                                        Icons.help_outline,
+                                        size: 15,
+                                        color:
+                                            AppColors.of(context).textTertiary,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 6),
-                                // 带圈问号（同减弱动态效果）：点击向下弹出说明气泡
-                                GestureDetector(
-                                  key: _autoUpdateHelpKey,
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _toggleAutoUpdateTip,
-                                  child: Icon(
-                                    Icons.help_outline,
-                                    size: 15,
-                                    color: AppColors.of(context).textTertiary,
-                                  ),
+                                trailing: Switch(
+                                  value: _reduceMotionEnabled,
+                                  activeThumbColor: const Color(0xFF4A90E2),
+                                  onChanged: (v) async {
+                                    HapticFeedback.selectionClick();
+                                    final prefs =
+                                        await SharedPreferences.getInstance();
+                                    await prefs.setBool(
+                                        'reduce_motion_enabled', v);
+                                    ReduceMotionFlag.refresh();
+                                    setState(() {
+                                      _reduceMotionEnabled = v;
+                                    });
+                                    // 减弱动态切换：标记课表页刷新（morph 改统一
+                                    // 对话框、卡片模糊强制开关）
+                                    TimetableScreenState.markNeedsRefresh();
+                                  },
                                 ),
-                              ],
-                            ),
-                            trailing: Switch(
-                              value: _autoUpdateCheckEnabled,
-                              activeThumbColor: const Color(0xFF4A90E2),
-                              onChanged: (v) async {
-                                HapticFeedback.selectionClick();
-                                final prefs =
-                                    await SharedPreferences.getInstance();
-                                await prefs.setBool('auto_update_check', v);
-                                setState(() {
-                                  _autoUpdateCheckEnabled = v;
-                                });
-                              },
-                            ),
-                          ),
-                          _buildDivider(),
-                          _buildSettingsItem(
-                            icon: Icons.delete_outline,
-                            title: '清除所有数据',
-                            subtitle: '删除所有课程和设置',
-                            isDestructive: true,
-                            onTap: _clearAllData,
-                          ),
-                        ]),
-                      ],
+                              ),
+                            ]),
+                            const SizedBox(height: 24),
+                            // 本栏收纳「应用自身信息 + 支持开发者 + 维护类操作」：
+                            // 关于 / 打赏支持 / 自动检查更新 / 清除所有数据
+                            _buildSectionTitle('关于与支持'),
+                            const SizedBox(height: 12),
+                            _buildSettingsGroup([
+                              _buildSettingsItem(
+                                icon: Icons.info_outline,
+                                title: '关于',
+                                subtitle: 'CourseHub v$appVersion',
+                                onTap: _showAboutDialog,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.volunteer_activism_outlined,
+                                title: '打赏支持',
+                                onTap: _showDonationDialog,
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.arrow_circle_up_outlined,
+                                titleWidget: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      '自动检查更新',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    // 带圈问号（同减弱动态效果）：点击向下弹出说明气泡
+                                    GestureDetector(
+                                      key: _autoUpdateHelpKey,
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _toggleAutoUpdateTip,
+                                      child: Icon(
+                                        Icons.help_outline,
+                                        size: 15,
+                                        color:
+                                            AppColors.of(context).textTertiary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                trailing: Switch(
+                                  value: _autoUpdateCheckEnabled,
+                                  activeThumbColor: const Color(0xFF4A90E2),
+                                  onChanged: (v) async {
+                                    HapticFeedback.selectionClick();
+                                    final prefs =
+                                        await SharedPreferences.getInstance();
+                                    await prefs.setBool('auto_update_check', v);
+                                    setState(() {
+                                      _autoUpdateCheckEnabled = v;
+                                    });
+                                  },
+                                ),
+                              ),
+                              _buildDivider(),
+                              _buildSettingsItem(
+                                icon: Icons.delete_outline,
+                                title: '清除所有数据',
+                                subtitle: '删除所有课程和设置',
+                                isDestructive: true,
+                                onTap: _clearAllData,
+                              ),
+                            ]),
+                          ],
+                        ),
+                      ]),
                     ),
-                  ]),
-                ),
+                  ),
+                ],
               ),
-            ],
             ),
           ),
           _buildPinnedHeader(topPadding),
@@ -1224,41 +1508,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildPinnedHeader(double topPadding) {
+    // 无界渐变标题栏：模糊与雾化自顶部向底缘衰减归零，无分隔线无硬边；
+    // 「减弱动态效果」开启时退化为无模糊的纯雾化渐变（内容 ghost 透出）
     return Positioned(
       left: 0,
       right: 0,
       top: 0,
-      child: ClipRRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColors.of(context).glassShell.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.85 : 0.75),
-              border: Border(
-                bottom: BorderSide(color: AppColors.of(context).borderWeak, width: 0.5),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(height: topPadding),
-                SizedBox(
-                  height: 56,
-                  child: Center(
-                    child: Text(
-                      '设置',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.of(context).textPrimary,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      child: GradientBlurHeader(
+        topPadding: topPadding,
+        title: '设置',
+        // 雾面曲线整体下移 6px（绘制区不越出标题栏，减弱模式同样
+        // 生效）：同高度浓度=原上移 6px 处，标题下方一行可读性↑
+        blurCurveShift: 6,
+        // 标题栏本体增高 6px：内容区起始位置随之下移（列表顶部偏移
+        // 已同步 +6），底部坡面多出 6px 渐变空间
+        layoutBottomExtend: 6,
+        reduceMotion: _reduceMotionEnabled,
       ),
     );
   }
@@ -1400,7 +1665,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildSettingsItem({
-    required IconData icon,
+    IconData? icon,
     String? title,
     Widget? titleWidget,
     String? subtitle,
@@ -1413,20 +1678,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 12),
       horizontalTitleGap: 12,
-      leading: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: isDestructive
-              ? Colors.red.withValues(alpha: 0.1)
-              : const Color(0xFF4A90E2).withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          icon,
-          color: isDestructive ? Colors.red : const Color(0xFF4A90E2),
-          size: 18,
-        ),
-      ),
+      // icon 为 null = 不带图标的行（左侧分支线由 [_buildBranchRow] 的
+      // Stack 画）：仍占一个与图标底座等宽的空位，标题左缘保持 54 不动
+      leading: icon == null
+          ? const SizedBox(width: 30)
+          : Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: isDestructive
+                    ? Colors.red.withValues(alpha: 0.1)
+                    : const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                icon,
+                color: isDestructive ? Colors.red : const Color(0xFF4A90E2),
+                size: 18,
+              ),
+            ),
       title: titleWidget ??
           Text(
             title!,
@@ -1444,10 +1713,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               overflow: TextOverflow.ellipsis,
             )
           : null,
-      trailing: trailing ?? Icon(
-        Icons.chevron_right,
-        color: AppColors.of(context).textTertiary,
-      ),
+      trailing: trailing ??
+          Icon(
+            Icons.chevron_right,
+            color: AppColors.of(context).textTertiary,
+          ),
       onTap: onTap,
     );
   }
@@ -1461,16 +1731,182 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 深色模式当前值的描述文案
-  String _themeModeLabel(ThemeMode mode) {
-    switch (mode) {
-      case ThemeMode.dark:
-        return '深色';
-      case ThemeMode.system:
-        return '跟随系统';
-      case ThemeMode.light:
-        return '浅色';
-    }
+  /// 树状分支子项行的通用骨架：左侧 38 宽的分支连接区 + 标题 + 右侧控件。
+  /// 「AI 功能」下的勾选圈子项与「实时课程提醒」「任务临期通知」下的
+  /// 跳转/滑块子项共用同一套标题字号（14/w500）与行高（36），
+  /// 只在右侧控件和点击语义上分叉。
+  ///
+  /// 分支区不再写死高度：改用 Stack 让竖干 top/bottom 拉满，行高交给内容
+  /// 决定（minHeight 36；右侧放 40 高的分段滑块时整行跟着长，竖干同步变高，
+  /// 与下一行的竖口仍接得上）。
+  ///
+  /// 竖干不能塞进 ListTile 的 leading：leading 拿到的是松约束，没有自带
+  /// 尺寸的 CustomPaint 会被压成 0 高（实测 Size(38, 0)），竖干就在行间断掉；
+  /// 套 IntrinsicHeight 也救不回来，还会把两行小字的行高从 100 量成 80。
+  ///
+  /// 分支区几何与 [_buildDivider] 的 indent 对齐：page x 12..50、竖干 x=27，
+  /// 标题左缘 54（12 左边距 + 38 分支区 + 4 间距）。
+  Widget _buildBranchRow({
+    required String title,
+    required bool stemEndsAtBranch,
+    required Widget trailing,
+    VoidCallback? onTap,
+  }) {
+    final colors = AppColors.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // 整行可点；无跳转语义的行（右侧是控件本身）传 null，
+      // 子项在右侧控件里各自处理手势
+      onTap: onTap,
+      child: Stack(
+        children: [
+          Positioned(
+            left: 12,
+            top: 0,
+            bottom: 0,
+            width: 38,
+            child: CustomPaint(
+              painter: _BranchConnectorPainter(
+                // 分支线比分隔线重一档、比正文轻：深浅色下都能看清但不抢眼
+                color: colors.textTertiary.withValues(alpha: 0.5),
+                stemEndsAtBranch: stemEndsAtBranch,
+              ),
+            ),
+          ),
+          // 分支区的占位仍留在行内：Row 需要它把标题顶到 x=54
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 36),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  const SizedBox(width: 38),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: colors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  trailing,
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 分支子项的「当前值 + 箭头」尾部：值原本挂在标题下的 subtitle，
+  /// 子项统一压成单行后挪到 > 左侧紧贴箭头显示。
+  Widget _buildBranchValueTrailing(String value) {
+    final colors = AppColors.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              color: colors.textSecondary,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Icon(
+          Icons.chevron_right,
+          color: colors.textTertiary,
+        ),
+      ],
+    );
+  }
+
+  /// 「AI 功能」下的子选项行：不带图标底座，左侧改画一段树状分支连接线，
+  /// 右侧用勾选圈（比父项的 Switch 轻一档），从属关系一眼可辨。
+  /// 标题、行高与 [_buildBranchRow] 一致，这里只提供勾选圈尾部与点击语义。
+  Widget _buildAISubItem({
+    required String title,
+    required bool value,
+    required bool stemEndsAtBranch,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return _buildBranchRow(
+      title: title,
+      stemEndsAtBranch: stemEndsAtBranch,
+      trailing: _buildAISubCheck(value: value),
+      // 整行可点，与勾选圈本身等效（子行没有二级页面，没有跳转语义）
+      onTap: () => onChanged(!value),
+    );
+  }
+
+  /// 子选项的勾选圈：勾选 = 蓝色主题实心 + 白色对勾 + 一圈高光描边，
+  /// 未勾选 = 灰色空心圈。比父项的 Switch 明显轻一档，
+  /// 避免子项和总开关在视觉重量上打架。
+  ///
+  /// 外层套一个与父项 Switch 盒子同宽（60）的居中区，使圆心与开关中心同轴
+  /// ——否则 22 的圈靠右对齐会比开关中心右偏一截。
+  ///
+  /// 启用时对勾走「淡入 + 描边逐段画出」，两层同 duration 同 curve 叠在
+  /// 一起（见 [_CheckMarkPainter]）；圈圈本身尺寸恒定
+  /// （槽位常驻，不把勾选状态表达成位移）。
+  /// 点击由 [_buildAISubItem] 的整行手势接管，这里不再自带手势，
+  /// 以免一次点击被两层识别者各消费一次。
+  Widget _buildAISubCheck({required bool value}) {
+    const accent = Color(0xFF4A90E2);
+    const reveal = Duration(milliseconds: 240);
+    final ringColor = value ? accent : AppColors.of(context).textTertiary;
+    return SizedBox(
+      width: 60,
+      child: Center(
+        // 高光描边：勾选时外圈浮出一圈半透明主题色环；容器尺寸恒定，
+        // 透明↔着色不会推动布局。
+        // 30 = 22 本体 + 2×(1.5 描边 + 2.5 留白)：Container 的子区同时被
+        // border 和 padding 各内缩一次，所以外框必须把两层都算进去，
+        // 否则本体只有 19（实测 28/3/1.5 那版被压到 16）。
+        child: AnimatedContainer(
+          duration: reveal,
+          curve: Curves.easeOutCubic,
+          width: 30,
+          height: 30,
+          padding: const EdgeInsets.all(2.5),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color:
+                  value ? accent.withValues(alpha: 0.32) : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: AnimatedContainer(
+            duration: reveal,
+            curve: Curves.easeOutCubic,
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: value ? accent : Colors.transparent,
+              border: Border.all(color: ringColor, width: 1.5),
+            ),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.0, end: value ? 1.0 : 0.0),
+              duration: reveal,
+              curve: Curves.easeOutCubic,
+              builder: (context, t, _) =>
+                  CustomPaint(painter: _CheckMarkPainter(progress: t)),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 「个性化 → 界面风格」三段可拖动滑块：浅色 / 深色 / 跟随
@@ -1488,14 +1924,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
         activeValue: context.watch<ThemeController>().mode,
         onChanged: (mode) {
-          HapticFeedback.selectionClick();
+          // 震动由 SegmentedSelector 内部统一发一次轻点选反馈，这里不再叠加
           ThemeController.instance.setMode(mode);
         },
       ),
     );
   }
 
-Future<bool> _showAIConsentDialog() async {
+  /// 「任务通知 → 通知文案风格」三段可拖动滑块（轻松 / 严肃 / 鸡血），
+  /// 与「界面风格」同款控件、同款白色把手
+  Widget _buildCopyStyleSelector() {
+    return SizedBox(
+      width: 150,
+      child: SegmentedSelector<NotificationCopyStyle>(
+        whiteKnobInLight: true,
+        items: const [
+          SegmentItem(label: '轻松', value: NotificationCopyStyle.casual),
+          SegmentItem(label: '严肃', value: NotificationCopyStyle.serious),
+          SegmentItem(label: '鸡血', value: NotificationCopyStyle.motivational),
+        ],
+        activeValue: _notificationCopyStyle,
+        onChanged: _applyNotificationCopyStyle,
+      ),
+    );
+  }
+
+  Future<bool> _showAIConsentDialog() async {
     final accepted = await AIConsentDialog.show(context);
     if (!mounted || !accepted) return false;
     final prefs = await SharedPreferences.getInstance();
@@ -1527,1000 +1981,21 @@ Future<bool> _showAIConsentDialog() async {
     return false;
   }
 
+  /// AI 配置：三个阶段（主菜单 / Agnes / 自定义 API）融合在同一个对话框内，
+  /// 实现收在 `dialogs/ai_config_dialog.dart`。这里只负责打开，并在保存后
+  /// 刷新设置页自身的展示（「AI配置」项小字与开关状态）
   Future<void> _showDeveloperOptionsDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    int agnesNode = prefs.getInt('agnes_node') ?? 1;
-    int builtinNode = prefs.getInt('builtin_node') ?? 1;
-    return showBouncyDialog(
-      context: context,
-      barrierLabel: 'AI功能配置',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）；
-      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 555.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(280.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 400, maxHeight: dialogMaxHeight);
+    await showAIConfigDialog(
+      context,
+      onConfigSaved: () async {
+        await _loadAIConfig();
       },
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  width: 48,
-                                  height: 48,
-                                  decoration: BoxDecoration(
-                                    color: AppColors.of(context).surfaceAlt,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.auto_awesome,
-                                    size: 24,
-                                    color: AppColors.of(context).textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                const Text(
-                                  'AI功能配置',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '选择或配置AI服务提供商',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.of(context).textSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            Expanded(
-                              child: ScrollConfiguration(
-                                behavior: ScrollConfiguration.of(context).copyWith(
-                                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                ),
-                                child: SingleChildScrollView(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 8),
-                                      // 内置模型（限时免费）：与推荐选项相互独立，
-                                      // 选中任意节点即切换到内置模型
-                                      _buildBuiltinModelCard(
-                                        node: builtinNode,
-                                        isBuiltinActive: _isBuiltinProvider,
-                                        onNodeSelected: (node) async {
-                                          await prefs.setInt('builtin_node', node);
-                                          await prefs.setString('ai_provider', 'builtin');
-                                          await prefs.setBool('fast_mode_enabled', false);
-                                          await prefs.setBool('ai_enabled', true);
-                                          // 同步后端服务的节点状态（路由按节点选 endpoint）
-                                          await AIService.instance.setBuiltinNode(node);
-                                          AIAssistantScreenState.markNeedsRefresh();
-                                          await _loadAIConfig();
-                                          setDialogState(() {
-                                            builtinNode = node;
-                                          });
-                                        },
-                                      ),
-                                      const SizedBox(height: 24),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Container(
-                                              height: 1,
-                                              color: AppColors.of(context).panel(0.4),
-                                            ),
-                                          ),
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                                            child: Text(
-                                              '推荐选项',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: AppColors.of(context).textTertiary,
-                                              ),
-                                            ),
-                                          ),
-                                          Expanded(
-                                            child: Container(
-                                              height: 1,
-                                              color: AppColors.of(context).panel(0.4),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 16),
-                                      _buildRecommendedOption(
-                                        title: 'Agnes AI',
-                                        subtitle: '输入Agnes AI密钥（免费使用），开箱即用',
-                                        iconAsset: 'assets/icon/agnes_icon.png',
-                                        color: const Color(0xFF4A90E2),
-                                        isSelected: _providerConfigured && _isAgnesProvider,
-                                        onTap: () async {
-                                          await _showAgnesConfigDialog();
-                                          // 保存后立即重载：更新设置项小字与选中态
-                                          await _loadAIConfig();
-                                          if (mounted) {
-                                            setDialogState(() {});
-                                          }
-                                        },
-                                      ),
-                                      const SizedBox(height: 12),
-                                      _buildCustomAPIOption(
-                                        title: '自定义 OpenAI 兼容 API',
-                                        subtitle: '输入您的API地址和密钥',
-                                        icon: Icons.api,
-                                        isSelected: _providerConfigured && _isCustomProvider,
-                                        onTap: () async {
-                                          await _showCustomAPIDialog();
-                                          // 保存后立即重载：更新设置项小字与选中态
-                                          await _loadAIConfig();
-                                          if (mounted) {
-                                            setDialogState(() {});
-                                          }
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              width: double.infinity,
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: AppColors.of(context).borderWeak),
-                                  ),
-                                ),
-                                child: const Text('关闭'),
-                              ),
-                            ),
-                          ],
-                        );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildCustomAPIOption({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    bool isSelected = false,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF4A90E2).withValues(alpha: 0.1) : AppColors.of(context).panel(0.4),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            // 未选中描边：减弱动态时改浅灰（白描边与近实底壳背景融合）
-            color: isSelected
-                ? const Color(0xFF4A90E2)
-                : (_reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFF4A90E2).withValues(alpha: 0.2)
-                    : AppColors.of(context).panel(0.4),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                icon,
-                size: 20,
-                color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: isSelected ? const Color(0xFF4A90E2) : null,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.of(context).textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            isSelected
-                ? const Icon(Icons.check_circle, color: Color(0xFF4A90E2), size: 20)
-                : Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRecommendedOption({
-    required String title,
-    required String subtitle,
-    IconData? icon,
-    String? iconAsset,
-    required Color color,
-    required bool isSelected,
-    required VoidCallback onTap,
-    bool disabled = false,
-  }) {
-    return GestureDetector(
-      onTap: disabled ? null : onTap,
-      child: Opacity(
-        opacity: disabled ? 0.5 : 1.0,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isSelected ? color.withValues(alpha: 0.1) : AppColors.of(context).panel(0.4),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              // 未选中描边：减弱动态时改浅灰（白描边与近实底壳背景融合）
-              color: isSelected
-                  ? color
-                  : (_reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
-              width: isSelected ? 2 : 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: iconAsset != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Image.asset(
-                          iconAsset,
-                          width: 20,
-                          height: 20,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : Icon(icon, size: 20, color: color),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: isSelected ? color : null,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.of(context).textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // 未选中时显示与自定义API同款箭头
-              if (isSelected)
-                Icon(Icons.check_circle, color: color, size: 20)
-              else
-                Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
-          ],
-        ),
-      ),
-      ),
     );
   }
 
   /// 内置模型（限时免费）卡片：右侧统一样式下拉切换节点 1-4。
   /// 与推荐选项相互独立：未启用时选项框显示"未使用"且菜单无对勾，
   /// 选中任意节点即切换到内置模型（推荐选项随之取消勾选）
-  Widget _buildBuiltinModelCard({
-    required int node,
-    required bool isBuiltinActive,
-    required ValueChanged<int> onNodeSelected,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF4A90E2).withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color(0xFF4A90E2).withValues(alpha: 0.4),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      '内置模型',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    // 限时免费标签：浅蓝底胶囊，稍深蓝小字
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF4A90E2).withValues(alpha: 0.18)
-                            : const Color(0xFFE3F0FB),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: const Color(0xFF3B82C4).withValues(alpha: 0.45),
-                        ),
-                      ),
-                      child: Text(
-                        '限时免费',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? const Color(0xFF9CC8F5)
-                              : const Color(0xFF3B82C4),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '高峰时段可能响应缓慢或无响应',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.of(context).textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            // 固定宽度（收起态选项框）：菜单宽度由下方 menuWidth 单独指定
-            width: 128,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              color: AppColors.of(context).surface,
-              borderRadius: BorderRadius.circular(8),
-              // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
-              border: Border.all(
-                color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
-              ),
-            ),
-            // BlurredDropdown（而非原生 DropdownButton）：与全局毛玻璃风格统一的下拉菜单
-            child: BlurredDropdown<int>(
-              prefixIcon: const Icon(Icons.hub_outlined, size: 16, color: Color(0xFF4A90E2)),
-              // 未启用时 value 为 null：无匹配项 → 按钮显示"未使用"、菜单不打勾
-              value: isBuiltinActive ? node : null,
-              isExpanded: true,
-              // 菜单独立定宽（与对话页徽章节点菜单同宽 120，
-              // "节点 X" + 问号图标 + 勾号槽不换行）
-              menuWidth: 120,
-              hint: Text(
-                '未使用',
-                style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
-              ),
-              icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
-              items: [
-                for (var i = 1; i <= 4; i++)
-                  DropdownMenuItem<int>(
-                    value: i,
-                    child: Text(
-                      '节点 $i',
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ),
-              ],
-              onChanged: (next) {
-                if (next != null) {
-                  onNodeSelected(next);
-                }
-              },
-              // 节点 3/4 右侧问号图标的提示文案
-              infoMessages: const {
-                3: '节点3延迟较高，请优先使用节点1、2。',
-                4: '节点4延迟较高，请优先使用节点1、2。',
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Agnes AI 配置弹窗：密钥输入 + 模型下拉（Agnes 2.0 Flash / Agnes 2.5 Flash）
-  Future<void> _showAgnesConfigDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    final controller = TextEditingController(text: prefs.getString('agnes_api_key') ?? '');
-    // 显示名 → 实际模型名映射（后台实际使用的模型标识）
-    const defaultModel = 'agnes-2.0-flash';
-    String selectedModel = prefs.getString('agnes_model') ?? defaultModel;
-    if (selectedModel != 'agnes-2.0-flash' && selectedModel != 'agnes-2.5-flash') {
-      selectedModel = defaultModel;
-    }
-    // 思考强度：与自定义API同款（空 = 直接回答）
-    String reasoningEffort = prefs.getString('agnes_reasoning_effort') ?? '';
-
-    await showBouncyDialog(
-      context: context,
-      barrierLabel: 'Agnes AI 配置',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 560.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(300.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
-      },
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Agnes AI 配置',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      // 带圈问号：点击向右弹出推荐说明气泡
-                      _AgnesHelpIcon(reduceMotion: _reduceMotionEnabled),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '免费密钥申请地址：https://www.agnes-ai.cn/',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: AppColors.of(context).textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  AppTextField(
-                    contextMenuBuilder: styledEditableContextMenu,
-                    controller: controller,
-                    decoration: InputDecoration(
-                      hintText: '请输入 Agnes AI API Key',
-                      filled: true,
-                      fillColor: AppColors.of(context).panel(0.4),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFF4A90E2)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Text(
-                        '模型',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppColors.of(context).textSecondary,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: AppColors.of(context).surface,
-                            borderRadius: BorderRadius.circular(12),
-                            // 灰描边仅减弱动态时显示：正常模式白底经毛玻璃本就有边界
-                            border: Border.all(
-                              color: _reduceMotionEnabled ? AppColors.of(context).chipIdle : AppColors.of(context).panel(0.4),
-                            ),
-                          ),
-                          // BlurredDropdown：与全局毛玻璃风格统一的下拉菜单
-                          child: BlurredDropdown<String>(
-                            value: selectedModel,
-                            isExpanded: true,
-                            icon: const Icon(Icons.expand_more, size: 18, color: Color(0xFF4A90E2)),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'agnes-2.0-flash',
-                                child: Text(
-                                  'Agnes 2.0 Flash',
-                                  style: TextStyle(fontSize: 13),
-                                ),
-                              ),
-                              DropdownMenuItem(
-                                value: 'agnes-2.5-flash',
-                                child: Text(
-                                  'Agnes 2.5 Flash',
-                                  style: TextStyle(fontSize: 13),
-                                ),
-                              ),
-                            ],
-                            onChanged: (next) {
-                              if (next != null) {
-                                setDialogState(() {
-                                  selectedModel = next;
-                                });
-                              }
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  // 思考强度：与自定义API同款滑动选项卡（1:1复刻）
-                  Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
-                  const SizedBox(height: 8),
-                  SegmentedSelector<String>(
-                    items: const [
-                      SegmentItem(label: '直接回答', value: ''),
-                      SegmentItem(label: 'Low', value: 'low'),
-                      SegmentItem(label: 'Medium', value: 'medium'),
-                      SegmentItem(label: 'High', value: 'high'),
-                    ],
-                    activeValue: reasoningEffort.isEmpty ? '' : reasoningEffort,
-                    onChanged: (v) {
-                      setDialogState(() {
-                        reasoningEffort = v;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: AppColors.of(context).borderWeak),
-                            ),
-                          ),
-                          child: const Text('取消'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () async {
-                            final apiKey = controller.text.trim();
-
-                            if (apiKey.isEmpty) {
-                              toastNotification.show(context, '请填写 Agnes AI API Key', type: ToastType.error);
-                              return;
-                            }
-
-                            await prefs.setString('agnes_api_key', apiKey);
-                            await prefs.setString('agnes_model', selectedModel);
-                            await prefs.setString('agnes_reasoning_effort', reasoningEffort);
-                            await prefs.setString('ai_provider', 'agnes');
-                            AIAssistantScreenState.markNeedsRefresh();
-                            await prefs.setBool('fast_mode_enabled', false);
-                            await prefs.setBool('ai_enabled', true);
-                            AIService.instance.setAgnesConfig(apiKey, selectedModel);
-
-                            if (mounted) {
-                              Navigator.pop(context);
-                              setState(() {
-                                _isAgnesProvider = true;
-                                _isCustomProvider = false;
-                                _isBuiltinProvider = false;
-                                _fastModeEnabled = false;
-                                _providerConfigured = true;
-                                _aiEnabled = true;
-                              });
-                              toastNotification.show(context, '已切换到Agnes AI模型', type: ToastType.success);
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.isDark(context)
-                                ? AppColors.of(context).surfaceAlt
-                                : Colors.grey.shade800,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: const Text('保存'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _showCustomAPIDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    final urlController = TextEditingController(text: prefs.getString('custom_api_url') ?? '');
-    final keyController = TextEditingController(text: prefs.getString('custom_api_key') ?? '');
-    final modelController = TextEditingController(text: prefs.getString('custom_api_model') ?? 'gpt-4o-mini');
-    bool manualVisionOverride = prefs.getBool('custom_api_vision_manual_override') ?? false;
-    bool manualVisionEnabled = prefs.getBool('custom_api_vision_manual_value') ?? false;
-    String reasoningEffort = prefs.getString('custom_api_reasoning_effort') ?? '';
-    bool webSearchEnabled = prefs.getBool('web_search_enabled') ?? false;
-
-    await showCustomAPIConfigDialog(
-      context: context,
-      urlController: urlController,
-      keyController: keyController,
-      modelController: modelController,
-      manualVisionOverride: manualVisionOverride,
-      manualVisionEnabled: manualVisionEnabled,
-      reasoningEffort: reasoningEffort,
-      webSearchEnabled: webSearchEnabled,
-      onVisionUpdated: (override, enabled) {
-        manualVisionOverride = override;
-        manualVisionEnabled = enabled;
-      },
-      onReasoningUpdated: (effort) {
-        reasoningEffort = effort;
-      },
-      onWebSearchUpdated: (enabled) {
-        webSearchEnabled = enabled;
-      },
-      onSave: () async {
-        if (urlController.text.trim().isEmpty ||
-            keyController.text.trim().isEmpty) {
-          toastNotification.show(context, '请填写API地址和密钥', type: ToastType.error);
-          return;
-        }
-
-        await prefs.setString('custom_api_url', urlController.text.trim());
-        await prefs.setString('custom_api_key', keyController.text.trim());
-        await prefs.setString('custom_api_model', modelController.text.trim());
-        await prefs.setString('ai_provider', 'custom');
-                            AIAssistantScreenState.markNeedsRefresh();
-        await prefs.setBool('fast_mode_enabled', false);
-        await prefs.setBool('ai_enabled', true);
-
-        await prefs.setString('custom_api_reasoning_effort', reasoningEffort.isNotEmpty ? reasoningEffort : '');
-
-        await prefs.setBool('web_search_enabled', webSearchEnabled);
-
-        AIService.instance.setCustomApiConfig(
-          apiUrl: urlController.text.trim(),
-          apiKey: keyController.text.trim(),
-          model: modelController.text.trim(),
-        );
-        await AIService.instance.setCustomVisionManualOverride(
-          enabled: manualVisionOverride,
-          supportsVision: manualVisionEnabled,
-        );
-        await AIService.instance.setCustomReasoningEffort(
-          reasoningEffort.isNotEmpty ? reasoningEffort : null,
-        );
-
-        if (mounted) {
-          Navigator.pop(context);
-          setState(() {
-            _isCustomProvider = true;
-            _isAgnesProvider = false;
-            _isBuiltinProvider = false;
-            _providerConfigured = true;
-            _aiEnabled = true;
-            _fastModeEnabled = false;
-            _customVisionManualOverride = manualVisionOverride;
-            _customVisionEnabled = manualVisionEnabled;
-          });
-          toastNotification.show(context, '自定义API已保存', type: ToastType.success);
-        }
-      },
-    );
-  }
-
-  static Future<void> showCustomAPIConfigDialog({
-    required BuildContext context,
-    required TextEditingController urlController,
-    required TextEditingController keyController,
-    required TextEditingController modelController,
-    required bool manualVisionOverride,
-    required bool manualVisionEnabled,
-    required String reasoningEffort,
-    required bool webSearchEnabled,
-    required void Function(bool override, bool enabled) onVisionUpdated,
-    required void Function(String effort) onReasoningUpdated,
-    required void Function(bool enabled) onWebSearchUpdated,
-    required VoidCallback onSave,
-  }) async {
-    bool localOverride = manualVisionOverride;
-    bool localEnabled = manualVisionEnabled;
-    String localReasoning = reasoningEffort;
-    bool localWebSearch = webSearchEnabled;
-
-    await showBouncyDialog(
-      context: context,
-      barrierLabel: '自定义API',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        const baseMaxHeight = 650.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(320.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
-      },
-      builder: (context) {
-        return StatefulBuilder(
-            builder: (context, setDialogState) {
-              return SingleChildScrollView(
-                child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                '自定义 OpenAI 兼容 API',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '支持OpenAI格式的API接口',
-                                style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
-                              ),
-                              const SizedBox(height: 20),
-                              AppTextField(
-                                contextMenuBuilder: styledEditableContextMenu,
-                                controller: urlController,
-                                decoration: InputDecoration(
-                                  labelText: 'API 地址',
-                                  hintText: 'https://api.example.com/v1/chat/completions',
-                                  filled: true,
-                                  fillColor: AppColors.of(context).panel(0.4),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              AppTextField(
-                                contextMenuBuilder: styledEditableContextMenu,
-                                controller: keyController,
-                                decoration: InputDecoration(
-                                  labelText: 'API Key',
-                                  hintText: '请输入API密钥',
-                                  filled: true,
-                                  fillColor: AppColors.of(context).panel(0.4),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              AppTextField(
-                                contextMenuBuilder: styledEditableContextMenu,
-                                controller: modelController,
-                                decoration: InputDecoration(
-                                  labelText: '模型名称',
-                                  hintText: 'gpt-4o-mini',
-                                  filled: true,
-                                  fillColor: AppColors.of(context).panel(0.4),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Text('视觉能力支持', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
-                              const SizedBox(height: 8),
-                              SegmentedSelector<_CustomVisionMode>(
-                                items: const [
-                                  SegmentItem(label: '自动', value: _CustomVisionMode.auto),
-                                  SegmentItem(label: '开启', value: _CustomVisionMode.enabled),
-                                  SegmentItem(label: '关闭', value: _CustomVisionMode.disabled),
-                                ],
-                                activeValue: !localOverride
-                                    ? _CustomVisionMode.auto
-                                    : (localEnabled ? _CustomVisionMode.enabled : _CustomVisionMode.disabled),
-                                onChanged: (mode) {
-                                  setDialogState(() {
-                                    if (mode == _CustomVisionMode.auto) {
-                                      localOverride = false;
-                                      localEnabled = false;
-                                    } else {
-                                      localOverride = true;
-                                      localEnabled = mode == _CustomVisionMode.enabled;
-                                    }
-                                    onVisionUpdated(localOverride, localEnabled);
-                                  });
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                              Text('思考强度', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
-                              const SizedBox(height: 8),
-                              SegmentedSelector<String>(
-                                items: const [
-                                  SegmentItem(label: '直接回答', value: ''),
-                                  SegmentItem(label: 'Low', value: 'low'),
-                                  SegmentItem(label: 'Medium', value: 'medium'),
-                                  SegmentItem(label: 'High', value: 'high'),
-                                ],
-                                activeValue: localReasoning.isEmpty ? '' : localReasoning,
-                                onChanged: (v) {
-                                  setDialogState(() {
-                                    localReasoning = v;
-                                    onReasoningUpdated(v);
-                                  });
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Text('联网搜索', style: TextStyle(fontSize: 13, color: AppColors.of(context).textPrimary)),
-                                  const Spacer(),
-                                  SizedBox(
-                                    height: 28,
-                                    child: Switch(
-                                      value: localWebSearch,
-                                      activeTrackColor: AppColors.of(context).textSecondary,
-                                      onChanged: (v) {
-                                        HapticFeedback.selectionClick();
-                                        setDialogState(() {
-                                          localWebSearch = v;
-                                          onWebSearchUpdated(v);
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 20),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      style: TextButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(vertical: 14),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          side: BorderSide(color: AppColors.of(context).borderWeak),
-                                        ),
-                                      ),
-                                      child: const Text('取消'),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: ElevatedButton(
-                                      onPressed: onSave,
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppColors.isDark(context)
-                                        ? AppColors.of(context).surfaceAlt
-                                        : Colors.grey.shade800,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      ),
-                                      child: const Text('保存'),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-              },
-          );
-      },
-    );
-  }
   Future<void> _selectSemesterStartDate() async {
     await showBouncyDialog(
       context: context,
@@ -2552,8 +2027,9 @@ Future<bool> _showAIConsentDialog() async {
 
   Future<void> _selectSemesterWeeks() async {
     int selectedWeeks = _semesterWeeks;
-    final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: selectedWeeks - 1);
-    
+    final FixedExtentScrollController scrollController =
+        FixedExtentScrollController(initialItem: selectedWeeks - 1);
+
     await showBouncyDialog(
       context: context,
       barrierLabel: '学期周数',
@@ -2565,102 +2041,109 @@ Future<bool> _showAIConsentDialog() async {
         builder: (context, setDialogState) {
           return SizedBox(
             child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('学期周数',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.of(context).textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 150,
-                              child: ListWheelScrollView.useDelegate(
-                                controller: scrollController,
-                                itemExtent: 40,
-                                perspective: 0.005,
-                                diameterRatio: 1.5,
-                                physics: const FixedExtentScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                onSelectedItemChanged: (index) {
-                                  setDialogState(() {
-                                    selectedWeeks = index + 1;
-                                  });
-                                },
-                                childDelegate: ListWheelChildBuilderDelegate(
-                                  childCount: 30,
-                                  builder: (context, index) {
-                                    final week = index + 1;
-                                    final isSelected = week == selectedWeeks;
-                                    return Container(
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        '$week 周',
-                                        style: TextStyle(
-                                          fontSize: isSelected ? 18 : 16,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      await StorageService.setSemesterWeeks(selectedWeeks);
-                                      setState(() {
-                                        _semesterWeeks = selectedWeeks;
-                                      });
-                                      if (mounted) Navigator.pop(context);
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                    child: const Text('保存'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '学期周数',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.of(context).textPrimary,
                   ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 150,
+                  child: ListWheelScrollView.useDelegate(
+                    controller: scrollController,
+                    itemExtent: 40,
+                    perspective: 0.005,
+                    diameterRatio: 1.5,
+                    physics: const FixedExtentScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    onSelectedItemChanged: (index) {
+                      setDialogState(() {
+                        selectedWeeks = index + 1;
+                      });
+                    },
+                    childDelegate: ListWheelChildBuilderDelegate(
+                      childCount: 30,
+                      builder: (context, index) {
+                        final week = index + 1;
+                        final isSelected = week == selectedWeeks;
+                        return Container(
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$week 周',
+                            style: TextStyle(
+                              fontSize: isSelected ? 18 : 16,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          await StorageService.setSemesterWeeks(selectedWeeks);
+                          setState(() {
+                            _semesterWeeks = selectedWeeks;
+                          });
+                          if (mounted) Navigator.pop(context);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text('保存'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
   Future<void> _selectDailyPeriods() async {
     int selectedPeriods = _dailyPeriods;
-    final FixedExtentScrollController scrollController = FixedExtentScrollController(initialItem: selectedPeriods - 1);
-    
+    final FixedExtentScrollController scrollController =
+        FixedExtentScrollController(initialItem: selectedPeriods - 1);
+
     await showBouncyDialog(
       context: context,
       barrierLabel: '每日节数',
@@ -2672,102 +2155,108 @@ Future<bool> _showAIConsentDialog() async {
         builder: (context, setDialogState) {
           return SizedBox(
             child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('每日节数',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.of(context).textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 150,
-                              child: ListWheelScrollView.useDelegate(
-                                controller: scrollController,
-                                itemExtent: 40,
-                                perspective: 0.005,
-                                diameterRatio: 1.5,
-                                physics: const FixedExtentScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                onSelectedItemChanged: (index) {
-                                  setDialogState(() {
-                                    selectedPeriods = index + 1;
-                                  });
-                                },
-                                childDelegate: ListWheelChildBuilderDelegate(
-                                  childCount: 20,
-                                  builder: (context, index) {
-                                    final periods = index + 1;
-                                    final isSelected = periods == selectedPeriods;
-                                    return Container(
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        '$periods 节',
-                                        style: TextStyle(
-                                          fontSize: isSelected ? 18 : 16,
-                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textSecondary,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      await StorageService.setDailyPeriods(selectedPeriods);
-                                      while (_timeSlots.length < selectedPeriods) {
-                                        _timeSlots.add({'start': '00:00', 'end': '00:00'});
-                                      }
-                                      if (_timeSlots.length > selectedPeriods) {
-                                        _timeSlots = _timeSlots.sublist(0, selectedPeriods);
-                                      }
-                                      await StorageService.setTimeSlots(_timeSlots);
-                                      setState(() {
-                                        _dailyPeriods = selectedPeriods;
-                                      });
-                                      if (mounted) Navigator.pop(context);
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                    child: const Text('保存'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '每日节数',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.of(context).textPrimary,
                   ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 150,
+                  child: ListWheelScrollView.useDelegate(
+                    controller: scrollController,
+                    itemExtent: 40,
+                    perspective: 0.005,
+                    diameterRatio: 1.5,
+                    physics: const FixedExtentScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    onSelectedItemChanged: (index) {
+                      setDialogState(() {
+                        selectedPeriods = index + 1;
+                      });
+                    },
+                    childDelegate: ListWheelChildBuilderDelegate(
+                      childCount: 20,
+                      builder: (context, index) {
+                        final periods = index + 1;
+                        final isSelected = periods == selectedPeriods;
+                        return Container(
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$periods 节',
+                            style: TextStyle(
+                              fontSize: isSelected ? 18 : 16,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          await StorageService.setDailyPeriods(selectedPeriods);
+                          while (_timeSlots.length < selectedPeriods) {
+                            _timeSlots.add({'start': '00:00', 'end': '00:00'});
+                          }
+                          if (_timeSlots.length > selectedPeriods) {
+                            _timeSlots = _timeSlots.sublist(0, selectedPeriods);
+                          }
+                          await StorageService.setTimeSlots(_timeSlots);
+                          setState(() {
+                            _dailyPeriods = selectedPeriods;
+                          });
+                          if (mounted) Navigator.pop(context);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text('保存'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -2799,240 +2288,253 @@ Future<bool> _showAIConsentDialog() async {
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(
-                                    Icons.schedule_outlined,
-                                    color: Color(0xFF4A90E2),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                const Text(
-                                  '时间段设置',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const Spacer(),
-                                // 预设时间段选项框（参考 AI 配置页内置模型选项）：
-                                // 选择预设整体覆盖列表；手动编辑任一节后脱离
-                                // 预设态，回显「自定义」；保存过的自定义配置
-                                // 会作为「自定义」项进入下拉列表（全局共享）。
-                                // 宽度固定预留四字宽，选中态不随文字长短变化
-                                Container(
-                                  width: 100,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.of(context).panel(0.4),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AppColors.of(context).borderWeak),
-                                  ),
-                                  child: BlurredDropdown<String>(
-                                    value: selectedPreset,
-                                    isExpanded: true,
-                                    hint: Text(
-                                      '自定义',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: AppColors.of(context).textSecondary,
-                                      ),
-                                    ),
-                                    icon: const Icon(
-                                      Icons.expand_more,
-                                      color: Color(0xFF4A90E2),
-                                      size: 18,
-                                    ),
-                                    menuWidth: 150,
-                                    items: [
-                                      ...['预设1', '预设2'].map(
-                                        (e) => DropdownMenuItem(
-                                          value: e,
-                                          child: Text(
-                                            e,
-                                            style: const TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                      ),
-                                      if (hasCustomSlots)
-                                        const DropdownMenuItem(
-                                          value: '自定义',
-                                          child: Text(
-                                            '自定义',
-                                            style: TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged: (v) {
-                                      if (v == null) return;
-                                      setDialogState(() {
-                                        selectedPreset = v;
-                                        if (v == '自定义') {
-                                          final custom =
-                                              StorageService.getCustomTimeSlots();
-                                          if (custom != null && custom.isNotEmpty) {
-                                            _timeSlots = custom
-                                                .map((e) => Map<String, String>.from(e))
-                                                .toList();
-                                          }
-                                        } else {
-                                          _timeSlots = _timeSlotPresets[v]!
-                                              .map((e) => Map<String, String>.from(e))
-                                              .toList();
-                                        }
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ],
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4A90E2).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.schedule_outlined,
+                      color: Color(0xFF4A90E2),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    '时间段设置',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Spacer(),
+                  // 预设时间段选项框（参考 AI 配置页内置模型选项）：
+                  // 选择预设整体覆盖列表；手动编辑任一节后脱离
+                  // 预设态，回显「自定义」；保存过的自定义配置
+                  // 会作为「自定义」项进入下拉列表（全局共享）。
+                  // 宽度固定预留四字宽，选中态不随文字长短变化
+                  Container(
+                    width: 100,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.of(context).panel(0.4),
+                      borderRadius: BorderRadius.circular(12),
+                      border:
+                          Border.all(color: AppColors.of(context).borderWeak),
+                    ),
+                    child: BlurredDropdown<String>(
+                      value: selectedPreset,
+                      isExpanded: true,
+                      hint: Text(
+                        '自定义',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.of(context).textSecondary,
+                        ),
+                      ),
+                      icon: const Icon(
+                        Icons.expand_more,
+                        color: Color(0xFF4A90E2),
+                        size: 18,
+                      ),
+                      menuWidth: 150,
+                      items: [
+                        ...['预设1', '预设2'].map(
+                          (e) => DropdownMenuItem(
+                            value: e,
+                            child: Text(
+                              e,
+                              style: const TextStyle(fontSize: 14),
                             ),
-                            const SizedBox(height: 16),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: List.generate(_timeSlots.length, (index) {
-                                    final slot = _timeSlots[index];
-                                    return Container(
-                                      margin: const EdgeInsets.only(bottom: 8),
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.of(context).panel(0.4),
-                                        borderRadius: BorderRadius.circular(10),
-                                        // 非减弱动态：与右上角预设选择框一致
-                                        // 的浅灰描边（shade200）；减弱动态维持
-                                        // shade300 不变
-                                        border: Border.all(
-                                          color: _reduceMotionEnabled
-                                              ? AppColors.of(context).borderWeak
-                                              : AppColors.of(context).borderWeak,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Opacity(
-                                            opacity: 0.82,
-                                            child: Container(
-                                              width: 32,
-                                              height: 32,
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
-                                                  colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                                ),
-                                                borderRadius: BorderRadius.circular(8),
-                                              ),
-                                              child: Center(
-                                                child: Text(
-                                                  '${index + 1}',
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Row(
-                                              children: [
-                                                _buildTimeField(
-                                                  value: slot['start']!,
-                                                  onChanged: (v) {
-                                                    _timeSlots[index]['start'] = v;
-                                                    // 手动编辑后脱离预设态，
-                                                    // 选项框回显占位文案
-                                                    setDialogState(() => selectedPreset = null);
-                                                  },
-                                                ),
-                                                const Padding(
-                                                  padding: EdgeInsets.symmetric(horizontal: 8),
-                                                  child: Text('—'),
-                                                ),
-                                                _buildTimeField(
-                                                  value: slot['end']!,
-                                                  onChanged: (v) {
-                                                    _timeSlots[index]['end'] = v;
-                                                    // 手动编辑后脱离预设态，
-                                                    // 选项框回显占位文案
-                                                    setDialogState(() => selectedPreset = null);
-                                                  },
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }),
+                          ),
+                        ),
+                        if (hasCustomSlots)
+                          const DropdownMenuItem(
+                            value: '自定义',
+                            child: Text(
+                              '自定义',
+                              style: TextStyle(fontSize: 14),
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setDialogState(() {
+                          selectedPreset = v;
+                          if (v == '自定义') {
+                            final custom = StorageService.getCustomTimeSlots();
+                            if (custom != null && custom.isNotEmpty) {
+                              _timeSlots = custom
+                                  .map((e) => Map<String, String>.from(e))
+                                  .toList();
+                            }
+                          } else {
+                            _timeSlots = _timeSlotPresets[v]!
+                                .map((e) => Map<String, String>.from(e))
+                                .toList();
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                // 节次多于可视高度时上下边缘淡出：滚到中间时两端渐隐，
+                // 提示列表里还有节次（原先直接截断，看不出下面还有）
+                child: FadingEdgeBox(
+                  axis: Axis.vertical,
+                  physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(_timeSlots.length, (index) {
+                      final slot = _timeSlots[index];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.of(context).panel(0.4),
+                          borderRadius: BorderRadius.circular(10),
+                          // 非减弱动态：与右上角预设选择框一致
+                          // 的浅灰描边（shade200）；减弱动态维持
+                          // shade300 不变
+                          border: Border.all(
+                            color: _reduceMotionEnabled
+                                ? AppColors.of(context).borderWeak
+                                : AppColors.of(context).borderWeak,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Opacity(
+                              opacity: 0.82,
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF4A90E2),
+                                      Color(0xFF5BA0F2)
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: AppColors.of(context).borderWeak),
-                                      ),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      await StorageService.setTimeSlots(_timeSlots);
-                                      // 每日节数与时间段数量保持一致
-                                      // （应用预设会改变数量：预设1=12 / 预设2=13）
-                                      await StorageService.setDailyPeriods(_timeSlots.length);
-                                      // 选择状态与自定义配置全局持久化（跨课表共享）：
-                                      // 非预设态保存即写入自定义配置，下拉列表从此
-                                      // 多出「自定义」项供所有课表套用；预设态仅记录选择
-                                      if (selectedPreset == null) {
-                                        await StorageService.setCustomTimeSlots(_timeSlots);
-                                        await StorageService.setTimePresetSelection('自定义');
-                                      } else {
-                                        await StorageService.setTimePresetSelection(selectedPreset!);
-                                      }
-                                      if (mounted) {
-                                        setState(() {});
-                                      }
-                                      Navigator.pop(context);
-                                      toastNotification.show(context, '时间段已保存', type: ToastType.success);
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  _buildTimeField(
+                                    value: slot['start']!,
+                                    onChanged: (v) {
+                                      _timeSlots[index]['start'] = v;
+                                      // 手动编辑后脱离预设态，
+                                      // 选项框回显占位文案
+                                      setDialogState(
+                                          () => selectedPreset = null);
                                     },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    child: const Text('保存'),
                                   ),
-                                ),
-                              ],
+                                  const Padding(
+                                    padding:
+                                        EdgeInsets.symmetric(horizontal: 8),
+                                    child: Text('—'),
+                                  ),
+                                  _buildTimeField(
+                                    value: slot['end']!,
+                                    onChanged: (v) {
+                                      _timeSlots[index]['end'] = v;
+                                      // 手动编辑后脱离预设态，
+                                      // 选项框回显占位文案
+                                      setDialogState(
+                                          () => selectedPreset = null);
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
-                        );
-          },
-        ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        await StorageService.setTimeSlots(_timeSlots);
+                        // 每日节数与时间段数量保持一致
+                        // （应用预设会改变数量：预设1=12 / 预设2=13）
+                        await StorageService.setDailyPeriods(_timeSlots.length);
+                        // 选择状态与自定义配置全局持久化（跨课表共享）：
+                        // 非预设态保存即写入自定义配置，下拉列表从此
+                        // 多出「自定义」项供所有课表套用；预设态仅记录选择
+                        if (selectedPreset == null) {
+                          await StorageService.setCustomTimeSlots(_timeSlots);
+                          await StorageService.setTimePresetSelection('自定义');
+                        } else {
+                          await StorageService.setTimePresetSelection(
+                              selectedPreset!);
+                        }
+                        if (mounted) {
+                          setState(() {});
+                        }
+                        Navigator.pop(context);
+                        toastNotification.show(context, '时间段已保存',
+                            type: ToastType.success);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4A90E2),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('保存'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -3103,7 +2605,8 @@ Future<bool> _showAIConsentDialog() async {
     });
 
     if (_taskNotificationEnabled) {
-      await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
+      await NotificationService.instance
+          .rescheduleTaskNotifications(StorageService.getTasks());
     }
 
     if (mounted) {
@@ -3111,196 +2614,158 @@ Future<bool> _showAIConsentDialog() async {
     }
   }
 
-  Future<void> _showNotificationCopyStyleDialog() async {
-    var tempStyle = _notificationCopyStyle;
-
-    final selectedStyle = await _showUnifiedNotificationDialog<NotificationCopyStyle>(
-      title: '选择通知文案风格',
-      contentBuilder: (setDialogState) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: NotificationCopyStyle.values
-              .map(
-                (style) {
-                  final isSelected = style == tempStyle;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Material(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                      clipBehavior: Clip.antiAlias,
-                      child: Ink(
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? const Color(0xFF4A90E2).withValues(alpha: 0.12)
-                              : AppColors.of(context).panel(0.4),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).panel(0.4),
-                            width: isSelected ? 1.5 : 1,
-                          ),
-                        ),
-                        child: InkWell(
-                          onTap: () {
-                            setDialogState(() {
-                              tempStyle = style;
-                            });
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        NotificationService.instance.copyStyleLabel(style),
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textPrimary,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        NotificationService.instance.copyStyleDescription(style),
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.of(context).textSecondary,
-                                        ),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Icon(
-                                  isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                  color: isSelected ? const Color(0xFF4A90E2) : AppColors.of(context).textTertiary,
-                                  size: 20,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              )
-              .toList(),
-        );
-      },
-      actionsBuilder: (dialogContext, _) {
-        return [
-          Expanded(
-            child: TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: AppColors.of(context).borderWeak),
-                ),
-              ),
-              child: const Text('取消'),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: () => Navigator.pop(dialogContext, tempStyle),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF4A90E2),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text('保存'),
-            ),
-          ),
-        ];
-      },
+  /// 「课前通知时间」：只允许 7 个固定档位（0 档读作"仅上课时通知"），用与
+  /// 「每日节数」同款的三维滚轮单选，不给自由取值。saveSettings 内部已让原生
+  /// 重排课前/上课/下课三个闹钟，无需再手动刷新
+  Future<void> _showLiveLeadChoiceDialog() async {
+    const choices = LiveUpdateService.leadChoices;
+    var selected = LiveUpdateService.snapLead(_liveLeadMinutes);
+    final scrollController = FixedExtentScrollController(
+      initialItem: choices.indexOf(selected),
     );
 
-    if (selectedStyle == null || selectedStyle == _notificationCopyStyle) {
-      return;
-    }
+    await showBouncyDialog(
+      context: context,
+      barrierLabel: '课前通知时间',
+      shellPadding: const EdgeInsets.all(20),
+      shellWidth: 280,
+      margin: EdgeInsets.zero,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return SizedBox(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '课前通知时间',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.of(context).textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 150,
+                  child: ListWheelScrollView.useDelegate(
+                    controller: scrollController,
+                    itemExtent: 40,
+                    perspective: 0.005,
+                    diameterRatio: 1.5,
+                    physics: const FixedExtentScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    onSelectedItemChanged: (index) {
+                      setDialogState(() {
+                        selected = choices[index];
+                      });
+                    },
+                    childDelegate: ListWheelChildBuilderDelegate(
+                      childCount: choices.length,
+                      builder: (context, index) {
+                        final minutes = choices[index];
+                        final isSelected = minutes == selected;
+                        return Container(
+                          alignment: Alignment.center,
+                          child: Text(
+                            LiveUpdateService.instance
+                                .formatLeadText(minutes),
+                            style: TextStyle(
+                              fontSize: isSelected ? 18 : 16,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF4A90E2)
+                                  : AppColors.of(context).textSecondary,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          side: BorderSide(
+                              color: AppColors.of(context).borderWeak),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          await LiveUpdateService.instance.saveSettings(
+                            enabled: _liveUpdateEnabled,
+                            leadMinutes: selected,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _liveLeadMinutes = selected;
+                          });
+                          if (mounted) Navigator.pop(context);
+                          if (mounted) {
+                            toastNotification.show(
+                              context,
+                              '课前通知时间已更新',
+                              type: ToastType.success,
+                            );
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text('保存'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 通知文案风格滑块切换：即时持久化并按新文案重排已调度提醒
+  Future<void> _applyNotificationCopyStyle(NotificationCopyStyle style) async {
+    if (style == _notificationCopyStyle) return;
 
     await NotificationService.instance.saveTaskNotificationSettings(
       enabled: _taskNotificationEnabled,
       days: _notifyLeadDays,
       hours: _notifyLeadHours,
       minutes: _notifyLeadMinutes,
-      style: selectedStyle,
+      style: style,
     );
 
     if (!mounted) return;
 
     setState(() {
-      _notificationCopyStyle = selectedStyle;
+      _notificationCopyStyle = style;
     });
 
     if (_taskNotificationEnabled) {
-      await NotificationService.instance.rescheduleTaskNotifications(StorageService.getTasks());
+      await NotificationService.instance
+          .rescheduleTaskNotifications(StorageService.getTasks());
     }
-
-    if (mounted) {
-      toastNotification.show(
-        context,
-        '已切换为${NotificationService.instance.copyStyleLabel(selectedStyle)}文案风格',
-        type: ToastType.success,
-      );
-    }
-  }
-
-  Future<T?> _showUnifiedNotificationDialog<T>({
-    required String title,
-    required Widget Function(StateSetter setDialogState) contentBuilder,
-    required List<Widget> Function(BuildContext dialogContext, StateSetter setDialogState)
-        actionsBuilder,
-  }) {
-    return showBouncyDialog<T>(
-      context: context,
-      barrierLabel: title,
-      shellPadding: const EdgeInsets.all(20),
-      // 壳总宽含壳内边距（与旧版壳外 Container(constraints:) 一致）
-      shellMaxWidth: 420,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          return Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            Text(
-                              title,
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxHeight: 320),
-                              child: SingleChildScrollView(
-                                child: contentBuilder(setDialogState),
-                              ),
-                            ),
-                            const SizedBox(height: 18),
-                            Row(
-                              children: actionsBuilder(dialogContext, setDialogState),
-                            ),
-              ],
-            );
-        },
-      ),
-    );
   }
 
   /// 关于对话框（独立）
@@ -3407,18 +2872,18 @@ Future<bool> _showAIConsentDialog() async {
     );
   }
 
-  /// 打赏支持对话框：顶部说明文案 → 打赏码（微信 / 支付宝）→ 打赏者名单。
+  /// 打赏支持对话框：顶部说明文案 → 微信打赏码 → 打赏者名单。
   ///
-  /// 打赏码用 Image.asset + errorBuilder 做「预留位」：图片未放入时渲染虚位
-  /// 占位框，一旦把二维码放进 assets/donate/ 即自动显示，无需再改代码。
-  /// 内容区固定高度、内部可下滑，底部「确定」按钮不随内容滚动。
+  /// 打赏码来自 assets/donate/wechat_qr.jpg，长按即把原图存进系统相册
+  /// （见 _DonateQrCode）。内容区固定高度、内部可下滑，底部「确定」按钮不随内容滚动。
   void _showDonationDialog() {
     showBouncyDialog(
       context: context,
       barrierLabel: '打赏支持',
       shellPadding: const EdgeInsets.all(24),
       builder: (context) {
-        final dialogHeight = MediaQuery.of(context).size.height * 0.72;
+        // 0.76：单列打赏码（200）+ 名单在 360x800 一屏内放齐，避免默认就要下滑
+        final dialogHeight = MediaQuery.of(context).size.height * 0.76;
         return SizedBox(
           height: dialogHeight,
           child: Column(
@@ -3451,22 +2916,11 @@ Future<bool> _showAIConsentDialog() async {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      const Row(
-                        children: [
-                          Expanded(
-                            child: _DonateQrSlot(
-                              label: '微信',
-                              assetPath: 'assets/donate/wechat_qr.png',
-                            ),
-                          ),
-                          SizedBox(width: 16),
-                          Expanded(
-                            child: _DonateQrSlot(
-                              label: '支付宝',
-                              assetPath: 'assets/donate/alipay_qr.png',
-                            ),
-                          ),
-                        ],
+                      const Center(
+                        child: _DonateQrCode(
+                          label: '微信',
+                          assetPath: 'assets/donate/wechat_qr.jpg',
+                        ),
                       ),
                       const SizedBox(height: 22),
                       const _DonationSupporterList(),
@@ -3503,72 +2957,72 @@ Future<bool> _showAIConsentDialog() async {
       barrierLabel: '清除数据',
       shellPadding: const EdgeInsets.all(24),
       builder: (context) => Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Icon(
-                            Icons.warning_amber_rounded,
-                            color: Colors.red.shade400,
-                            size: 40,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '清除数据',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '确定要删除所有数据吗？\n此操作不可恢复。',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: AppColors.of(context).borderWeak),
-                                  ),
-                                ),
-                                child: const Text('取消'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text('删除'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.red.shade400,
+              size: 40,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '清除数据',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '确定要删除所有数据吗？\n此操作不可恢复。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.of(context).textSecondary,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: AppColors.of(context).borderWeak),
                     ),
+                  ),
+                  child: const Text('取消'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('删除'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
 
     if (confirmed == true) {
@@ -3580,322 +3034,15 @@ Future<bool> _showAIConsentDialog() async {
     }
   }
 
+  /// 邮箱登录 / 注册对话框：表单实现统一收在
+  /// `dialogs/email_login_dialog.dart`，这里只负责弹出 + 登录后的云端同步
   void _showEmailLoginDialog(AuthService auth) {
-    final emailController = TextEditingController(text: auth.userEmail ?? '');
-    final passwordController = TextEditingController();
-    final confirmPasswordController = TextEditingController();
-    bool isRegisterMode = false;
-    bool isSubmitting = false;
-    bool obscurePassword = true;
-    bool obscureConfirmPassword = true;
-    
-    showBouncyDialog(
-      context: context,
-      barrierLabel: '电子邮箱登录',
-      shellPadding: const EdgeInsets.all(24),
-      shellBoxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.2),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      avoidKeyboard: true,
-      // 壳总宽/总高约束含壳内边距（与旧版壳外 Container(constraints:) 一致）；
-      // 键盘弹出时动态压缩最大高度，闭包内 MediaQuery 依赖使宿主自动重建
-      shellConstraintsBuilder: (context) {
-        final mediaQuery = MediaQuery.of(context);
-        final keyboardHeight = mediaQuery.viewInsets.bottom;
-        final topInset = mediaQuery.padding.top;
-        final screenHeight = mediaQuery.size.height;
-        // 注册模式比登录多一个确认密码字段，取消按钮必须完整露出、无需
-        // 翻页：基础最大高度按注册模式内容取值（壳实际尺寸仍随内容收缩）
-        const baseMaxHeight = 620.0;
-        double dialogMaxHeight = baseMaxHeight;
-        final availableHeight = screenHeight - topInset - keyboardHeight - 24;
-        if (availableHeight < dialogMaxHeight) {
-          dialogMaxHeight = availableHeight;
-        }
-        dialogMaxHeight = dialogMaxHeight.clamp(260.0, baseMaxHeight).toDouble();
-        return BoxConstraints(maxWidth: 420, maxHeight: dialogMaxHeight);
+    showEmailLoginDialog(
+      context,
+      afterSuccess: (_) async {
+        await _handlePostLoginSync();
       },
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final email = emailController.text.trim();
-            final password = passwordController.text;
-            final confirmPassword = confirmPasswordController.text;
-            final isEmailValid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email);
-            final isPasswordValid = AuthService.isStrongPassword(password);
-            final canSubmit = !isSubmitting &&
-                isEmailValid &&
-              isPasswordValid &&
-                (!isRegisterMode || confirmPassword == password);
-
-            Future<void> submit() async {
-              if (!canSubmit) return;
-
-              setDialogState(() {
-                isSubmitting = true;
-              });
-
-              final success = isRegisterMode
-                  ? await auth.registerWithEmailPassword(email, password)
-                  : await auth.signInWithEmailPassword(email, password);
-              if (!mounted) return;
-
-              setDialogState(() {
-                isSubmitting = false;
-              });
-
-              if (success) {
-                if (Navigator.of(context).canPop()) {
-                  Navigator.pop(context);
-                }
-                toastNotification.show(
-                  this.context,
-                  isRegisterMode ? '注册并登录成功' : '登录成功',
-                  type: ToastType.success,
-                );
-                await _handlePostLoginSync();
-              } else {
-                toastNotification.show(
-                  context,
-                  auth.error ?? (isRegisterMode ? '注册失败，请稍后重试' : '登录失败，请检查邮箱和密码'),
-                  type: ToastType.error,
-                );
-              }
-            }
-
-            // 登录/注册切换的高度过渡由确认密码框的占位展开动画驱动
-            // （_FieldSlotAppear，下方元素与对话框高度逐帧同步），错误
-            // 文案出现/消失的高度变化由各输入框自身的 AnimatedSize 平滑
-            return SingleChildScrollView(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Opacity(
-                                      opacity: 0.82,
-                                      child: Container(
-                                        width: 64,
-                                        height: 64,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF4A90E2),
-                                          borderRadius: BorderRadius.circular(16),
-                                        ),
-                                        child: const Icon(
-                                          Icons.email_rounded,
-                                          size: 32,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                '邮箱账号',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              // 登录/注册副标题切换：模糊淡出淡入（与确认密码框的
-                              // 模糊动效呼应），新旧文案交叉过渡不跳变
-                              AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 220),
-                                switchInCurve: Curves.easeOut,
-                                switchOutCurve: Curves.easeIn,
-                                transitionBuilder: (child, animation) => FadeTransition(
-                                  opacity: animation,
-                                  child: AnimatedBuilder(
-                                    animation: animation,
-                                    builder: (context, grandChild) => ImageFiltered(
-                                      imageFilter: ImageFilter.blur(
-                                        sigmaX: 6 * (1.0 - animation.value),
-                                        sigmaY: 6 * (1.0 - animation.value),
-                                      ),
-                                      child: Transform.scale(
-                                        scale: 0.92 + 0.08 * animation.value,
-                                        child: grandChild,
-                                      ),
-                                    ),
-                                    child: child,
-                                  ),
-                                ),
-                                child: Text(
-                                  isRegisterMode
-                                      ? '使用邮箱和密码创建账号'
-                                      : '使用邮箱和密码登录',
-                                  key: ValueKey<bool>(isRegisterMode),
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: AppColors.of(context).textSecondary,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-                              // AnimatedSize：错误文案出现/消失时输入框高度平滑过渡
-                              AnimatedSize(
-                                duration: const Duration(milliseconds: 180),
-                                curve: Curves.easeOut,
-                                alignment: Alignment.topCenter,
-                                child: AppTextField(
-                                  contextMenuBuilder: styledEditableContextMenu,
-                                  controller: emailController,
-                                  keyboardType: TextInputType.emailAddress,
-                                  enabled: !isSubmitting,
-                                  onChanged: (_) => setDialogState(() {}),
-                                  decoration: InputDecoration(
-                                    hintText: '请输入邮箱地址',
-                                    errorText: email.isEmpty || isEmailValid ? null : '邮箱格式不正确',
-                                    prefixIcon: const Icon(Icons.email_outlined),
-                                    filled: true,
-                                    fillColor: AppColors.of(context).panel(0.4),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              AnimatedSize(
-                                duration: const Duration(milliseconds: 180),
-                                curve: Curves.easeOut,
-                                alignment: Alignment.topCenter,
-                                child: AppTextField(
-                                  contextMenuBuilder: styledEditableContextMenu,
-                                  controller: passwordController,
-                                  keyboardType: TextInputType.visiblePassword,
-                                  obscureText: obscurePassword,
-                                  enabled: !isSubmitting,
-                                  onChanged: (_) => setDialogState(() {}),
-                                  decoration: InputDecoration(
-                                    hintText: '请输入密码',
-                                    errorText: password.isEmpty || isPasswordValid ? null : '密码需至少8位，且包含字母和数字',
-                                    prefixIcon: const Icon(Icons.lock_outline_rounded),
-                                    suffixIcon: IconButton(
-                                      onPressed: () {
-                                        setDialogState(() {
-                                          obscurePassword = !obscurePassword;
-                                        });
-                                      },
-                                      icon: Icon(obscurePassword ? Icons.visibility_off : Icons.visibility),
-                                    ),
-                                    filled: true,
-                                    fillColor: AppColors.of(context).panel(0.4),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                  ),
-                                ),
-                              ),
-                              // 确认密码框常驻树内，由占位展开+模糊淡入动画
-                              // 控制显隐（动画组件复刻课表切换对话框新增课表）
-                              _FieldSlotAppear(
-                                visible: isRegisterMode,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(top: 12),
-                                  child: AnimatedSize(
-                                    duration: const Duration(milliseconds: 180),
-                                    curve: Curves.easeOut,
-                                    alignment: Alignment.topCenter,
-                                    child: AppTextField(
-                                    contextMenuBuilder: styledEditableContextMenu,
-                                    controller: confirmPasswordController,
-                                    keyboardType: TextInputType.visiblePassword,
-                                    obscureText: obscureConfirmPassword,
-                                    enabled: !isSubmitting,
-                                    onChanged: (_) => setDialogState(() {}),
-                                    decoration: InputDecoration(
-                                        hintText: '请再次输入密码',
-                                        errorText: confirmPassword.isEmpty || confirmPassword == password ? null : '两次密码输入不一致',
-                                        prefixIcon: const Icon(Icons.lock_reset_rounded),
-                                        suffixIcon: IconButton(
-                                          onPressed: () {
-                                            setDialogState(() {
-                                              obscureConfirmPassword = !obscureConfirmPassword;
-                                            });
-                                          },
-                                          icon: Icon(obscureConfirmPassword ? Icons.visibility_off : Icons.visibility),
-                                        ),
-                                        filled: true,
-                                        fillColor: AppColors.of(context).panel(0.4),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton.icon(
-                                  onPressed: canSubmit ? submit : null,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF4A90E2),
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  icon: Icon(isRegisterMode ? Icons.person_add_alt_1_rounded : Icons.login_rounded),
-                                  label: Text(isSubmitting ? '处理中...' : (isRegisterMode ? '注册并登录' : '登录')),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              TextButton(
-                                onPressed: isSubmitting
-                                    ? null
-                                    : () {
-                                        setDialogState(() {
-                                          isRegisterMode = !isRegisterMode;
-                                        });
-                                        auth.clearError();
-                                      },
-                                child: Text(isRegisterMode ? '已有账号？去登录' : '没有账号？去注册'),
-                              ),
-                              const SizedBox(height: 8),
-                              // 与设置页其他对话框的取消按钮统一样式
-                              // （默认主题色文字 + 灰描边）
-                              SizedBox(
-                                width: double.infinity,
-                                child: TextButton(
-                                  onPressed: isSubmitting
-                                      ? null
-                                      : () => Navigator.pop(context),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: AppColors.of(context).borderWeak),
-                                    ),
-                                  ),
-                                  child: const Text('取消'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-          },
-        );
-      },
-    ).whenComplete(() {
-      // 弹窗退出动画（约 150ms）期间 TextField 仍会重建，
-      // 立即 dispose 会触发 "TextEditingController used after being disposed"，
-      // 因此延迟到动画结束后再释放
-      Future<void>.delayed(const Duration(milliseconds: 300), () {
-        emailController.dispose();
-        passwordController.dispose();
-        confirmPasswordController.dispose();
-      });
-    });
+    );
   }
 
   Future<void> _handlePostLoginSync() async {
@@ -3930,12 +3077,14 @@ Future<bool> _showAIConsentDialog() async {
         return;
       }
 
-      final selectedIds = await _showLocalTimetableUploadSelectorDialog(localTimetables);
+      final selectedIds =
+          await _showLocalTimetableUploadSelectorDialog(localTimetables);
       if (!mounted || selectedIds == null || selectedIds.isEmpty) {
         return;
       }
 
-      final selectedPayload = StorageService.exportSelectedDataByTimetableIds(selectedIds);
+      final selectedPayload =
+          StorageService.exportSelectedDataByTimetableIds(selectedIds);
       if (!_hasSyncableLocalData(selectedPayload)) {
         toastNotification.show(context, '所选课表没有可上传的数据', type: ToastType.info);
         return;
@@ -3962,7 +3111,8 @@ Future<bool> _showAIConsentDialog() async {
       return;
     }
 
-    final timetableNames = StorageService.getCloudBackupTimetableNames(cloudBackup.payload);
+    final timetableNames =
+        StorageService.getCloudBackupTimetableNames(cloudBackup.payload);
     if (timetableNames.isEmpty) {
       toastNotification.show(context, '云端备份中未找到可同步课表', type: ToastType.error);
       return;
@@ -3976,7 +3126,8 @@ Future<bool> _showAIConsentDialog() async {
       return;
     }
 
-    final mode = await _showCloudImportModeDialog(cloudBackup.updatedAt, selectedTimetable);
+    final mode = await _showCloudImportModeDialog(
+        cloudBackup.updatedAt, selectedTimetable);
     if (!mounted || mode == null) {
       return;
     }
@@ -4050,11 +3201,12 @@ Future<bool> _showAIConsentDialog() async {
     final namedTimetables = data['namedTimetables'];
     return (courses is List && courses.isNotEmpty) ||
         (tasks is List && tasks.isNotEmpty) ||
-      (timetables is List && timetables.isNotEmpty) ||
-      (namedTimetables is Map && namedTimetables.isNotEmpty);
+        (timetables is List && timetables.isNotEmpty) ||
+        (namedTimetables is Map && namedTimetables.isNotEmpty);
   }
 
-  Future<List<String>?> _showLocalTimetableUploadSelectorDialog(List<TimetableInfo> timetables) {
+  Future<List<String>?> _showLocalTimetableUploadSelectorDialog(
+      List<TimetableInfo> timetables) {
     return showBouncyDialog<List<String>>(
       context: context,
       barrierLabel: '选择上传课表',
@@ -4068,133 +3220,137 @@ Future<bool> _showAIConsentDialog() async {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
             return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                            Opacity(
-                              opacity: 0.82,
-                              child: Container(
-                                width: 64,
-                                height: 64,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                                  ),
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: const Icon(
-                                  Icons.library_add_check_rounded,
-                                  size: 32,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              '选择要上传的课表',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '可多选，未选中的课表不会上传',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.of(context).textSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedIds
-                                        ..clear()
-                                        ..addAll(timetables.map((t) => t.id));
-                                    });
-                                  },
-                                  child: const Text('全选'),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    setDialogState(() {
-                                      selectedIds.clear();
-                                    });
-                                  },
-                                  child: const Text('清空'),
-                                ),
-                              ],
-                            ),
-                            Flexible(
-                              child: ScrollConfiguration(
-                                behavior: ScrollConfiguration.of(dialogContext).copyWith(
-                                  physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                                ),
-                                child: ListView.builder(
-                                  itemCount: timetables.length,
-                                  itemBuilder: (context, index) {
-                                    final timetable = timetables[index];
-                                    final selected = selectedIds.contains(timetable.id);
-                                    return Padding(
-                                      padding: const EdgeInsets.only(bottom: 10),
-                                      child: _buildSelectableTimetableTile(
-                                        title: timetable.name,
-                                        subtitle: '创建于 ${_formatDateTime(timetable.createdAt)}',
-                                        selected: selected,
-                                        onTap: () {
-                                          setDialogState(() {
-                                            if (selected) {
-                                              selectedIds.remove(timetable.id);
-                                            } else {
-                                              selectedIds.add(timetable.id);
-                                            }
-                                          });
-                                        },
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () => Navigator.pop(dialogContext),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        side: BorderSide(color: AppColors.of(context).borderWeak),
-                                      ),
-                                    ),
-                                    child: const Text('取消'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: selectedIds.isEmpty
-                                        ? null
-                                        : () => Navigator.pop(dialogContext, selectedIds.toList()),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF4A90E2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    child: const Text('上传选中课表'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Opacity(
+                  opacity: 0.82,
+                  child: Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.library_add_check_rounded,
+                      size: 32,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '选择要上传的课表',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '可多选，未选中的课表不会上传',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.of(context).textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () {
+                        setDialogState(() {
+                          selectedIds
+                            ..clear()
+                            ..addAll(timetables.map((t) => t.id));
+                        });
+                      },
+                      child: const Text('全选'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        setDialogState(() {
+                          selectedIds.clear();
+                        });
+                      },
+                      child: const Text('清空'),
+                    ),
+                  ],
+                ),
+                Flexible(
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(dialogContext).copyWith(
+                      physics: const BouncingScrollPhysics(
+                          parent: AlwaysScrollableScrollPhysics()),
+                    ),
+                    child: ListView.builder(
+                      itemCount: timetables.length,
+                      itemBuilder: (context, index) {
+                        final timetable = timetables[index];
+                        final selected = selectedIds.contains(timetable.id);
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _buildSelectableTimetableTile(
+                            title: timetable.name,
+                            subtitle:
+                                '创建于 ${_formatDateTime(timetable.createdAt)}',
+                            selected: selected,
+                            onTap: () {
+                              setDialogState(() {
+                                if (selected) {
+                                  selectedIds.remove(timetable.id);
+                                } else {
+                                  selectedIds.add(timetable.id);
+                                }
+                              });
+                            },
+                          ),
                         );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                                color: AppColors.of(context).borderWeak),
+                          ),
+                        ),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: selectedIds.isEmpty
+                            ? null
+                            : () => Navigator.pop(
+                                dialogContext, selectedIds.toList()),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF4A90E2),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text('上传选中课表'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
           },
         );
       },
@@ -4210,77 +3366,78 @@ Future<bool> _showAIConsentDialog() async {
       shellMaxWidth: 400,
       builder: (dialogContext) {
         return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                        Opacity(
-                          opacity: 0.82,
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.cloud_upload_rounded,
-                              size: 32,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '云端暂无备份',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '检测到当前设备有本地数据，是否立即上传到云端用于后续同步？',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(dialogContext, false),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: AppColors.of(context).borderWeak),
-                                  ),
-                                ),
-                                child: const Text('暂不上传'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () => Navigator.pop(dialogContext, true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF4A90E2),
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text('上传到云端'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Opacity(
+              opacity: 0.82,
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.cloud_upload_rounded,
+                  size: 32,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '云端暂无备份',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '检测到当前设备有本地数据，是否立即上传到云端用于后续同步？',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: AppColors.of(context).textSecondary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side:
+                            BorderSide(color: AppColors.of(context).borderWeak),
+                      ),
+                    ),
+                    child: const Text('暂不上传'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4A90E2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('上传到云端'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         );
       },
     );
@@ -4295,77 +3452,80 @@ Future<bool> _showAIConsentDialog() async {
       shellMaxWidth: 420,
       builder: (dialogContext) {
         return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                        Opacity(
-                          opacity: 0.82,
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.cloud_done_rounded,
-                              size: 32,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '检测到云端数据',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '云端最后更新时间：${_formatDateTime(updatedAt)}',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 20),
-                        _buildAccountSyncActionTile(
-                          icon: Icons.cloud_download_rounded,
-                          color: Colors.green,
-                          title: '从云端同步到本地',
-                          subtitle: '先选课表，再选合并或覆盖模式',
-                          onTap: () => Navigator.pop(dialogContext, _CloudSyncAction.syncFromCloud),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildAccountSyncActionTile(
-                          icon: Icons.cloud_upload_rounded,
-                          color: const Color(0xFF4A90E2),
-                          title: '本地覆盖云端',
-                          subtitle: '使用当前本地数据覆盖云端备份',
-                          onTap: () => Navigator.pop(dialogContext, _CloudSyncAction.uploadLocalToCloud),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext, _CloudSyncAction.skip),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: AppColors.of(context).borderWeak),
-                              ),
-                            ),
-                            child: const Text('稍后再说'),
-                          ),
-                        ),
-                      ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Opacity(
+              opacity: 0.82,
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.cloud_done_rounded,
+                  size: 32,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '检测到云端数据',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '云端最后更新时间：${_formatDateTime(updatedAt)}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: AppColors.of(context).textSecondary,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 20),
+            _buildAccountSyncActionTile(
+              icon: Icons.cloud_download_rounded,
+              color: Colors.green,
+              title: '从云端同步到本地',
+              subtitle: '先选课表，再选合并或覆盖模式',
+              onTap: () =>
+                  Navigator.pop(dialogContext, _CloudSyncAction.syncFromCloud),
+            ),
+            const SizedBox(height: 10),
+            _buildAccountSyncActionTile(
+              icon: Icons.cloud_upload_rounded,
+              color: const Color(0xFF4A90E2),
+              title: '本地覆盖云端',
+              subtitle: '使用当前本地数据覆盖云端备份',
+              onTap: () => Navigator.pop(
+                  dialogContext, _CloudSyncAction.uploadLocalToCloud),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () =>
+                    Navigator.pop(dialogContext, _CloudSyncAction.skip),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: AppColors.of(context).borderWeak),
+                  ),
+                ),
+                child: const Text('稍后再说'),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -4384,90 +3544,92 @@ Future<bool> _showAIConsentDialog() async {
       shellMaxHeight: 520,
       builder: (dialogContext) {
         return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                        Opacity(
-                          opacity: 0.82,
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.list_alt_rounded,
-                              size: 32,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '选择要同步的课表',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '云端更新时间：${_formatDateTime(updatedAt)}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Flexible(
-                          child: ScrollConfiguration(
-                            behavior: ScrollConfiguration.of(dialogContext).copyWith(
-                              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-                            ),
-                            child: SingleChildScrollView(
-                              child: Column(
-                                children: timetableNames
-                                    .map(
-                                      (name) => Padding(
-                                        padding: const EdgeInsets.only(bottom: 10),
-                                        child: _buildAccountSyncActionTile(
-                                          icon: Icons.calendar_month_rounded,
-                                          color: const Color(0xFF4A90E2),
-                                          title: name,
-                                          subtitle: '同步此课表到当前设备',
-                                          onTap: () => Navigator.pop(dialogContext, name),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Opacity(
+              opacity: 0.82,
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.list_alt_rounded,
+                  size: 32,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '选择要同步的课表',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '云端更新时间：${_formatDateTime(updatedAt)}',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.of(context).textSecondary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Flexible(
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(dialogContext).copyWith(
+                  physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics()),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: timetableNames
+                        .map(
+                          (name) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _buildAccountSyncActionTile(
+                              icon: Icons.calendar_month_rounded,
+                              color: const Color(0xFF4A90E2),
+                              title: name,
+                              subtitle: '同步此课表到当前设备',
+                              onTap: () => Navigator.pop(dialogContext, name),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: AppColors.of(context).borderWeak),
-                              ),
-                            ),
-                            child: const Text('取消'),
-                          ),
-                        ),
-                      ],
+                        )
+                        .toList(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: AppColors.of(context).borderWeak),
+                  ),
+                ),
+                child: const Text('取消'),
+              ),
+            ),
+          ],
         );
       },
     );
   }
 
-  Future<ImportMode?> _showCloudImportModeDialog(DateTime? updatedAt, String timetableName) {
+  Future<ImportMode?> _showCloudImportModeDialog(
+      DateTime? updatedAt, String timetableName) {
     return showBouncyDialog<ImportMode>(
       context: context,
       barrierLabel: '选择同步方式',
@@ -4476,89 +3638,89 @@ Future<bool> _showAIConsentDialog() async {
       shellMaxWidth: 420,
       builder: (dialogContext) {
         return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                        Opacity(
-                          opacity: 0.82,
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
-                              Icons.settings_suggest_rounded,
-                              size: 32,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '选择同步方式',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '已选择课表：$timetableName',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.of(context).textSecondary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '云端更新时间：${_formatDateTime(updatedAt)}',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 20),
-                        _buildAccountSyncActionTile(
-                          icon: Icons.merge_type,
-                          color: Colors.green,
-                          title: '合并到本地',
-                          subtitle: '保留本地数据并补充云端数据',
-                          onTap: () => Navigator.pop(dialogContext, ImportMode.merge),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildAccountSyncActionTile(
-                          icon: Icons.system_update_alt_rounded,
-                          color: Colors.orange,
-                          title: '云端覆盖本地',
-                          subtitle: '清空当前课表后导入该云端课表',
-                          onTap: () => Navigator.pop(dialogContext, ImportMode.replace),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: AppColors.of(context).borderWeak),
-                              ),
-                            ),
-                            child: const Text('取消'),
-                          ),
-                        ),
-                      ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Opacity(
+              opacity: 0.82,
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF5BA0F2)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.settings_suggest_rounded,
+                  size: 32,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '选择同步方式',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '已选择课表：$timetableName',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.of(context).textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '云端更新时间：${_formatDateTime(updatedAt)}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.of(context).textSecondary,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 20),
+            _buildAccountSyncActionTile(
+              icon: Icons.merge_type,
+              color: Colors.green,
+              title: '合并到本地',
+              subtitle: '保留本地数据并补充云端数据',
+              onTap: () => Navigator.pop(dialogContext, ImportMode.merge),
+            ),
+            const SizedBox(height: 10),
+            _buildAccountSyncActionTile(
+              icon: Icons.system_update_alt_rounded,
+              color: Colors.orange,
+              title: '云端覆盖本地',
+              subtitle: '清空当前课表后导入该云端课表',
+              onTap: () => Navigator.pop(dialogContext, ImportMode.replace),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: AppColors.of(context).borderWeak),
+                  ),
+                ),
+                child: const Text('取消'),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -4624,7 +3786,8 @@ Future<bool> _showAIConsentDialog() async {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: AppColors.of(context).textTertiary),
+                Icon(Icons.chevron_right,
+                    color: AppColors.of(context).textTertiary),
               ],
             ),
           ),
@@ -4649,7 +3812,9 @@ Future<bool> _showAIConsentDialog() async {
         curve: Curves.easeOut,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: selected ? selectedColor.withValues(alpha: 0.12) : AppColors.of(context).panel(0.4),
+          color: selected
+              ? selectedColor.withValues(alpha: 0.12)
+              : AppColors.of(context).panel(0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: selected ? selectedColor : AppColors.of(context).panel(0.4),
@@ -4665,7 +3830,9 @@ Future<bool> _showAIConsentDialog() async {
                 color: selected ? selectedColor : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
-                  color: selected ? selectedColor : AppColors.of(context).textTertiary,
+                  color: selected
+                      ? selectedColor
+                      : AppColors.of(context).textTertiary,
                 ),
               ),
               child: selected
@@ -4682,7 +3849,9 @@ Future<bool> _showAIConsentDialog() async {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: selected ? selectedColor : AppColors.of(context).textPrimary,
+                      color: selected
+                          ? selectedColor
+                          : AppColors.of(context).textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -4721,327 +3890,192 @@ Future<bool> _showAIConsentDialog() async {
       shellPadding: const EdgeInsets.all(24),
       builder: (context) {
         return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Icon(
-                            Icons.logout_rounded,
-                            color: Colors.orange.shade400,
-                            size: 40,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '退出登录',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '退出后本地数据仍保留，云端数据不会删除',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.of(context).textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: AppColors.of(context).borderWeak),
-                                  ),
-                                ),
-                                child: const Text('取消'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: auth.isLoading
-                                    ? null
-                                    : () async {
-                                        Navigator.pop(context);
-                                        await auth.signOut();
-                                        if (mounted) {
-                                          toastNotification.show(context, '已退出登录', type: ToastType.info);
-                                        }
-                                      },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.orange,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: Text(auth.isLoading ? '退出中...' : '确认退出'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-        );
-      },
-    );
-  }
-}
-
-class SegmentItem<T> {
-  final String label;
-  final T value;
-  const SegmentItem({required this.label, required this.value});
-}
-
-class SegmentedSelector<T> extends StatefulWidget {
-  final List<SegmentItem<T>> items;
-  final T activeValue;
-  final ValueChanged<T> onChanged;
-
-  /// 浅色模式白把手样式（黑字+投影）：仅「界面风格」滑块使用；
-  /// AI 配置的思考强度/视觉支持滑块保持原灰把手白字
-  final bool whiteKnobInLight;
-
-  const SegmentedSelector({super.key, 
-    required this.items,
-    required this.activeValue,
-    required this.onChanged,
-    this.whiteKnobInLight = false,
-  });
-
-  @override
-  State<SegmentedSelector<T>> createState() => _SegmentedSelectorState<T>();
-}
-
-class _SegmentedSelectorState<T> extends State<SegmentedSelector<T>> {
-  double _dragOffset = 0;
-  bool _isDragging = false;
-  bool _isLongPressing = false;
-  Duration _textAnimDuration = const Duration(milliseconds: 250);
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final totalWidth = constraints.maxWidth;
-        final n = widget.items.length;
-        final internalWidth = totalWidth - 2;
-        final segmentW = internalWidth / n;
-        final activeIdx = widget.items.indexWhere((item) => item.value == widget.activeValue);
-        if (activeIdx < 0) return const SizedBox.shrink();
-
-        final effectiveIdx = _isDragging
-            ? (activeIdx + _dragOffset / segmentW).clamp(0.0, (n - 1).toDouble())
-            : activeIdx.toDouble();
-        final left = 2.0 + effectiveIdx * segmentW;
-        final visualActiveIdx = _isDragging ? effectiveIdx.round().clamp(0, n - 1) : activeIdx;
-        final labels = widget.items.map((e) => e.label).toList();
-
-        return GestureDetector(
-          onTapUp: (details) {
-            final tapX = details.localPosition.dx - 1;
-            if (tapX < 0 || tapX >= internalWidth) return;
-            final tappedIdx = (tapX / segmentW).floor().clamp(0, n - 1);
-            if (tappedIdx == activeIdx) return;
-            HapticFeedback.selectionClick();
-            widget.onChanged(widget.items[tappedIdx].value);
-          },
-          onHorizontalDragStart: (_) {
-            setState(() {
-              _isDragging = true;
-              _isLongPressing = true;
-              _dragOffset = 0;
-            });
-          },
-          onHorizontalDragUpdate: (details) {
-            setState(() {
-              _dragOffset += details.delta.dx;
-              final minOffset = -activeIdx * segmentW;
-              final maxOffset = (n - 1 - activeIdx) * segmentW;
-              _dragOffset = _dragOffset.clamp(minOffset, maxOffset);
-            });
-          },
-          onHorizontalDragEnd: (details) {
-            setState(() {
-              _isDragging = false;
-              _isLongPressing = false;
-            });
-            _textAnimDuration = Duration.zero;
-            if (mounted) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) {
-                  setState(() => _textAnimDuration = const Duration(milliseconds: 250));
-                }
-              });
-            }
-            final velocity = details.primaryVelocity ?? 0;
-            final extra = velocity > 0 ? -segmentW / 3 : velocity < 0 ? segmentW / 3 : 0.0;
-            final totalOffset = _dragOffset + extra;
-            int targetIdx = (activeIdx + totalOffset / segmentW).round().clamp(0, n - 1);
-            _dragOffset = 0;
-            if (targetIdx != activeIdx) {
-              HapticFeedback.selectionClick();
-              widget.onChanged(widget.items[targetIdx].value);
-            }
-          },
-          onHorizontalDragCancel: () {
-            setState(() {
-              _isDragging = false;
-              _isLongPressing = false;
-              _dragOffset = 0;
-            });
-          },
-          onLongPressStart: (_) {
-            setState(() => _isLongPressing = true);
-          },
-          onLongPressEnd: (_) {
-            setState(() => _isLongPressing = false);
-          },
-          child: Container(
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.of(context).panel(0.4),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppColors.of(context).borderWeak, width: 1),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(9),
-              child: Stack(
-                children: [
-                  AnimatedPositioned(
-                    duration: _isDragging ? Duration.zero : const Duration(milliseconds: 250),
-                    curve: Curves.easeInOut,
-                    left: left,
-                    top: 2,
-                    bottom: 2,
-                    child: AnimatedScale(
-                      scale: (_isDragging || _isLongPressing) ? 1.04 : 1.0,
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeInOut,
-                      child: Container(
-                        width: segmentW - 4,
-                        decoration: BoxDecoration(
-                          // 滑块把手：深色下用中灰与深轨道区分，白字仍可读
-                          color: AppColors.isDark(context)
-                              ? Colors.grey.shade600
-                              : (widget.whiteKnobInLight ? Colors.white : Colors.grey.shade800),
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: (AppColors.isDark(context) || !widget.whiteKnobInLight)
-                              ? null
-                              : [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.18),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (_isDragging)
-                    Row(
-                      children: labels.map((label) => Expanded(
-                        child: Center(
-                          child: AnimatedDefaultTextStyle(
-                            key: ValueKey(Theme.of(context).brightness),
-                            duration: Duration.zero,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: AppColors.of(context).textPrimary),
-                            child: Text(label),
-                          ),
-                        ),
-                      )).toList(),
-                    ),
-                  if (_isDragging)
-                    Positioned.fill(
-                      child: ShaderMask(
-                        shaderCallback: (bounds) {
-                          final relLeft = (left / bounds.width).clamp(0.0, 1.0);
-                          const edge = 0.015;
-                          final relStart = (relLeft - edge).clamp(0.0, 1.0);
-                          final relEnd = ((left + segmentW - 4) / bounds.width).clamp(0.0, 1.0);
-                          final relStop = (relEnd + edge).clamp(0.0, 1.0);
-                          return LinearGradient(
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                            colors: const [
-                              Colors.transparent,
-                              Colors.transparent,
-                              Colors.white,
-                              Colors.white,
-                              Colors.transparent,
-                              Colors.transparent,
-                            ],
-                            stops: [0.0, relStart, relLeft, relEnd, relStop, 1.0],
-                          ).createShader(bounds);
-                        },
-                        blendMode: BlendMode.dstIn,
-                        child: Row(
-                          children: labels.map((label) => Expanded(
-                            child: Center(
-                              child: AnimatedDefaultTextStyle(
-                                duration: Duration.zero,
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: (widget.whiteKnobInLight && !AppColors.isDark(context)) ? const Color(0xFF1A1A2E) : Colors.white),
-                                child: Text(label),
-                              ),
-                            ),
-                          )).toList(),
-                        ),
-                      ),
-                    ),
-                  if (!_isDragging)
-                    Row(
-                      children: labels.asMap().entries.map((entry) {
-                        return Expanded(
-                          child: Center(
-                            child: AnimatedDefaultTextStyle(
-                              key: ValueKey(Theme.of(context).brightness),
-                              duration: _textAnimDuration,
-                              curve: Curves.easeInOut,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.normal,
-                                color: entry.key == visualActiveIdx
-                                    ? ((widget.whiteKnobInLight && !AppColors.isDark(context)) ? const Color(0xFF1A1A2E) : Colors.white)
-                                    : AppColors.of(context).textPrimary,
-                              ),
-                              child: Text(entry.value),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(
+                Icons.logout_rounded,
+                color: Colors.orange.shade400,
+                size: 40,
               ),
             ),
-          ),
+            const SizedBox(height: 16),
+            const Text(
+              '退出登录',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '退出后本地数据仍保留，云端数据不会删除',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: AppColors.of(context).textSecondary,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side:
+                            BorderSide(color: AppColors.of(context).borderWeak),
+                      ),
+                    ),
+                    child: const Text('取消'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: auth.isLoading
+                        ? null
+                        : () async {
+                            Navigator.pop(context);
+                            await auth.signOut();
+                            if (mounted) {
+                              toastNotification.show(context, '已退出登录',
+                                  type: ToastType.info);
+                            }
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(auth.isLoading ? '退出中...' : '确认退出'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         );
       },
     );
   }
+}
 
-  Widget _buildBaseTextRow(List<String> labels, Color color, FontWeight weight) {
-    return Row(
-      children: labels.map((label) => Expanded(
-        child: Center(
-          child: Text(label, style: TextStyle(fontSize: 13, fontWeight: weight, color: color)),
+/// 子选项左侧的树状分支连接线（├ / └）：竖干贴着父项图标底座的中线落下，
+/// 以圆角拐出横臂指向子项标题。逐行各画各的，相邻行的竖干首尾相接，
+/// 因此中间行必须一路画到行底，只有末行画到拐角起弧处即止。
+class _BranchConnectorPainter extends CustomPainter {
+  const _BranchConnectorPainter({
+    required this.color,
+    required this.stemEndsAtBranch,
+  });
+
+  final Color color;
+
+  /// true = 末行（└）：竖干到分支口停止；false = 中间行（├）：贯穿整行
+  final bool stemEndsAtBranch;
+
+  /// 竖干所在的 x：父项 contentPadding 12 + 图标底座一半 15，减去本行
+  /// 已有的 12 左边距，即分支区内的 15
+  static const double _stemX = 15;
+
+  /// 肘部圆角半径
+  static const double _radius = 6;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final branchY = size.height / 2;
+    // 起弧点：竖干上、比横臂高出一个半径的位置
+    final elbowTop = branchY - _radius;
+
+    // 竖干：末行到起弧处即止，中间行贯穿整行以衔接下一行
+    canvas.drawLine(
+      const Offset(_stemX, 0),
+      Offset(_stemX, stemEndsAtBranch ? elbowTop : size.height),
+      paint,
+    );
+
+    // 横臂：自竖干以圆角拐出。圆心在 (stemX + r, elbowTop)，
+    // 其正西点即起弧点、正南点即横臂所在高度
+    final arm = Path()
+      ..moveTo(_stemX, elbowTop)
+      ..arcTo(
+        Rect.fromCircle(
+          center: Offset(_stemX + _radius, elbowTop),
+          radius: _radius,
         ),
-      )).toList(),
+        math.pi,
+        -math.pi / 2,
+        false,
+      )
+      ..lineTo(size.width, branchY);
+    canvas.drawPath(arm, paint);
+  }
+
+  @override
+  bool shouldRepaint(_BranchConnectorPainter oldDelegate) =>
+      oldDelegate.color != color ||
+      oldDelegate.stemEndsAtBranch != stemEndsAtBranch;
+}
+
+/// 勾选圈里的对勾：在淡入之外再叠一层「沿路径逐段描出」的打勾动画，
+/// 两者共用同一个 progress（同 duration 同 curve 由外层 TweenAnimationBuilder 给）。
+///
+/// 顶点按盒子尺寸归一化（CustomPaint 拿到的是圈的去边内容区，
+/// 不写死像素），路径只有两段直线，逐帧重建 metrics 的开销可以忽略。
+class _CheckMarkPainter extends CustomPainter {
+  const _CheckMarkPainter({required this.progress});
+
+  /// 0 = 完全不可见，1 = 描满且不透明
+  final double progress;
+
+  static const List<Offset> _unit = [
+    Offset(0.22, 0.52),
+    Offset(0.42, 0.70),
+    Offset(0.78, 0.34),
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0 || size.isEmpty) return;
+    final path = Path()
+      ..moveTo(_unit[0].dx * size.width, _unit[0].dy * size.height)
+      ..lineTo(_unit[1].dx * size.width, _unit[1].dy * size.height)
+      ..lineTo(_unit[2].dx * size.width, _unit[2].dy * size.height);
+    final t = progress.clamp(0.0, 1.0);
+    final metric = path.computeMetrics().first;
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: t)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    // 本 SDK 的 PathMetric 用 extractPath(start, end) 取子路径
+    canvas.drawPath(
+      metric.extractPath(0, metric.length * t),
+      paint,
     );
   }
+
+  @override
+  bool shouldRepaint(_CheckMarkPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 class _VideoThumbnail extends StatefulWidget {
@@ -5107,7 +4141,9 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 
   @override
   Widget build(BuildContext context) {
-    if (_initialized && _controller != null && _controller!.value.isInitialized) {
+    if (_initialized &&
+        _controller != null &&
+        _controller!.value.isInitialized) {
       final videoW = _controller!.value.size.width;
       final videoH = _controller!.value.size.height;
       return Stack(
@@ -5132,7 +4168,8 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                 shape: BoxShape.circle,
               ),
               padding: const EdgeInsets.all(6),
-              child: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
+              child:
+                  const Icon(Icons.play_arrow, color: Colors.white, size: 18),
             ),
           ),
         ],
@@ -5144,7 +4181,8 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
         child: SizedBox(
           width: 16,
           height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+          child:
+              CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
         ),
       ),
     );
@@ -5219,8 +4257,7 @@ class _SettingsInfoTipState extends State<_SettingsInfoTip>
   Widget build(BuildContext context) {
     // 智能换行：气泡自问号处向右展开，最大宽度不超过屏幕宽度
     // 减去左偏移和 16px 右边距，窄屏时长文字自动折行
-    final maxTipWidth =
-        MediaQuery.of(context).size.width - widget.left - 16;
+    final maxTipWidth = MediaQuery.of(context).size.width - widget.left - 16;
     return Positioned(
       left: widget.left,
       top: widget.top,
@@ -5274,182 +4311,6 @@ class _SettingsInfoTipState extends State<_SettingsInfoTip>
   }
 }
 
-/// 登录对话框确认密码框的两段式出现动画（复刻课表切换对话框「新增课表」）：
-/// 1) 占位展开 200ms easeInCubic：内容不可见，占位高度逐帧展开，下方
-///    元素连贯位移、对话框高度同步增长；
-/// 2) 出现 220ms easeOutCubic：由中心模糊扩大淡入
-///    （sigma 14→0 + scale 0.55→1 + 淡入）。
-/// 收起（注册切回登录）时逆序播放。单个控制器用 Interval 切分两阶段，
-/// expand 到 200/420 后保持 1，appear 在 200/420 前恒为 0。
-class _FieldSlotAppear extends StatefulWidget {
-  final bool visible;
-  final Widget child;
-
-  const _FieldSlotAppear({required this.visible, required this.child});
-
-  @override
-  State<_FieldSlotAppear> createState() => _FieldSlotAppearState();
-}
-
-class _FieldSlotAppearState extends State<_FieldSlotAppear>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 420),
-    value: widget.visible ? 1.0 : 0.0,
-  );
-
-  static const double _expandFraction = 200 / 420;
-
-  // 阶段一：占位展开（0 ~ 200/420）；阶段二：出现（200/420 ~ 1）
-  late final Animatable<double> _expandChain = CurveTween(
-    curve: const Interval(0.0, _expandFraction, curve: Curves.easeInCubic),
-  );
-  late final Animatable<double> _appearChain = CurveTween(
-    curve: const Interval(_expandFraction, 1.0, curve: Curves.easeOutCubic),
-  );
-
-  @override
-  void didUpdateWidget(covariant _FieldSlotAppear oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.visible == oldWidget.visible) return;
-    if (widget.visible) {
-      _controller.forward();
-    } else {
-      _controller.reverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final expand = _expandChain.transform(_controller.value);
-        final appear = _appearChain.transform(_controller.value);
-        return SizeTransition(
-          sizeFactor: AlwaysStoppedAnimation(expand.clamp(0.0, 1.0)),
-          axisAlignment: -1.0,
-          child: Opacity(
-            opacity: appear.clamp(0.0, 1.0),
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(
-                sigmaX: 14 * (1.0 - appear),
-                sigmaY: 14 * (1.0 - appear),
-              ),
-              child: Transform.scale(
-                scale: 0.55 + 0.45 * appear,
-                child: child,
-              ),
-            ),
-          ),
-        );
-      },
-      child: widget.child,
-    );
-  }
-}
-
-/// Agnes AI 配置对话框标题问号：点击向下弹出推荐说明气泡
-/// （样式与动画同问号提示框），点击空白处收回
-class _AgnesHelpIcon extends StatefulWidget {
-  final bool reduceMotion;
-
-  const _AgnesHelpIcon({required this.reduceMotion});
-
-  @override
-  State<_AgnesHelpIcon> createState() => _AgnesHelpIconState();
-}
-
-class _AgnesHelpIconState extends State<_AgnesHelpIcon> {
-  final GlobalKey _iconKey = GlobalKey();
-  OverlayEntry? _tipEntry;
-  bool _tipVisible = false;
-
-  void _toggleTip() {
-    if (_tipEntry != null) {
-      _removeTip();
-      return;
-    }
-    final iconBox = _iconKey.currentContext?.findRenderObject() as RenderBox?;
-    if (iconBox == null) return;
-    final iconPos = iconBox.localToGlobal(Offset.zero);
-    final iconSize = iconBox.size;
-    final screenWidth = MediaQuery.of(context).size.width;
-    // 气泡固定 300 宽（窄屏收缩至屏幕宽减 32），左缘对齐问号左侧并
-    // 夹在屏幕内（左右各留 16px 边距）
-    final tipWidth = (screenWidth - 32).clamp(120.0, 300.0).toDouble();
-    final left = (iconPos.dx - 12)
-        .clamp(16.0, (screenWidth - tipWidth - 16).clamp(16.0, double.infinity))
-        .toDouble();
-    // 气泡顶边位于问号图标下方 6px（向下弹出）
-    final top = iconPos.dy + iconSize.height + 6;
-    _tipVisible = true;
-    _tipEntry = OverlayEntry(
-      builder: (context) => Stack(
-        children: [
-          // 透明屏障：点击气泡以外的任意处收回
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _removeTip,
-            ),
-          ),
-          _AgnesHelpTip(
-            visible: _tipVisible,
-            left: left,
-            top: top,
-            width: tipWidth,
-            reduceMotion: widget.reduceMotion,
-            onDismissed: () {
-              _tipEntry?.remove();
-              _tipEntry = null;
-            },
-          ),
-        ],
-      ),
-    );
-    Overlay.of(context).insert(_tipEntry!);
-  }
-
-  void _removeTip() {
-    if (_tipEntry == null) return;
-    // 翻转 visible 触发收回动画，动画完成后由 onDismissed 移除 entry
-    _tipVisible = false;
-    _tipEntry!.markNeedsBuild();
-  }
-
-  @override
-  void dispose() {
-    // 对话框关闭时同步移除气泡
-    _tipEntry?.remove();
-    _tipEntry = null;
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      key: _iconKey,
-      behavior: HitTestBehavior.opaque,
-      onTap: _toggleTip,
-      child: Icon(
-        Icons.help_outline,
-        size: 16,
-        color: AppColors.of(context).textTertiary,
-      ),
-    );
-  }
-}
-
-/// 标题问号（向下弹出通用版）：点击在问号下方弹出说明气泡
-/// （样式与动画同问号提示框），点击空白处收回
 class _TitleHelpIcon extends StatefulWidget {
   final String text;
 
@@ -5537,170 +4398,6 @@ class _TitleHelpIconState extends State<_TitleHelpIcon> {
 }
 
 /// Agnes AI 推荐说明气泡：自问号下方向下弹出，收回时向上缩回
-class _AgnesHelpTip extends StatefulWidget {
-  final bool visible;
-  final double left;
-  final double top;
-  final double width;
-  final bool reduceMotion;
-  final VoidCallback? onDismissed;
-
-  const _AgnesHelpTip({
-    required this.visible,
-    required this.left,
-    required this.top,
-    required this.width,
-    required this.reduceMotion,
-    this.onDismissed,
-  });
-
-  @override
-  State<_AgnesHelpTip> createState() => _AgnesHelpTipState();
-}
-
-class _AgnesHelpTipState extends State<_AgnesHelpTip>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 220),
-  );
-
-  // 与问号提示同款曲线：弹出轻微回弹，收回缩回锚点处
-  late final CurvedAnimation _curved = CurvedAnimation(
-    parent: _controller,
-    curve: Curves.easeOutBack,
-    reverseCurve: Curves.easeInCubic,
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.visible) {
-      _controller.forward();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _AgnesHelpTip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.visible == oldWidget.visible) return;
-    if (widget.visible) {
-      _controller.forward();
-    } else {
-      _controller.reverse().whenCompleteOrCancel(() {
-        if (mounted) widget.onDismissed?.call();
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _curved.dispose();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _openUrl() async {
-    final uri = Uri.parse('https://www.agnes-ai.cn/');
-    try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: widget.left,
-      top: widget.top,
-      child: AnimatedBuilder(
-        animation: _curved,
-        builder: (context, child) {
-          final t = _curved.value;
-          return Opacity(
-            // easeOutBack 会过冲超过 1.0，透明度需夹取
-            opacity: t.clamp(0.0, 1.0),
-            child: Transform.translate(
-              // 自问号图标处（上方）向下滑出；收回时向上缩回图标处
-              offset: Offset(0, -14 * (1 - t)),
-              child: Transform.scale(
-                // 顶部对齐缩放：视觉上自问号处向下展开/向上收起
-                scale: 0.85 + 0.15 * t,
-                alignment: Alignment.topCenter,
-                child: child,
-              ),
-            ),
-          );
-        },
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            width: widget.width,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.of(context).surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.of(context).borderWeak),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '为什么推荐使用此供应商？',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.of(context).textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Agnes AI现面向全球用户针对部分模型提供免费API，经测试这些模型足以发挥出CourseHub的全部Agent能力。在使用过程中，我们推荐您将思考强度设置为Medium。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.of(context).textSecondary,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '您可在如下网址注册一个账号获取API并开始免费使用CourseHub的所有功能。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.of(context).textSecondary,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                GestureDetector(
-                  onTap: _openUrl,
-                  child: const Text(
-                    'https://www.agnes-ai.cn/',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF4A90E2),
-                      decoration: TextDecoration.underline,
-                      decorationColor: Color(0xFF4A90E2),
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 关于对话框「联系开发者」链接：点击后向上弹出联系提示气泡
 /// （样式与动画参考减弱动态效果问号提示框），点击空白处收回
 class _AboutContactLink extends StatefulWidget {
@@ -5726,9 +4423,8 @@ class _AboutContactLinkState extends State<_AboutContactLink> {
     final linkCenter = linkPos.dx + linkBox.size.width / 2;
     final screenSize = MediaQuery.of(context).size;
     // 气泡宽度固定 280（窄屏收缩），水平居中于链接文字并夹在屏幕内
-    final tipWidth = screenSize.width - 32 < 280
-        ? screenSize.width - 32
-        : 280.0;
+    final tipWidth =
+        screenSize.width - 32 < 280 ? screenSize.width - 32 : 280.0;
     final left = (linkCenter - tipWidth / 2)
         .clamp(
           16.0,
@@ -5917,7 +4613,8 @@ class _AboutContactTipState extends State<_AboutContactTip>
                 // 点击复制邮箱
                 GestureDetector(
                   onTap: () {
-                    Clipboard.setData(const ClipboardData(text: 'zwt70@outlook.com'));
+                    Clipboard.setData(
+                        const ClipboardData(text: 'zwt70@outlook.com'));
                     HapticFeedback.selectionClick();
                     toastNotification.show(
                       context,
@@ -5964,63 +4661,138 @@ class _AboutContactTipState extends State<_AboutContactTip>
   }
 }
 
-/// 打赏者记录：微信打赏 ID + 打赏金额（元）。
-class _DonationRecord {
-  const _DonationRecord({required this.wechatId, required this.amount});
-
-  final String wechatId;
-  final double amount;
-}
-
-/// 打赏者名单（按打赏时间由新到旧排列）。
-/// 当前为空 → 对话框内展示空态提示；收到打赏后按下面注释示例追加即可。
-/// 后续若改为从云端拉取，用同一结构填充本列表，展示组件无需改动。
-const List<_DonationRecord> _kDonationRecords = [
-  // _DonationRecord(wechatId: '微信昵称', amount: 6.66),
-];
-
-/// 打赏码预留位：优先加载 assets/donate/ 下的二维码图片，
-/// 图片尚未放入时由 errorBuilder 回落为占位框（放入即生效，无需改代码）。
-class _DonateQrSlot extends StatelessWidget {
-  const _DonateQrSlot({required this.label, required this.assetPath});
+/// 打赏码：展示 assets/donate/ 下的微信收款码，长按把原图保存到系统相册。
+///
+/// 保存走 gal：Android 由 MediaStore 写入「图片/CourseHub」，Android 10+ 免权限，
+/// Android 6~9 首次会申请写存储权限（清单里以 maxSdkVersion=28 声明）；iOS 与
+/// 桌面端写入系统图片目录。资源缺失时由 errorBuilder 回落为占位框。
+class _DonateQrCode extends StatefulWidget {
+  const _DonateQrCode({required this.label, required this.assetPath});
 
   final String label;
   final String assetPath;
+
+  @override
+  State<_DonateQrCode> createState() => _DonateQrCodeState();
+}
+
+class _DonateQrCodeState extends State<_DonateQrCode> {
+  /// 保存中标记，兼作重复长按的去抖：gal 每次写入都新建文件（同名自动追加序号），
+  /// 连点会在相册里留下一串重复的打赏码
+  bool _saving = false;
+
+  Future<void> _saveToAlbum() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    HapticFeedback.mediumImpact();
+
+    String? failure;
+    try {
+      // Android 6~9 需写存储权限（首次弹系统框）；Android 10+ 恒为已授权，不打扰
+      if (!await Gal.hasAccess() && !await Gal.requestAccess()) {
+        failure = '未授予存储权限，无法保存';
+      } else {
+        final byteData = await rootBundle.load(widget.assetPath);
+        await Gal.putImageBytes(
+          byteData.buffer.asUint8List(),
+          album: 'CourseHub',
+          name: 'coursehub_donate_qr',
+        );
+      }
+    } on GalException catch (e) {
+      failure = switch (e.type) {
+        GalExceptionType.accessDenied => '未授予相册权限，无法保存',
+        GalExceptionType.notEnoughSpace => '存储空间不足，保存失败',
+        _ => '保存失败，请稍后重试',
+      };
+      debugPrint('[donate] gal 保存失败: $e');
+    } catch (e) {
+      failure = '保存失败，请稍后重试';
+      debugPrint('[donate] 读取打赏码失败: $e');
+    }
+
+    if (!mounted) return;
+    setState(() => _saving = false);
+    toastNotification.show(
+      context,
+      failure ?? '打赏码已保存到相册',
+      type: failure == null ? ToastType.success : ToastType.error,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: double.infinity,
-          height: 132,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: AppColors.of(context).surfaceAlt,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.of(context).borderWeak),
-          ),
-          child: Image.asset(
-            assetPath,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.qr_code_2, size: 40, color: AppColors.of(context).textTertiary),
-                const SizedBox(height: 6),
-                Text(
-                  '打赏码待放置',
-                  style: TextStyle(fontSize: 11, color: AppColors.of(context).textTertiary),
-                ),
-              ],
+        GestureDetector(
+          onLongPress: _saveToAlbum,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 150),
+            opacity: _saving ? 0.6 : 1,
+            child: SizedBox(
+              width: 200,
+              height: 200,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: AppColors.of(context).surfaceAlt,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: AppColors.of(context).borderWeak),
+                    ),
+                    // contain：打赏码不可被裁切，非正方形素材留白而非切边
+                    child: Image.asset(
+                      widget.assetPath,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.qr_code_2,
+                              size: 40,
+                              color: AppColors.of(context).textTertiary),
+                          const SizedBox(height: 6),
+                          Text(
+                            '打赏码待放置',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.of(context).textTertiary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_saving)
+                    Center(
+                      child: SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: AppColors.of(context).textSecondary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
         const SizedBox(height: 8),
         Text(
-          label,
-          style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
+          widget.label,
+          style: TextStyle(
+              fontSize: 13, color: AppColors.of(context).textSecondary),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '长按二维码可保存到相册',
+          style: TextStyle(
+              fontSize: 11, color: AppColors.of(context).textTertiary),
         ),
       ],
     );
@@ -6028,16 +4800,41 @@ class _DonateQrSlot extends StatelessWidget {
 }
 
 /// 打赏者名单区块：左侧微信打赏 ID，右侧打赏金额（￥xx.xx）。
-class _DonationSupporterList extends StatelessWidget {
+/// 名单来自 CloudBase 静态托管的 donors.json（DonorService），
+/// 拉取失败回落本地缓存，从未成功过显示空态。
+class _DonationSupporterList extends StatefulWidget {
   const _DonationSupporterList();
 
   @override
+  State<_DonationSupporterList> createState() =>
+      _DonationSupporterListState();
+}
+
+class _DonationSupporterListState extends State<_DonationSupporterList> {
+  List<DonationRecord>? _donors;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    // 24 小时内最多刷新一次云端名单，窗口内展示本地缓存（流量优化）
+    final donors = await DonorService.fetchDonorsForDisplay();
+    if (!mounted) return;
+    setState(() => _donors = donors);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final donors = _donors ?? const <DonationRecord>[];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('打赏者名单',
+        Text(
+          '打赏者名单',
           style: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.bold,
@@ -6045,7 +4842,7 @@ class _DonationSupporterList extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        if (_kDonationRecords.isEmpty)
+        if (donors.isEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 18),
@@ -6057,7 +4854,8 @@ class _DonationSupporterList extends StatelessWidget {
             child: Text(
               '还没有打赏记录，你的支持会出现在这里',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: AppColors.of(context).textTertiary),
+              style: TextStyle(
+                  fontSize: 13, color: AppColors.of(context).textTertiary),
             ),
           )
         else
@@ -6070,9 +4868,10 @@ class _DonationSupporterList extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                for (int i = 0; i < _kDonationRecords.length; i++) ...[
-                  if (i > 0) Divider(height: 1, color: AppColors.of(context).borderWeak),
-                  _DonationRecordRow(record: _kDonationRecords[i]),
+                for (int i = 0; i < donors.length; i++) ...[
+                  if (i > 0)
+                    Divider(height: 1, color: AppColors.of(context).borderWeak),
+                  _DonationRecordRow(record: donors[i]),
                 ],
               ],
             ),
@@ -6085,7 +4884,7 @@ class _DonationSupporterList extends StatelessWidget {
 class _DonationRecordRow extends StatelessWidget {
   const _DonationRecordRow({required this.record});
 
-  final _DonationRecord record;
+  final DonationRecord record;
 
   @override
   Widget build(BuildContext context) {
@@ -6098,7 +4897,8 @@ class _DonationRecordRow extends StatelessWidget {
               record.wechatId,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 14, color: AppColors.of(context).textPrimary),
+              style: TextStyle(
+                  fontSize: 14, color: AppColors.of(context).textPrimary),
             ),
           ),
           Text(

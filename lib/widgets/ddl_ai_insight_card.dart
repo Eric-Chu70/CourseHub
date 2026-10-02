@@ -14,15 +14,29 @@ import '../utils/storage.dart';
 /// - 仅提取"任务建议"部分文字（不带标题）用打字机效果显示
 /// - 内存级缓存（仅本次 App 运行期间有效）
 class DDLAIInsightCard extends StatefulWidget {
-  /// 对外只读：本次 App 运行期间是否被用户关闭（供 DDL 页调整间距）
+  /// 对外只读：本次 App 运行期间是否被用户点叉关闭（供 DDL 页收窄间距）
   static bool get isDismissedThisRun => _DDLAIInsightCardState._dismissedByUser;
+
+  /// 对外只读：是否已有可保留的分析结果。子开关关闭时，DDL 页据此和
+  /// [isDismissedThisRun] 一起判断该收起还是保留——两者都是同步量，
+  /// DDL 页与卡片在同一帧里算出的结论必然一致
+  static bool get hasResult =>
+      _DDLAIInsightCardState._hasAnalyzed &&
+      _DDLAIInsightCardState._cachedInsight != null &&
+      _DDLAIInsightCardState._cachedInsight!.isNotEmpty;
   final List<Task> tasks;
+
+  /// 「设置 → AI设置 → 自动任务分析」子开关（由 DDL 页从
+  /// [AIAutoAnalysisFlags] 的同步缓存读出后传入）。关闭时不再发起新的分析，
+  /// 但已生成的结果原样保留；无结果可展示时整块收起。
+  final bool autoAnalysis;
   // 高度变化回调，用于通知父 widget 更新布局
   final ValueChanged<double>? onHeightChanged;
 
   const DDLAIInsightCard({
     super.key,
     required this.tasks,
+    this.autoAnalysis = true,
     this.onHeightChanged,
   });
 
@@ -55,6 +69,18 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
   static StreamSubscription<String>? _streamSubscription;
   static bool _isAnalyzing = false;
   static bool _hasError = false;
+  // 失败原因（AiException 的人话文案）：显示在「分析失败」下面，
+  // 一眼能分清是额度、网络还是中转挂了
+  static String? _lastError;
+  // 本次分析的发起人：把底层 HttpClient 登记到 AIService，让「重试」能真正
+  // 掐断上一次还卡着的请求（取消订阅做不到，见 _analyzeDDL 注释）
+  static final Object _aiRequestOwner = Object();
+  // 首字节看门狗：任务分析只要 200 字，30s 还没吐第一个字就是死连接
+  // （与对话页 _noResponseTimeout 同值）
+  static const Duration _firstByteTimeout = Duration(seconds: 30);
+  // 清场后退避：等旧 socket 真正释放再发新请求（与对话页 _retryBackoffStep 同值）
+  static const Duration _retryBackoff = Duration(milliseconds: 800);
+  static Timer? _firstByteTimer;
   // 跨实例通信：后台流完成后通知新实例同步 UI
   static final ValueNotifier<int> _streamUpdateTick = ValueNotifier<int>(0);
 
@@ -81,13 +107,12 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
       vsync: this,
     );
     _streamUpdateTick.addListener(_handleStreamUpdateTick);
-    // 缓存命中时同步定相：首帧直接渲染最终高度，避免先以 idle 相态
-    // 渲染再经 AnimatedSize 撑高（每次进入 DDL 页"往下弹出一次"的根源）
+    // 定相全部在首帧同步完成：缓存命中直接渲染最终高度，子开关关闭且无
+    // 结果可保留则首帧即为收起——否则会先以 idle 相态渲染一帧，再经
+    // AnimatedSize 收起/撑高（每次进入 DDL 页"往下弹出一次"的根源）
     if (_dismissedByUser) {
       _phase = _InsightPhase.hidden;
-    } else if (_hasAnalyzed &&
-        _cachedInsight != null &&
-        _cachedInsight!.isNotEmpty) {
+    } else if (DDLAIInsightCard.hasResult) {
       final extracted = _extractInsightText(_cachedInsight!);
       _typewriterContent = extracted;
       _typewriterIndex = extracted.length;
@@ -95,9 +120,20 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     } else if (_isAnalyzing) {
       _phase = _InsightPhase.loading;
       _shimmerController.repeat();
+    } else if (!widget.autoAnalysis) {
+      _phase = _InsightPhase.hidden;
     } else {
       _loadConfigAndAnalyze();
     }
+  }
+
+  @override
+  void didUpdateWidget(DDLAIInsightCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.autoAnalysis == oldWidget.autoAnalysis) return;
+    // 子开关翻转：重新定相。关掉时已有结果继续保留、无结果则收起；
+    // 打开时若本次还没分析过则补发一次
+    _loadConfigAndAnalyze();
   }
 
   @override
@@ -107,7 +143,8 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     _streamUpdateTick.removeListener(_handleStreamUpdateTick);
     _dismissCurved?.dispose();
     _dismissController?.dispose();
-    // 注意：不取消 _streamSubscription，让后台流继续运行
+    // 注意：不取消 _streamSubscription，也不停首字节看门狗——让后台流和它的
+    // 超时保护继续运行（看门狗只碰 static 状态），切回本页还能正常收尾
     super.dispose();
   }
 
@@ -120,7 +157,7 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
         setState(() => _phase = _InsightPhase.loading);
         _shimmerController.repeat();
       }
-    } else if (_hasAnalyzed && _cachedInsight != null && _cachedInsight!.isNotEmpty) {
+    } else if (DDLAIInsightCard.hasResult) {
       // 后台分析完成，显示结果
       _shimmerController.stop();
       _startTypewriterFromContent(_cachedInsight!, useTypewriter: true);
@@ -152,7 +189,7 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
     }
 
     // 内存缓存命中（非首次进入，直接显示完整文字，不使用打字机）
-    if (_hasAnalyzed && _cachedInsight != null && _cachedInsight!.isNotEmpty) {
+    if (DDLAIInsightCard.hasResult) {
       _startTypewriterFromContent(_cachedInsight!, useTypewriter: false);
       return;
     }
@@ -166,6 +203,15 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
       return;
     }
 
+    // 「自动任务分析」子开关关闭：上面已经放过「有结果→保留展示」和
+    // 「在跑→等它跑完」，走到这里意味着要发起一次新的分析——不再发起，
+    // 整块收起（下次进入同样不生成，直到重新打开）
+    if (!widget.autoAnalysis) {
+      widget.onHeightChanged?.call(0);
+      if (mounted) setState(() => _phase = _InsightPhase.hidden);
+      return;
+    }
+
     if (widget.tasks.isEmpty) {
       if (mounted) setState(() => _phase = _InsightPhase.idle);
       return;
@@ -175,36 +221,57 @@ class _DDLAIInsightCardState extends State<DDLAIInsightCard>
   }
 
   Future<void> _analyzeDDL() async {
-    _streamSubscription?.cancel();
+    if (_isAnalyzing) return;
+    // 先占住在飞标记：下面的退避是异步的，期间不再接受第二次触发
     _isAnalyzing = true;
     _hasError = false;
+    _lastError = null;
     _streamingContent = '';
     if (mounted) {
       setState(() => _phase = _InsightPhase.loading);
       _shimmerController.repeat();
     }
 
-    final tasks = widget.tasks.where((t) => !t.completed).toList();
+    // 未完成任务快照在退避之前就取好，且全程用这份局部副本：退避后卡片
+    // 可能已被切页销毁（widget 读不到），后台分析仍要按发起时的任务跑完
+    final pendingTasks = widget.tasks.where((t) => !t.completed).toList();
     // 记录本次分析基于的未完成任务快照：任务增删/编辑/勾选完成后
     // 与快照不同时展示"重新生成"
-    _analysisTaskSnapshot = tasks
+    _analysisTaskSnapshot = pendingTasks
         .map((t) => '${t.id}|${t.dueDate.toIso8601String()}|${t.name}')
         .toSet();
-    final tasksInfo = tasks.asMap().entries.map((e) {
+
+    // 清场：取消订阅 ≠ 中断请求。上一次（含切页后仍在后台跑的那次）多半卡在
+    // 等服务端首字节，它的 socket 会一直挂着；不清掉就发新请求，新旧请求会挤
+    // 在同一个云托管实例上一起排队超时——表现就是「重试每次都失败，退出重进
+    // 一遍就好」（退出时系统把连接全断了）。与对话页的自动重试同款处理。
+    final pendingSubscription = _streamSubscription;
+    _streamSubscription = null;
+    // 刻意不 await：async* 订阅的 cancel() 要等生成器退出才完成，卡住时永不返回
+    unawaited(pendingSubscription?.cancel());
+    final aborted = AIService.instance.abortActiveStreams(_aiRequestOwner);
+    if (aborted > 0) {
+      debugPrint('[DDL Insight] Aborted $aborted stale request(s) before retry');
+      await Future<void>.delayed(_retryBackoff);
+      if (!_isAnalyzing) return; // 退避期间被叉号关闭 / 其他流程接管
+    }
+
+    final tasksInfo = pendingTasks.asMap().entries.map((e) {
       final t = e.value;
       return '${e.key + 1}. ${t.name} - 截止: ${t.dueDate.year}/${t.dueDate.month}/${t.dueDate.day}';
     }).join('\n');
 
-    final overdueTasks = tasks.where((t) => t.dueDate.isBefore(DateTime.now())).length;
+    final overdueTasks =
+        pendingTasks.where((t) => t.dueDate.isBefore(DateTime.now())).length;
     final today = DateTime.now();
-    final upcomingTasks = tasks.where((t) {
+    final upcomingTasks = pendingTasks.where((t) {
       final diff = t.dueDate.difference(today).inDays;
       return diff >= 0 && diff <= 3;
     }).length;
 
     // 独立的任务分析提示词（与对话页完全解耦）
     // 简化版：仅输出任务建议，200字以内，无emoji
-    final prompt = '''当前待办任务（共${tasks.length}个，已逾期$overdueTasks个，即将到期$upcomingTasks个）：
+    final prompt = '''当前待办任务（共${pendingTasks.length}个，已逾期$overdueTasks个，即将到期$upcomingTasks个）：
 $tasksInfo
 
 请用简洁的中文分析任务安排，按以下格式输出（不要使用emoji，总字数控制在200字以内）：
@@ -218,22 +285,29 @@ $tasksInfo
 直接开始回答，不要开场白。''';
 
     try {
+      _startFirstByteWatchdog();
       final stream = AIService.instance.chatWithModelStream(
         userMessage: prompt,
         systemPrompt: '你是学习助手。回答简洁有重点，不使用emoji，总字数不超过200字。',
         provider: _currentProvider,
+        owner: _aiRequestOwner,
       );
 
       _streamSubscription = stream.listen(
         (chunk) {
+          // 首字节已到：看门狗交班给流本身
+          _stopFirstByteWatchdog();
           _streamingContent += chunk;
         },
         onError: (error) {
+          _stopFirstByteWatchdog();
           _isAnalyzing = false;
           _hasError = true;
+          _lastError = _describeError(error);
           _streamUpdateTick.value = _streamUpdateTick.value + 1;
         },
         onDone: () {
+          _stopFirstByteWatchdog();
           _isAnalyzing = false;
           if (_streamingContent.isNotEmpty) {
             _cachedInsight = _streamingContent;
@@ -243,15 +317,49 @@ $tasksInfo
             _analysisTimetableId = StorageService.currentTimetableId;
           } else {
             _hasError = true;
+            _lastError = '服务端没有返回内容，可再试一次或切换 AI 服务';
           }
           _streamUpdateTick.value = _streamUpdateTick.value + 1;
         },
       );
     } catch (e) {
+      _stopFirstByteWatchdog();
       _isAnalyzing = false;
       _hasError = true;
+      _lastError = _describeError(e);
       _streamUpdateTick.value = _streamUpdateTick.value + 1;
     }
+  }
+
+  /// 首字节看门狗：到点仍没有任何内容，就判定这次请求死了 —— 先强制断开
+  /// 自己的连接（否则它会继续占着中转/上游通道），再落到失败态等用户重试
+  void _startFirstByteWatchdog() {
+    _firstByteTimer?.cancel();
+    _firstByteTimer = Timer(_firstByteTimeout, () {
+      if (!_isAnalyzing || _streamingContent.isNotEmpty) return;
+      debugPrint(
+          '[DDL Insight] No first byte within ${_firstByteTimeout.inSeconds}s');
+      _stopFirstByteWatchdog();
+      final staleSubscription = _streamSubscription;
+      _streamSubscription = null;
+      unawaited(staleSubscription?.cancel());
+      AIService.instance.abortActiveStreams(_aiRequestOwner);
+      _isAnalyzing = false;
+      _hasError = true;
+      _lastError = '等待响应超时（${_firstByteTimeout.inSeconds} 秒），已断开本次连接';
+      _streamUpdateTick.value = _streamUpdateTick.value + 1;
+    });
+  }
+
+  void _stopFirstByteWatchdog() {
+    _firstByteTimer?.cancel();
+    _firstByteTimer = null;
+  }
+
+  /// 失败原因转成人话（AiException 已带中文文案，其他类型截断防刷屏）
+  static String _describeError(Object error) {
+    final text = error is AiException ? error.message : error.toString();
+    return text.length > 60 ? '${text.substring(0, 60)}…' : text;
   }
 
   /// 从完整内容中提取"任务建议"部分（不带标题）——纯函数，无副作用
@@ -385,6 +493,7 @@ $tasksInfo
     _cachedInsight = null;
     _hasAnalyzed = false;
     _hasError = false;
+    _lastError = null;
     _analysisTimetableId = null;
     _analysisTaskSnapshot = null;
     _typewriterContent = '';
@@ -715,6 +824,7 @@ $tasksInfo
   }
 
   Widget _buildErrorContent() {
+    final error = _lastError;
     return Row(
       children: [
         Container(
@@ -727,11 +837,33 @@ $tasksInfo
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
-            '分析失败，点击重试',
-            style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '分析失败，点击重试',
+                style: TextStyle(fontSize: 13, color: AppColors.of(context).textSecondary),
+              ),
+              // 失败原因副标题：额度 / 网络 / 中转挂了在这里就能分辨
+              // （重试前会先断掉上一次卡住的连接，见 _analyzeDDL）
+              if (error != null && error.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  error,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.3,
+                    color: AppColors.of(context).textTertiary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
+        const SizedBox(width: 8),
         GestureDetector(
           onTap: _analyzeDDL,
           child: Container(

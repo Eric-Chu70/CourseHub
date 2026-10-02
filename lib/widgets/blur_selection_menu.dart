@@ -82,10 +82,13 @@ Widget styledEditableContextMenu(BuildContext context, EditableTextState editabl
 }
 
 /// 文字选中区（SelectableRegion）用的 contextMenuBuilder。
+/// [onCopyDone]：复制按钮点击后的附加回调（在 SDK 复制动作之后执行），
+/// 供宿主做「复制后收起自定义选取 UI」等收尾，不传则保持平台默认行为。
 Widget styledSelectableRegionContextMenu(
   BuildContext context,
-  SelectableRegionState selectableRegionState,
-) {
+  SelectableRegionState selectableRegionState, {
+  VoidCallback? onCopyDone,
+}) {
   return _SelectionMenuLauncher(
     anchors: selectableRegionState.contextMenuAnchors,
     itemsGetter: () => selectableRegionState.contextMenuButtonItems,
@@ -93,7 +96,12 @@ Widget styledSelectableRegionContextMenu(
     onSelectAll: () => selectableRegionState.selectAll(SelectionChangedCause.toolbar),
     // 桌面端 SDK 复制后只收菜单不清除选中，这里补齐；移动端 SDK 已按平台
     // 惯例处理（Android 已清、iOS 刻意保留），不再额外干预
-    onCopyDone: _isDesktop ? () => selectableRegionState.clearSelection() : null,
+    onCopyDone: () {
+      if (_isDesktop) {
+        selectableRegionState.clearSelection();
+      }
+      onCopyDone?.call();
+    },
   );
 }
 
@@ -299,9 +307,22 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
   }
 
   void _handleConfigChanged() {
-    if (mounted) {
-      setState(() {});
+    if (!mounted) {
+      return;
     }
+    // 探针可能在 Overlay 的 build 期被重建并同步配置（如同 Overlay 内
+    // 其他 entry 插入引发的整体重建），此时直接 setState 会触发
+    // 「build 期 markNeedsBuild」异常，推迟到本帧结束后再重建
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _handleConfigChanged();
+        }
+      });
+      return;
+    }
+    setState(() {});
   }
 
   /// 剪贴板状态就绪（unknown → pasteable/notPasteable）时重建菜单：
@@ -394,7 +415,7 @@ class _OverlayMenuState extends State<_OverlayMenu> with SingleTickerProviderSta
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
               color: AppColors.of(context).glassShell.withValues(alpha: 0.7),
