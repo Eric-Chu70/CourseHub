@@ -127,3 +127,13 @@ app.*.map.json
 lib_backup_recovery_*/
 *.damaged.bak
 _span_extracted.dart
+
+# 仓库大清洗后不再入库的内容
+/.gradle/
+/.ohmyagent/
+/flutter/
+/linux/
+/macos/
+/windows/
+/web/
+tool/png_*.js
