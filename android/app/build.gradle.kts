@@ -28,8 +28,10 @@ android {
         applicationId = "com.coursehub.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.0.9"
+        // 版本号由 pubspec.yaml 的 version 字段注入（此前为硬编码，
+        // 导致 pubspec 升版本后 APK 仍带旧版本号）
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
     }
 
     buildTypes {
