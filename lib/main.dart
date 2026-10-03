@@ -28,7 +28,7 @@ import 'widgets/gradient_blur_header.dart';
 import 'models/course.dart';
 import 'models/task.dart';
 
-const String appVersion = '1.0.9';
+const String appVersion = '1.1.0';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
