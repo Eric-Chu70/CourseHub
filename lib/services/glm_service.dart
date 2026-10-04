@@ -117,10 +117,15 @@ class AIService {
   static const int _builtinClientDailyLimit = 30;
   static const String _builtinDailyUsagePrefKey = 'builtin_ai_daily_usage';
 
-  /// 内置模型「等首字节」的硬上限：比各页面自己的 UI 超时（对话页/任务分析
-  /// 30s）宽一档，只作为最后一道防线，防止没登记 owner 的调用把 socket 永久
-  /// 占在同一个云托管实例上
+  /// 内置模型「等首字节」的硬上限（单次尝试）：比调用方自己的 UI 超时对齐，
+  /// 只作为最后一道防线，防止没登记 owner 的调用（课表图片识别、标题生成）
+  /// 把 socket 永久占在同一个云托管实例上
   static const Duration _builtinFirstByteTimeout = Duration(seconds: 60);
+
+  /// 冷启动自动重试的时间预算：只有「已经耗时 < 此值」时才追加下一次尝试。
+  /// 实测冷启动第一发要挂 30s 才吐 503，所以这个预算决定了「最多再试一次」
+  /// 而不是「再试两三次各 30 秒」
+  static const Duration _builtinColdStartRetryBudget = Duration(seconds: 40);
   int _builtinNode = 1;
 
   // 会话级标记：每次进入 App（进程启动）后，首次通过内置模型发起 AI 请求时
@@ -640,6 +645,7 @@ class AIService {
 
       String buffer = '';
       String? returnedModel;
+      var sawDone = false;
 
       await for (final chunk in response.transform(utf8.decoder)) {
         buffer += chunk;
@@ -651,7 +657,10 @@ class AIService {
           if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
 
           final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
+          if (data == '[DONE]') {
+            sawDone = true;
+            continue;
+          }
 
           try {
             final parsed = jsonDecode(data);
@@ -675,6 +684,11 @@ class AIService {
         }
       }
 
+      // 完成校验：没收到 [DONE] 结束帧 = 流被提前掐断（网络抖动/上游中断），
+      // 残缺内容不进入解析器，明确报错让用户重试
+      if (!sawDone) {
+        throw AiException('连接中断，回复未接收完整，请重试');
+      }
       if (returnedModel != null) {
         _lastStreamedModel = returnedModel;
       } else if (model != null && model.isNotEmpty) {
@@ -938,20 +952,41 @@ class AIService {
         return request.close();
       }
 
-      // 首字节兜底看门狗（中转级）：调用方各自有 UI 超时，但只有登记了 owner
-      // 的请求才掐得动（对话页 30s、任务分析 30s）；课表图片识别、标题生成等
+      // 首字节兜底看门狗（单次尝试）：调用方各自有 UI 超时，但只有登记了 owner
+      // 的请求才掐得动（对话页 30s、任务分析 60s）；课表图片识别、标题生成等
       // 没登记 owner 的调用一旦卡住，socket 会一直占着同一个云托管实例，
       // 连带把别人的重试一起拖死（表现同样是「重试永远失败，退出重进就好」）。
-      // 60s 一个字节都没等到就是死连接：抛错 → 退额度 → force 关闭连接。
+      // 60s 一个字节都没等到就是死连接：抛错 → finally 退额度 → force 关闭连接。
+      //
+      // 冷启动重试的预算从「第一次发出请求」起算，不是从收到 503 起算：网关
+      // 把请求按住等的这 30s 正是预算要覆盖的部分
+      final coldStartStopwatch = Stopwatch()..start();
       var response =
           await sendOnce().timeout(_builtinFirstByteTimeout);
 
-      // 云托管冷启动窗口：实例从 0 拉起（或刚空闲自退）时网关可能瞬时
-      // 502/503/504（nginx 错误页）。此时请求未到达中转、未计额度，
-      // 等 2.5s 自动重试一次，仍失败才把提炼后的错误交给用户
-      if (const {502, 503, 504}.contains(response.statusCode)) {
+      // 云托管冷启动窗口：实例已缩容到 0 时，网关会把请求按住等实例拉起，
+      // 2026-10-03 本机实测（打 /healthz 与 messages:[] 的 400 分支）第一发
+      // 要挂 30.3s 才拿到 503，紧接的一发再挂 21.3s 才成功，之后同一请求
+      // 0.17s 就回。原来只在 2.5s 后补一次，两次尝试都落在同一个冷启动窗口
+      // 里 → 用户看到的就是「重试每次都失败，退出重进一遍就好」（退出那几十
+      // 秒刚好把窗口熬过去）。改成带预算的退避重试：2.5s → 8s，且只有累计
+      // 耗时还没超 _builtinColdStartRetryBudget 时才追加下一次，避免最坏情况
+      // 变成 30+30+30 秒的死等。冷启动失败不退额度（finally 按 outputStarted 判）
+      const coldStartBackoffs = [
+        Duration(milliseconds: 2500),
+        Duration(seconds: 8),
+      ];
+      for (var attempt = 0;
+          const {502, 503, 504}.contains(response.statusCode) &&
+              attempt < coldStartBackoffs.length &&
+              coldStartStopwatch.elapsed < _builtinColdStartRetryBudget;
+          attempt++) {
+        debugPrint('[AI Service] Builtin cold start ${response.statusCode} '
+            'after ${coldStartStopwatch.elapsedMilliseconds}ms, '
+            'retry ${attempt + 1}/${coldStartBackoffs.length} '
+            'in ${coldStartBackoffs[attempt].inMilliseconds}ms');
         await response.drain<void>().catchError((_) {});
-        await Future<void>.delayed(const Duration(milliseconds: 2500));
+        await Future<void>.delayed(coldStartBackoffs[attempt]);
         response =
             await sendOnce().timeout(_builtinFirstByteTimeout);
       }
@@ -969,6 +1004,8 @@ class AIService {
 
       String buffer = '';
       String? returnedModel;
+      // 是否收到 [DONE] 结束帧：流完整性校验的依据
+      var sawDone = false;
 
       await for (final chunk in response.transform(utf8.decoder)) {
         buffer += chunk;
@@ -980,7 +1017,10 @@ class AIService {
           if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
 
           final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
+          if (data == '[DONE]') {
+            sawDone = true;
+            continue;
+          }
 
           try {
             final parsed = jsonDecode(data);
@@ -1013,6 +1053,13 @@ class AIService {
 
       if (returnedModel != null) {
         _lastStreamedModel = returnedModel;
+      }
+
+      // 完成校验：没收到 [DONE] 结束帧 = 流被提前掐断（网络抖动/上游中断），
+      // 已收到的内容不完整——明确报错让用户重试，绝不让残缺 JSON 进解析器。
+      // 计费语义不变：输出已开始则不退额度（上游已消耗）
+      if (!sawDone) {
+        throw AiException('连接中断，回复未接收完整，请点击重试');
       }
       finishedCleanly = true;
     } catch (e) {
@@ -1098,6 +1145,7 @@ class AIService {
 
       String buffer = '';
       String? returnedModel;
+      var sawDone = false;
 
       await for (final chunk in response.transform(utf8.decoder)) {
         buffer += chunk;
@@ -1109,7 +1157,10 @@ class AIService {
           if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
 
           final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
+          if (data == '[DONE]') {
+            sawDone = true;
+            continue;
+          }
 
           try {
             final parsed = jsonDecode(data);
@@ -1138,6 +1189,11 @@ class AIService {
         }
       }
 
+      // 完成校验：没收到 [DONE] 结束帧 = 流被提前掐断（网络抖动/上游中断），
+      // 残缺内容不进入解析器，明确报错让用户重试
+      if (!sawDone) {
+        throw AiException('连接中断，回复未接收完整，请重试');
+      }
       _lastStreamedModel = returnedModel ?? requestModel;
     } catch (e) {
       if (e is AiException) rethrow;
@@ -1225,6 +1281,7 @@ class AIService {
 
       String buffer = '';
       String? returnedModel;
+      var sawDone = false;
 
       await for (final chunk in response.transform(utf8.decoder)) {
         buffer += chunk;
@@ -1236,7 +1293,10 @@ class AIService {
           if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
 
           final data = trimmed.substring(5).trim();
-          if (data == '[DONE]') continue;
+          if (data == '[DONE]') {
+            sawDone = true;
+            continue;
+          }
 
           Map<String, dynamic>? parsed;
           try {
@@ -1280,6 +1340,11 @@ class AIService {
         }
       }
 
+      // 完成校验：没收到 [DONE] 结束帧 = 流被提前掐断（网络抖动/上游中断），
+      // 残缺内容不进入解析器，明确报错让用户重试
+      if (!sawDone) {
+        throw AiException('连接中断，回复未接收完整，请重试');
+      }
       _lastStreamedModel = returnedModel ?? requestModel;
     } catch (e) {
       if (e is AiException) rethrow;
