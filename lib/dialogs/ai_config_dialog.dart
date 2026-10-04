@@ -166,12 +166,16 @@ class _AIConfigBodyState extends State<_AIConfigBody> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     final provider = prefs.getString('ai_provider') ?? 'builtin';
+    // 展示「已选择」的前提是 AI 功能真的开启过：首次同意协议后 provider
+    // 默认值是 builtin 但 ai_enabled 为 false——若不看开关直接显示节点，
+    // 会出现「显示已选节点一，退出后 AI 却没开启」的误导状态
+    final aiEnabled = prefs.getBool('ai_enabled') ?? false;
     final agnesModel = prefs.getString('agnes_model') ?? 'agnes-2.0-flash';
     setState(() {
       _builtinNode = (prefs.getInt('builtin_node') ?? 1).clamp(1, 4);
-      _isBuiltinProvider = provider == 'builtin';
-      _isAgnesProvider = provider == 'agnes';
-      _isCustomProvider = provider == 'custom';
+      _isBuiltinProvider = provider == 'builtin' && aiEnabled;
+      _isAgnesProvider = provider == 'agnes' && aiEnabled;
+      _isCustomProvider = provider == 'custom' && aiEnabled;
       _providerConfigured = _isAgnesProvider || _isCustomProvider;
       _agnesKeyController.text = prefs.getString('agnes_api_key') ?? '';
       _agnesModel =
