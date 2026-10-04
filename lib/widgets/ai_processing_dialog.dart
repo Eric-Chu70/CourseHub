@@ -397,6 +397,8 @@ class _AIProcessingDialogState extends State<AIProcessingDialog>
         imageBase64: imageBase64,
         provider: provider,
         enableSearch: false,
+        // 课表识别质量优先：思考强度保持 medium；输出预算由中转
+        // max_tokens=8192 保障（截断时中转日志会显示 finish_reason=length）
         reasoningEffort: (provider == 'agnes' || provider == 'builtin') ? 'medium' : _runtimeReasoningEffort,
       );
       
